@@ -30,6 +30,9 @@ signal-hook = "0.4.4"
 thiserror = "2.0.20"
 toml = "1.1.4"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSRunningApplication", "NSWorkspace"] }
+
 [profile.dist]
 inherits = "release"
 lto = "thin"

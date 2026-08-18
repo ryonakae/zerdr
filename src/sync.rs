@@ -5,7 +5,9 @@ use serde_json::Value;
 use crate::error::{Error, Result};
 use crate::herdr::{Herdr, Workspace};
 use crate::picker;
-use crate::state::{BindingStore, LeaseSet, Paths, RouteStore, SyncGuard, canonical_git_root};
+use crate::state::{
+    BindingStore, LeaseSet, Paths, RouteStore, RouteStrategy, SyncGuard, canonical_git_root,
+};
 use crate::zed::Zed;
 
 pub struct Synchronizer {
@@ -139,12 +141,16 @@ impl Synchronizer {
         let workspaces = self.herdr.workspaces()?;
         let focused = focused_workspace(&workspaces)?;
         let root = self.root_for_workspace(focused)?;
-        let anchor = route.internal_anchor().ok_or_else(|| {
-            Error::User("external route synchronization is not implemented yet".to_owned())
-        })?;
-        self.zed.activate_existing(anchor)?;
-        self.zed.add_to_current(&root)?;
-        routes.promote(socket, &root)?;
+        match &route.routing {
+            RouteStrategy::Internal { anchor_root } => {
+                self.zed.activate_existing(anchor_root)?;
+                self.zed.add_to_current(&root)?;
+                routes.promote(socket, &root)?;
+            }
+            RouteStrategy::External { focus } => {
+                crate::focus::with_external_focus(*focus, || self.zed.activate_existing(&root))?;
+            }
+        }
         Ok(root)
     }
 

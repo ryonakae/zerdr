@@ -11,7 +11,9 @@ use fs2::FileExt;
 
 use predicates::prelude::*;
 use support::TestEnv;
-use zerdr::state::{BindingStore, LeaseGuard, LeaseSet, Paths, RouteStore, SyncGuard};
+use zerdr::state::{
+    BindingStore, LeaseGuard, LeaseSet, Paths, RouteFocus, RouteStore, RouteStrategy, SyncGuard,
+};
 
 fn git_repo(parent: &std::path::Path) -> std::path::PathBuf {
     let repo = parent.join("repo");
@@ -189,6 +191,191 @@ fn multiple_live_leases_notify_without_calling_zed() {
     assert_eq!(log.matches("notification show").count(), 1, "{log}");
     assert!(!log.contains("workspace list"), "{log}");
     assert!(!log.contains("zed\t"), "{log}");
+}
+
+#[test]
+fn external_terminal_focus_restores_after_zed_success_and_failure() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let target = git_repo(&env.root.path().join("target-parent"));
+    RouteStore::new(paths.routes_dir.clone())
+        .initialize_strategy(
+            &socket,
+            RouteStrategy::External {
+                focus: RouteFocus::Terminal,
+            },
+            std::process::id(),
+        )
+        .unwrap();
+    let _lease = LeaseSet::new(paths.leases_dir.clone())
+        .acquire(&socket, 99)
+        .unwrap();
+    BindingStore::new(paths.bindings_file)
+        .bind("w1", &target)
+        .unwrap();
+    let workspaces = serde_json::json!({"result":{"workspaces":[{
+        "workspace_id":"w1","label":"target","focused":true,
+        "worktree":{"checkout_path":target}
+    }]}});
+
+    env.command()
+        .arg("sync-from-herdr")
+        .env("HERDR_PLUGIN_EVENT", "workspace.focused")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
+        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
+        .env("ZERDR_TEST_FOCUS_BACKEND", "1")
+        .env("ZERDR_TEST_FRONTMOST_BEFORE", "com.mitchellh.ghostty")
+        .env("ZERDR_TEST_FRONTMOST_AFTER", "dev.zed.Zed")
+        .assert()
+        .success();
+
+    assert_eq!(
+        env.read_log().lines().collect::<Vec<_>>(),
+        vec![
+            "herdr\t--session zerdr workspace list",
+            "focus\tcapture com.mitchellh.ghostty",
+            &format!("zed\t--existing {}", target.display()),
+            "focus\tinspect dev.zed.Zed",
+            "focus\tactivate com.mitchellh.ghostty",
+        ]
+    );
+
+    fs::write(&env.log, "").unwrap();
+    env.command()
+        .arg("sync-from-herdr")
+        .env("HERDR_PLUGIN_EVENT", "workspace.focused")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
+        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
+        .env("ZERDR_TEST_FOCUS_BACKEND", "1")
+        .env("ZERDR_TEST_FRONTMOST_BEFORE", "com.mitchellh.ghostty")
+        .env("ZERDR_TEST_FRONTMOST_AFTER", "dev.zed.Zed")
+        .env("ZERDR_TEST_ZED_FAIL", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("fake Zed failure"));
+    let failed_log = env.read_log();
+    assert!(
+        failed_log.contains("focus\tactivate com.mitchellh.ghostty"),
+        "{failed_log}"
+    );
+    assert_eq!(failed_log.matches("notification show").count(), 1);
+}
+
+#[test]
+fn repeated_external_events_each_run_one_existing_call_without_mutating_route() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let target = git_repo(&env.root.path().join("target-parent"));
+    let routes = RouteStore::new(paths.routes_dir.clone());
+    routes
+        .initialize_strategy(
+            &socket,
+            RouteStrategy::External {
+                focus: RouteFocus::Zed,
+            },
+            std::process::id(),
+        )
+        .unwrap();
+    let route_path = routes.path(&socket).unwrap();
+    let original_route = fs::read(&route_path).unwrap();
+    let _lease = LeaseSet::new(paths.leases_dir.clone())
+        .acquire(&socket, 99)
+        .unwrap();
+    BindingStore::new(paths.bindings_file)
+        .bind("w1", &target)
+        .unwrap();
+    let workspaces = serde_json::json!({"result":{"workspaces":[{
+        "workspace_id":"w1","label":"target","number":1,"focused":true,
+        "worktree":{"checkout_path":target}
+    }]}});
+
+    for _ in 0..2 {
+        env.command()
+            .arg("sync-from-herdr")
+            .env("HERDR_PLUGIN_EVENT", "workspace.focused")
+            .env("HERDR_SOCKET_PATH", &socket)
+            .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
+            .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
+            .assert()
+            .success();
+    }
+
+    let zed_lines = env
+        .read_log()
+        .lines()
+        .filter(|line| line.starts_with("zed\t"))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        zed_lines,
+        vec![
+            format!("zed\t--existing {}", target.display()),
+            format!("zed\t--existing {}", target.display()),
+        ]
+    );
+    assert_eq!(fs::read(route_path).unwrap(), original_route);
+}
+
+#[test]
+fn live_v1_route_syncs_and_upgrades_only_after_successful_promotion() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let anchor = git_repo(&env.root.path().join("anchor-parent"));
+    let target = git_repo(&env.root.path().join("target-parent"));
+    let routes = RouteStore::new(paths.routes_dir.clone());
+    let route_path = routes.path(&socket).unwrap();
+    fs::create_dir_all(route_path.parent().unwrap()).unwrap();
+    fs::write(
+        &route_path,
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "session_name": "zerdr",
+            "socket_path": socket.canonicalize().unwrap(),
+            "anchor_root": anchor,
+            "wrapper_pid": std::process::id(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let _lease = LeaseSet::new(paths.leases_dir.clone())
+        .acquire(&socket, 99)
+        .unwrap();
+    BindingStore::new(paths.bindings_file)
+        .bind("w1", &target)
+        .unwrap();
+    let workspaces = serde_json::json!({"result":{"workspaces":[{
+        "workspace_id":"w1","label":"target","focused":true,
+        "worktree":{"checkout_path":target}
+    }]}});
+
+    env.command()
+        .arg("sync-from-herdr")
+        .env("HERDR_PLUGIN_EVENT", "workspace.focused")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
+        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
+        .assert()
+        .success();
+
+    let promoted: serde_json::Value =
+        serde_json::from_slice(&fs::read(route_path).unwrap()).unwrap();
+    assert_eq!(promoted["schema_version"], 2);
+    assert_eq!(promoted["routing"]["mode"], "internal");
+    assert_eq!(
+        promoted["routing"]["anchor_root"],
+        target.display().to_string()
+    );
+    let log = env.read_log();
+    assert!(log.contains(&format!("zed\t--existing {}", anchor.display())));
+    assert!(log.contains(&format!("zed\t--add {}", target.display())));
 }
 
 #[test]

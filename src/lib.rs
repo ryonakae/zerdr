@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod doctor;
 pub mod error;
+pub mod focus;
 pub mod herdr;
 pub mod picker;
 pub mod runtime;

@@ -251,7 +251,7 @@ resolve local environment + concrete mode + anchor/focus
 
 - [x] Task 1: Establish the bare CLI, automatic mode resolution, local-only boundary, and versioned route contracts.
 - [x] Task 2: Make wrapper admission and setup migration mode-aware while preserving one authority.
-- [ ] Task 3: Deliver external on-demand sync and terminal-independent manual commands.
+- [x] Task 3: Deliver external on-demand sync and terminal-independent manual commands.
 - [ ] Task 4: Add best-effort macOS terminal-focus restoration behind a platform boundary.
 - [ ] Task 5: Complete mode-aware diagnostics and public documentation.
 - [ ] Task 6: Complete automated regression and real internal/external E2E validation.
