@@ -5,7 +5,7 @@ use std::process::{Command as ProcessCommand, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use zerdr::state::{LeaseSet, LifecycleGuard, Paths, RouteStore};
+use zerdr::state::{LeaseSet, LifecycleGuard, Paths, RouteFocus, RouteStore, RouteStrategy};
 
 use jsonc_parser::ParseOptions;
 use jsonc_parser::cst::CstRootNode;
@@ -265,7 +265,7 @@ fn purge_refuses_to_change_installation_while_a_live_lease_exists() {
         .args(["uninstall", "--purge"])
         .assert()
         .failure()
-        .stderr(predicates::str::contains("live `zerdr herdr` client"));
+        .stderr(predicates::str::contains("live bare `zerdr` wrapper"));
 
     assert!(paths.install_state_file.exists());
     assert!(paths.plugin_dir.exists());
@@ -374,7 +374,7 @@ fn purge_rechecks_live_leases_after_waiting_for_wrapper_admission() {
 
     let output = purge.wait_with_output().unwrap();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("live `zerdr herdr` client"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("live bare `zerdr` wrapper"));
     assert!(paths.install_state_file.exists());
 }
 
@@ -444,6 +444,42 @@ fn doctor_validates_the_live_wrapper_route_and_anchor() {
             "route anchor is valid: {}",
             anchor.display()
         )));
+}
+
+#[test]
+fn doctor_reports_external_route_focus_and_platform_capability() {
+    let env = TestEnv::new();
+    env.command().arg("setup").assert().success();
+    let paths = Paths::for_test(env.root.path());
+    let socket = env.root.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    RouteStore::new(paths.routes_dir.clone())
+        .initialize_strategy(
+            &socket,
+            RouteStrategy::External {
+                focus: RouteFocus::Terminal,
+            },
+            std::process::id(),
+        )
+        .unwrap();
+    let _lease = LeaseSet::new(paths.leases_dir)
+        .acquire(&socket, 99)
+        .unwrap();
+    let sessions = serde_json::json!({
+        "sessions":[{"name":"zerdr","running":true,"socket_path":socket}]
+    });
+
+    env.command()
+        .arg("doctor")
+        .env("ZERDR_TEST_PLATFORM", "macos")
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("route mode: external"))
+        .stdout(predicates::str::contains("focus policy: terminal"))
+        .stdout(predicates::str::contains(
+            "terminal focus restoration is supported on macOS",
+        ));
 }
 
 #[test]

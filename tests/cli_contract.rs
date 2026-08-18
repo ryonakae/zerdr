@@ -50,16 +50,36 @@ fn removed_herdr_subcommand_fails_with_clap_usage() {
 }
 
 #[test]
-fn launch_options_are_rejected_when_a_subcommand_is_present() {
-    let env = TestEnv::new();
-
-    env.command()
-        .args(["--mode", "external", "sync"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("cannot be used with"));
-
-    assert_eq!(env.read_log(), "");
+fn launch_options_are_rejected_with_every_subcommand_in_either_order() {
+    let subcommands = [
+        "pick",
+        "next",
+        "previous",
+        "sync",
+        "bind",
+        "unbind",
+        "setup",
+        "uninstall",
+        "doctor",
+        "sync-from-herdr",
+    ];
+    let options: [&[&str]; 3] = [
+        &["--mode", "external"],
+        &["--anchor", "."],
+        &["--focus", "zed"],
+    ];
+    for subcommand in subcommands {
+        for option in options {
+            let env = TestEnv::new();
+            let mut before = option.to_vec();
+            before.push(subcommand);
+            env.command().args(before).assert().failure();
+            let mut after = vec![subcommand];
+            after.extend_from_slice(option);
+            env.command().args(after).assert().failure();
+            assert_eq!(env.read_log(), "");
+        }
+    }
 }
 
 #[test]
@@ -79,17 +99,61 @@ fn internal_launch_rejects_a_non_git_anchor_before_spawning_a_child() {
 }
 
 #[test]
-fn remote_marker_rejects_runtime_before_any_process() {
-    let env = TestEnv::new();
-
-    env.command()
-        .args(["--mode", "external"])
-        .env("SSH_CONNECTION", "client server")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("detected SSH_CONNECTION"));
-
-    assert_eq!(env.read_log(), "");
+fn every_remote_marker_and_runtime_command_is_rejected_before_any_process() {
+    for marker in [
+        "SSH_CONNECTION",
+        "SSH_CLIENT",
+        "SSH_TTY",
+        "WSL_DISTRO_NAME",
+        "WSL_INTEROP",
+        "container",
+        "REMOTE_CONTAINERS",
+        "DEVCONTAINER",
+        "CODESPACES",
+    ] {
+        let env = TestEnv::new();
+        env.command()
+            .args(["--mode", "external"])
+            .env(marker, "detected")
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(marker));
+        assert_eq!(env.read_log(), "");
+    }
+    for marker in ["/.dockerenv", "/run/.containerenv"] {
+        let env = TestEnv::new();
+        env.command()
+            .args(["--mode", "external"])
+            .env("ZERDR_TEST_REMOTE_MARKERS", marker)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(marker));
+        assert_eq!(env.read_log(), "");
+    }
+    for command in [
+        None,
+        Some("pick"),
+        Some("next"),
+        Some("previous"),
+        Some("sync"),
+        Some("bind"),
+        Some("unbind"),
+        Some("setup"),
+        Some("uninstall"),
+        Some("sync-from-herdr"),
+    ] {
+        let env = TestEnv::new();
+        let mut invocation = env.command();
+        if let Some(command) = command {
+            invocation.arg(command);
+        }
+        invocation
+            .env("SSH_CONNECTION", "client server")
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("detected SSH_CONNECTION"));
+        assert_eq!(env.read_log(), "");
+    }
 }
 
 #[test]

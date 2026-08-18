@@ -65,9 +65,18 @@ pub(crate) fn validate_launcher_installation(paths: &Paths, herdr: &Herdr) -> Re
             "generated Herdr manifest is invalid: {error}"
         )))
     })?;
-    let current = stable_executable()
-        .and_then(|path| path.canonicalize().map_err(|error| Error::io(path, error)))
-        .map_err(setup_guidance)?;
+    let current = std::env::current_exe()
+        .map_err(|error| {
+            setup_guidance(Error::User(format!(
+                "could not determine the running zerdr executable: {error}"
+            )))
+        })?
+        .canonicalize()
+        .map_err(|error| {
+            setup_guidance(Error::User(format!(
+                "could not resolve the running zerdr executable: {error}"
+            )))
+        })?;
     let installed = install
         .executable
         .canonicalize()
@@ -200,7 +209,7 @@ pub fn uninstall(purge: bool) -> Result<()> {
     };
     if purge && LeaseSet::new(paths.leases_dir.clone()).any_live()? {
         return Err(Error::User(
-            "cannot purge zerdr state while a live `zerdr herdr` client exists".to_owned(),
+            "cannot purge zerdr state while a live bare `zerdr` wrapper exists".to_owned(),
         ));
     }
 

@@ -74,6 +74,46 @@ fn assert_route_corruption_blocks_sync(
 }
 
 #[test]
+fn every_manual_command_rejects_a_route_owner_mismatch_before_workspace_or_state_changes() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let anchor = git_repo(&env.root.path().join("anchor-parent"));
+    RouteStore::new(paths.routes_dir.clone())
+        .initialize(&socket, &anchor, 424_242)
+        .unwrap();
+    let _lease = LeaseSet::new(paths.leases_dir.clone())
+        .acquire(&socket, 99)
+        .unwrap();
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"zerdr","socket_path":socket}]}
+    });
+
+    for args in [
+        vec!["pick"],
+        vec!["next"],
+        vec!["previous"],
+        vec!["sync"],
+        vec!["bind", anchor.to_str().unwrap()],
+        vec!["unbind"],
+    ] {
+        fs::write(&env.log, "").unwrap();
+        env.command()
+            .args(args)
+            .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("route belongs to wrapper"));
+        let log = env.read_log();
+        assert!(!log.contains("workspace list"), "{log}");
+        assert!(!log.contains("workspace focus"), "{log}");
+        assert!(!log.contains("zed\t"), "{log}");
+    }
+    assert!(!paths.bindings_file.exists());
+}
+
+#[test]
 fn automatic_event_without_live_lease_is_a_successful_noop() {
     let env = TestEnv::new();
     let socket = env.root.path().join("herdr.sock");
@@ -252,6 +292,25 @@ fn external_terminal_focus_restores_after_zed_success_and_failure() {
         .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
         .env("ZERDR_TEST_FOCUS_BACKEND", "1")
         .env("ZERDR_TEST_FRONTMOST_BEFORE", "com.mitchellh.ghostty")
+        .env("ZERDR_TEST_FRONTMOST_AFTER", "com.apple.finder")
+        .assert()
+        .success();
+    let switched_log = env.read_log();
+    assert!(
+        switched_log.contains("focus\tinspect com.apple.finder"),
+        "{switched_log}"
+    );
+    assert!(!switched_log.contains("focus\tactivate"), "{switched_log}");
+
+    fs::write(&env.log, "").unwrap();
+    env.command()
+        .arg("sync-from-herdr")
+        .env("HERDR_PLUGIN_EVENT", "workspace.focused")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
+        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
+        .env("ZERDR_TEST_FOCUS_BACKEND", "1")
+        .env("ZERDR_TEST_FRONTMOST_BEFORE", "com.mitchellh.ghostty")
         .env("ZERDR_TEST_FRONTMOST_AFTER", "dev.zed.Zed")
         .env("ZERDR_TEST_ZED_FAIL", "1")
         .assert()
@@ -302,6 +361,9 @@ fn repeated_external_events_each_run_one_existing_call_without_mutating_route() 
             .env("HERDR_SOCKET_PATH", &socket)
             .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
             .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
+            .env("ZERDR_TEST_FOCUS_BACKEND", "1")
+            .env("ZERDR_TEST_FRONTMOST_BEFORE", "com.mitchellh.ghostty")
+            .env("ZERDR_TEST_FRONTMOST_AFTER", "dev.zed.Zed")
             .assert()
             .success();
     }
@@ -319,6 +381,7 @@ fn repeated_external_events_each_run_one_existing_call_without_mutating_route() 
             format!("zed\t--existing {}", target.display()),
         ]
     );
+    assert!(!env.read_log().contains("focus\t"));
     assert_eq!(fs::read(route_path).unwrap(), original_route);
 }
 
@@ -1041,9 +1104,9 @@ fn picker_rechecks_lease_before_focusing_the_selected_workspace() {
     let lease = authorize(&paths, &socket);
     let first = git_repo(&env.root.path().join("first"));
     let second = git_repo(&env.root.path().join("second"));
-    let store = BindingStore::new(paths.bindings_file);
+    let store = BindingStore::new(paths.bindings_file.clone());
     store.bind("w1", &first).unwrap();
-    store.bind("w2", &second).unwrap();
+    let original_bindings = fs::read(&paths.bindings_file).unwrap();
     let sessions = serde_json::json!({
         "sessions":[{"name":"zerdr","running":true,"socket_path":socket}]
     });
@@ -1078,6 +1141,7 @@ fn picker_rechecks_lease_before_focusing_the_selected_workspace() {
     let log = env.read_log();
     assert!(!log.contains("workspace focus"), "{log}");
     assert!(!log.contains("zed\t"), "{log}");
+    assert_eq!(fs::read(paths.bindings_file).unwrap(), original_bindings);
 }
 
 #[test]

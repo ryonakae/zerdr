@@ -99,9 +99,11 @@ mod macos {
             .as_ref()
             .zip(current.as_ref())
             .and_then(|(captured, current)| {
-                let captured_id = captured.bundleIdentifier()?.to_string();
                 let current_id = current.bundleIdentifier()?.to_string();
-                Some(captured_id != current_id && is_zed_bundle_identifier(&current_id))
+                Some(
+                    captured.processIdentifier() != current.processIdentifier()
+                        && is_zed_bundle_identifier(&current_id),
+                )
             })
             .unwrap_or(false);
         if should_restore && let Some(captured) = captured {

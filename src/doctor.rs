@@ -13,7 +13,10 @@ use crate::setup::{
     InstallState, fingerprint, generated_tasks, load_install_state, owned_labels,
     plugin_is_compatible,
 };
-use crate::state::{BindingStore, LeaseSet, LifecycleGuard, Paths, RouteStore, canonical_git_root};
+use crate::state::{
+    BindingStore, LeaseSet, LifecycleGuard, Paths, RouteFocus, RouteStore, RouteStrategy,
+    canonical_git_root,
+};
 use crate::zed::Zed;
 
 pub fn doctor_remote(markers: &[String]) -> Result<()> {
@@ -178,34 +181,55 @@ pub fn doctor() -> Result<()> {
                     ));
                 }
                 match inspection.live_wrapper_pids.as_slice() {
-                    [] => report.warn(
-                        "zerdr session has no live Zed client; run `zerdr herdr --anchor PATH` in Zed",
-                    ),
+                    [] => report.warn("zerdr session has no live wrapper; run bare `zerdr`"),
                     [wrapper_pid] => match routes.load(&socket) {
                         Ok(route) if route.wrapper_pid == *wrapper_pid => {
                             report.pass(format!(
                                 "zerdr session has one live wrapper: {}",
                                 socket.display()
                             ));
-                            if let Some(anchor) = route.internal_anchor() {
-                                report.pass(format!(
-                                    "route anchor is valid: {}",
-                                    anchor.display()
-                                ));
-                            } else {
-                                report.pass("external route is valid");
+                            match &route.routing {
+                                RouteStrategy::Internal { anchor_root } => {
+                                    report.pass("route mode: internal");
+                                    report.pass(format!(
+                                        "route anchor is valid: {}",
+                                        anchor_root.display()
+                                    ));
+                                }
+                                RouteStrategy::External { focus } => {
+                                    report.pass("route mode: external");
+                                    let focus_name = match focus {
+                                        RouteFocus::Terminal => "terminal",
+                                        RouteFocus::Zed => "zed",
+                                    };
+                                    report.pass(format!("focus policy: {focus_name}"));
+                                    if *focus == RouteFocus::Terminal
+                                        && crate::runtime::platform()
+                                            == crate::runtime::Platform::MacOs
+                                    {
+                                        report.pass(
+                                            "terminal focus restoration is supported on macOS",
+                                        );
+                                    } else if *focus == RouteFocus::Zed {
+                                        report.pass("Zed remains foreground after external routing");
+                                    } else {
+                                        report.warn(
+                                            "terminal focus restoration is unavailable on this platform",
+                                        );
+                                    }
+                                }
                             }
                         }
                         Ok(route) => report.fail(format!(
-                            "route belongs to wrapper {}, but live wrapper is {}; restart `zerdr: Herdr`",
+                            "route belongs to wrapper {}, but live wrapper is {}; restart bare `zerdr`",
                             route.wrapper_pid, wrapper_pid
                         )),
                         Err(error) => report.fail(format!(
-                            "live wrapper route state is invalid: {error}; restart `zerdr: Herdr`"
+                            "live wrapper route state is invalid: {error}; restart bare `zerdr`"
                         )),
                     },
                     wrapper_pids => report.fail(format!(
-                        "zerdr session has {} live wrappers ({wrapper_pids:?}); keep only one `zerdr: Herdr` task",
+                        "zerdr session has {} live wrappers ({wrapper_pids:?}); keep only one bare `zerdr` wrapper",
                         wrapper_pids.len()
                     )),
                 }
@@ -215,7 +239,7 @@ pub fn doctor() -> Result<()> {
         Err(_) if lease_sweep.as_ref().is_some_and(|sweep| sweep.live_count > 0) => report.fail(
             "zerdr has live lease state but the Herdr session socket is unavailable; stop the stale wrapper or remove its state",
         ),
-        Err(_) => report.warn("zerdr Herdr session is not running"),
+        Err(_) => report.warn("zerdr Herdr session is not running; run bare `zerdr`"),
     }
 
     report.finish()

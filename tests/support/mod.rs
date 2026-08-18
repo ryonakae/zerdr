@@ -107,7 +107,11 @@ fi
     }
 
     pub fn command(&self) -> Command {
-        let mut command = assert_cmd::cargo::cargo_bin_cmd!("zerdr");
+        self.command_for(assert_cmd::cargo::cargo_bin!("zerdr"))
+    }
+
+    pub fn command_for(&self, executable: impl AsRef<std::ffi::OsStr>) -> Command {
+        let mut command = Command::new(executable);
         command
             .env("PATH", self.path())
             .env("ZERDR_TEST_ROOT", self.root.path())

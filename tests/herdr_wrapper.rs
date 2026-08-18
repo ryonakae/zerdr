@@ -34,12 +34,147 @@ fn launcher_requires_a_compatible_plugin_before_spawning_herdr() {
 }
 
 #[test]
+fn launcher_preflight_rejects_unsupported_install_state_and_manifest() {
+    let invalid_install = TestEnv::new();
+    invalid_install.prepare_launcher();
+    let install_path = Paths::for_test(invalid_install.root.path()).install_state_file;
+    let mut install: serde_json::Value =
+        serde_json::from_slice(&fs::read(&install_path).unwrap()).unwrap();
+    install["schema_version"] = 99.into();
+    fs::write(&install_path, serde_json::to_vec(&install).unwrap()).unwrap();
+    invalid_install
+        .command()
+        .args(["--mode", "external"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("run `zerdr setup`"));
+    assert!(
+        !invalid_install
+            .read_log()
+            .contains("herdr\t--session zerdr")
+    );
+
+    let invalid_manifest = TestEnv::new();
+    invalid_manifest.prepare_launcher();
+    let manifest_path = Paths::for_test(invalid_manifest.root.path())
+        .plugin_dir
+        .join("herdr-plugin.toml");
+    let manifest = fs::read_to_string(&manifest_path)
+        .unwrap()
+        .replace("sync-from-herdr", "wrong-event-command");
+    fs::write(&manifest_path, manifest).unwrap();
+    invalid_manifest
+        .command()
+        .args(["--mode", "external"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("run `zerdr setup`"));
+    assert!(
+        !invalid_manifest
+            .read_log()
+            .contains("herdr\t--session zerdr")
+    );
+}
+
+#[test]
+fn launcher_preflight_uses_the_running_executable_not_the_setup_override() {
+    let env = TestEnv::new();
+    env.prepare_launcher();
+    let installed = assert_cmd::cargo::cargo_bin!("zerdr");
+    let alternate = env.root.path().join("alternate-zerdr");
+    fs::copy(installed, &alternate).unwrap();
+
+    env.command_for(&alternate)
+        .args(["--mode", "external"])
+        .env("ZERDR_SETUP_EXECUTABLE", installed)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("run `zerdr setup`"));
+
+    let log = env.read_log();
+    assert!(
+        log.contains("herdr\tplugin list --plugin zerdr --json"),
+        "{log}"
+    );
+    assert!(!log.contains("herdr\t--session zerdr"), "{log}");
+}
+
+#[test]
+fn auto_mode_selects_internal_in_zed_and_external_elsewhere() {
+    let internal = TestEnv::new();
+    internal.prepare_launcher();
+    let internal_socket = internal.root.path().join("herdr.sock");
+    fs::write(&internal_socket, "").unwrap();
+    let repo = internal.root.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    assert!(
+        ProcessCommand::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let repo = repo.canonicalize().unwrap();
+    let internal_sessions = serde_json::json!({
+        "sessions": [{"name":"zerdr","running":true,"socket_path":internal_socket}]
+    });
+    internal
+        .command()
+        .current_dir(&repo)
+        .env("ZED_TERM", "true")
+        .env("TERM_PROGRAM", "zed")
+        .env("ZERDR_TEST_HERDR_SLEEP", "0.2")
+        .env("ZERDR_TEST_SESSIONS_JSON", internal_sessions.to_string())
+        .env(
+            "ZERDR_TEST_WORKSPACES_JSON",
+            r#"{"result":{"workspaces":[]}}"#,
+        )
+        .assert()
+        .success();
+    assert_eq!(
+        RouteStore::new(Paths::for_test(internal.root.path()).routes_dir)
+            .load(&internal_socket)
+            .unwrap()
+            .internal_anchor(),
+        Some(repo.as_path())
+    );
+
+    let external = TestEnv::new();
+    external.prepare_launcher();
+    let external_socket = external.root.path().join("herdr.sock");
+    fs::write(&external_socket, "").unwrap();
+    let external_sessions = serde_json::json!({
+        "sessions": [{"name":"zerdr","running":true,"socket_path":external_socket}]
+    });
+    external
+        .command()
+        .env_remove("ZED_TERM")
+        .env_remove("TERM_PROGRAM")
+        .env("ZERDR_TEST_PLATFORM", "linux")
+        .env("ZERDR_TEST_HERDR_SLEEP", "0.2")
+        .env("ZERDR_TEST_SESSIONS_JSON", external_sessions.to_string())
+        .assert()
+        .success();
+    assert_eq!(
+        RouteStore::new(Paths::for_test(external.root.path()).routes_dir)
+            .load(&external_socket)
+            .unwrap()
+            .routing,
+        RouteStrategy::External {
+            focus: RouteFocus::Zed,
+        }
+    );
+}
+
+#[test]
 fn external_wrapper_establishes_authority_without_startup_zed_sync() {
     let env = TestEnv::new();
     env.prepare_launcher();
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
     let paths = Paths::for_test(env.root.path());
+    fs::remove_file(&paths.zed_tasks_file).unwrap();
     let sessions = serde_json::json!({
         "sessions": [{"name":"zerdr","running":true,"socket_path":socket}]
     });

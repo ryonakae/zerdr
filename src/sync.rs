@@ -50,13 +50,14 @@ impl Synchronizer {
     }
 
     pub fn sync_manual(&self) -> Result<()> {
-        let socket = self.require_manual_lease()?;
+        let socket = self.herdr.session_socket()?;
         self.sync_socket(&socket)?;
         Ok(())
     }
 
     pub fn navigate(&self, direction: isize) -> Result<()> {
-        let socket = self.require_manual_lease()?;
+        let socket = self.herdr.session_socket()?;
+        let authority = self.acquire_manual_authority(&socket)?;
         let workspaces = self.herdr.workspaces()?;
         let current = workspaces
             .iter()
@@ -67,11 +68,12 @@ impl Synchronizer {
         }
         let len = workspaces.len() as isize;
         let target = (current as isize + direction).rem_euclid(len) as usize;
-        self.switch_or_sync(&socket, &workspaces[target])
+        self.switch_or_sync(&socket, &workspaces[target], authority)
     }
 
     pub fn pick(&self) -> Result<()> {
-        let socket = self.require_manual_lease()?;
+        let socket = self.herdr.session_socket()?;
+        let authority = self.acquire_manual_authority(&socket)?;
         let mut workspaces = self.herdr.workspaces()?;
         let bindings = BindingStore::new(self.paths.bindings_file.clone()).load()?;
         for workspace in &mut workspaces {
@@ -79,14 +81,17 @@ impl Synchronizer {
                 workspace.checkout_path = Some(root.clone());
             }
         }
+        drop(authority);
         let Some(index) = picker::choose(&workspaces)? else {
             return Ok(());
         };
-        self.switch_or_sync(&socket, &workspaces[index])
+        let authority = self.acquire_manual_authority(&socket)?;
+        self.switch_or_sync(&socket, &workspaces[index], authority)
     }
 
     pub fn bind(&self, candidate: Option<&Path>) -> Result<()> {
-        let socket = self.require_manual_lease()?;
+        let socket = self.herdr.session_socket()?;
+        let authority = self.acquire_manual_authority(&socket)?;
         let workspaces = self.herdr.workspaces()?;
         let focused = focused_workspace(&workspaces)?;
         let cwd;
@@ -98,17 +103,19 @@ impl Synchronizer {
             })?;
             &cwd
         };
-        self.ensure_live(&socket)?;
+        self.validate_route_authority(&socket)?;
         BindingStore::new(self.paths.bindings_file.clone()).bind(&focused.id, candidate)?;
+        drop(authority);
         self.sync_socket(&socket)?;
         Ok(())
     }
 
     pub fn unbind(&self) -> Result<()> {
-        let socket = self.require_manual_lease()?;
+        let socket = self.herdr.session_socket()?;
+        let _authority = self.acquire_manual_authority(&socket)?;
         let workspaces = self.herdr.workspaces()?;
         let focused = focused_workspace(&workspaces)?;
-        self.ensure_live(&socket)?;
+        self.validate_route_authority(&socket)?;
         BindingStore::new(self.paths.bindings_file.clone()).unbind(&focused.id)?;
         Ok(())
     }
@@ -125,7 +132,7 @@ impl Synchronizer {
             [wrapper_pid] => *wrapper_pid,
             wrapper_pids => {
                 return Err(Error::User(format!(
-                    "the zerdr session has {} live wrappers ({wrapper_pids:?}); keep only one `zerdr: Herdr` task",
+                    "the zerdr session has {} live wrappers ({wrapper_pids:?}); keep only one bare `zerdr` wrapper",
                     wrapper_pids.len()
                 )));
             }
@@ -134,7 +141,7 @@ impl Synchronizer {
         let route = routes.load(socket)?;
         if route.wrapper_pid != wrapper_pid {
             return Err(Error::User(format!(
-                "route belongs to wrapper {}, but live wrapper is {wrapper_pid}; restart `zerdr: Herdr`",
+                "route belongs to wrapper {}, but live wrapper is {wrapper_pid}; restart bare `zerdr`",
                 route.wrapper_pid
             )));
         }
@@ -197,25 +204,44 @@ impl Synchronizer {
         &self.paths
     }
 
-    fn require_manual_lease(&self) -> Result<PathBuf> {
-        let socket = self.herdr.session_socket()?;
-        self.ensure_live(&socket)?;
-        Ok(socket)
+    fn acquire_manual_authority(&self, socket: &Path) -> Result<SyncGuard> {
+        let guard = SyncGuard::acquire(&self.paths.sync_locks_dir, socket)?;
+        self.validate_route_authority(socket)?;
+        Ok(guard)
     }
 
-    fn ensure_live(&self, socket: &Path) -> Result<()> {
-        if LeaseSet::new(self.paths.leases_dir.clone()).has_live(socket)? {
-            Ok(())
-        } else {
-            Err(Error::NoLiveLease)
+    fn validate_route_authority(&self, socket: &Path) -> Result<()> {
+        let inspection = LeaseSet::new(self.paths.leases_dir.clone()).inspect(socket)?;
+        let wrapper_pid = match inspection.live_wrapper_pids.as_slice() {
+            [] => return Err(Error::NoLiveLease),
+            [wrapper_pid] => *wrapper_pid,
+            wrapper_pids => {
+                return Err(Error::User(format!(
+                    "the zerdr session has {} live wrappers ({wrapper_pids:?}); keep only one bare `zerdr` wrapper",
+                    wrapper_pids.len()
+                )));
+            }
+        };
+        let route = RouteStore::new(self.paths.routes_dir.clone()).load(socket)?;
+        if route.wrapper_pid != wrapper_pid {
+            return Err(Error::User(format!(
+                "route belongs to wrapper {}, but live wrapper is {wrapper_pid}; restart bare `zerdr`",
+                route.wrapper_pid
+            )));
         }
+        Ok(())
     }
 
-    fn switch_or_sync(&self, socket: &Path, target: &Workspace) -> Result<()> {
-        self.ensure_live(socket)?;
+    fn switch_or_sync(
+        &self,
+        socket: &Path,
+        target: &Workspace,
+        authority: SyncGuard,
+    ) -> Result<()> {
+        self.validate_route_authority(socket)?;
         self.root_for_workspace(target)?;
-        self.ensure_live(socket)?;
         if target.focused {
+            drop(authority);
             self.sync_socket(socket)?;
         } else {
             self.herdr.focus_workspace(&target.id)?;
