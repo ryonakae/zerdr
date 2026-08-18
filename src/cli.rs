@@ -1,26 +1,43 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(
     name = "zerdr",
     version,
-    about = "Keep a Herdr session aligned with Zed"
+    about = "Keep a Herdr session aligned with Zed",
+    args_conflicts_with_subcommands = true
 )]
 pub struct Cli {
+    /// Select terminal routing behavior.
+    #[arg(long, value_enum, default_value_t = LaunchMode::Auto)]
+    pub mode: LaunchMode,
+    /// Git project already open in the target Zed window.
+    #[arg(long)]
+    pub anchor: Option<PathBuf>,
+    /// Select which application remains foreground after external routing.
+    #[arg(long, value_enum)]
+    pub focus: Option<FocusPolicy>,
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LaunchMode {
+    Auto,
+    Internal,
+    External,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum FocusPolicy {
+    Terminal,
+    Zed,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Launch or attach the dedicated Herdr session.
-    Herdr {
-        /// Git project already open in the target Zed window.
-        #[arg(long)]
-        anchor: PathBuf,
-    },
     /// Fuzzily select a Herdr workspace.
     Pick,
     /// Focus the next Herdr workspace.
@@ -45,19 +62,4 @@ pub enum Command {
     Doctor,
     #[command(hide = true)]
     SyncFromHerdr,
-}
-
-impl Command {
-    pub fn requires_zed_terminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Herdr { .. }
-                | Self::Pick
-                | Self::Next
-                | Self::Previous
-                | Self::Sync
-                | Self::Bind { .. }
-                | Self::Unbind
-        )
-    }
 }

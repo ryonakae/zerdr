@@ -15,6 +15,7 @@ use crate::error::{Error, Result};
 
 pub const SESSION_NAME: &str = "zerdr";
 const SCHEMA_VERSION: u32 = 1;
+const ROUTE_SCHEMA_VERSION: u32 = 2;
 static UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
@@ -278,13 +279,82 @@ pub fn canonical_git_root(candidate: &Path) -> Result<PathBuf> {
         .map_err(|error| Error::io(candidate, error))
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RouteFocus {
+    Terminal,
+    Zed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "lowercase", deny_unknown_fields)]
+pub enum RouteStrategy {
+    Internal { anchor_root: PathBuf },
+    External { focus: RouteFocus },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RouteState {
     pub schema_version: u32,
     pub session_name: String,
     pub socket_path: PathBuf,
-    pub anchor_root: PathBuf,
     pub wrapper_pid: u32,
+    pub routing: RouteStrategy,
+}
+
+impl RouteState {
+    pub fn internal_anchor(&self) -> Option<&Path> {
+        match &self.routing {
+            RouteStrategy::Internal { anchor_root } => Some(anchor_root),
+            RouteStrategy::External { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RouteStateV2 {
+    schema_version: u32,
+    session_name: String,
+    socket_path: PathBuf,
+    wrapper_pid: u32,
+    routing: RouteStrategy,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RouteStateV1 {
+    schema_version: u32,
+    session_name: String,
+    socket_path: PathBuf,
+    anchor_root: PathBuf,
+    wrapper_pid: u32,
+}
+
+impl RouteStateV2 {
+    fn into_route(self) -> RouteState {
+        RouteState {
+            schema_version: self.schema_version,
+            session_name: self.session_name,
+            socket_path: self.socket_path,
+            wrapper_pid: self.wrapper_pid,
+            routing: self.routing,
+        }
+    }
+}
+
+impl RouteStateV1 {
+    fn into_route(self) -> RouteState {
+        RouteState {
+            schema_version: self.schema_version,
+            session_name: self.session_name,
+            socket_path: self.socket_path,
+            wrapper_pid: self.wrapper_pid,
+            routing: RouteStrategy::Internal {
+                anchor_root: self.anchor_root,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -298,15 +368,40 @@ impl RouteStore {
     }
 
     pub fn initialize(&self, socket_path: &Path, anchor: &Path, wrapper_pid: u32) -> Result<()> {
+        self.initialize_strategy(
+            socket_path,
+            RouteStrategy::Internal {
+                anchor_root: anchor.to_path_buf(),
+            },
+            wrapper_pid,
+        )
+    }
+
+    pub fn initialize_strategy(
+        &self,
+        socket_path: &Path,
+        routing: RouteStrategy,
+        wrapper_pid: u32,
+    ) -> Result<()> {
         let socket_path = canonical_socket(socket_path)?;
-        let anchor_root = canonical_git_root(anchor)?;
+        let routing = match routing {
+            RouteStrategy::Internal { anchor_root } => RouteStrategy::Internal {
+                anchor_root: canonical_git_root(&anchor_root)?,
+            },
+            RouteStrategy::External { focus } => RouteStrategy::External { focus },
+        };
         let state = RouteState {
-            schema_version: SCHEMA_VERSION,
+            schema_version: ROUTE_SCHEMA_VERSION,
             session_name: SESSION_NAME.to_owned(),
             socket_path: socket_path.clone(),
-            anchor_root,
             wrapper_pid,
+            routing,
         };
+        if std::env::var("ZERDR_TEST_FAIL_ROUTE_INITIALIZE").is_ok_and(|value| value == "1") {
+            return Err(Error::User(
+                "injected route initialization failure".to_owned(),
+            ));
+        }
         atomic_write_json(&self.path_for_canonical_socket(&socket_path), &state)
     }
 
@@ -314,10 +409,39 @@ impl RouteStore {
         let socket_path = canonical_socket(socket_path)?;
         let path = self.path_for_canonical_socket(&socket_path);
         let bytes = fs::read(&path).map_err(|error| Error::io(&path, error))?;
-        let state: RouteState = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
-            what: path.display().to_string(),
-            source,
-        })?;
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+                what: path.display().to_string(),
+                source,
+            })?;
+        let schema_version = value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                Error::User(format!(
+                    "route has no valid schema version: {}",
+                    path.display()
+                ))
+            })?;
+        let state = match schema_version {
+            1 => serde_json::from_value::<RouteStateV1>(value)
+                .map_err(|source| Error::Json {
+                    what: path.display().to_string(),
+                    source,
+                })?
+                .into_route(),
+            2 => serde_json::from_value::<RouteStateV2>(value)
+                .map_err(|source| Error::Json {
+                    what: path.display().to_string(),
+                    source,
+                })?
+                .into_route(),
+            version => {
+                return Err(Error::User(format!(
+                    "unsupported route schema version {version}; expected 1 or {ROUTE_SCHEMA_VERSION}"
+                )));
+            }
+        };
         validate_route(&state, &socket_path)?;
         Ok(state)
     }
@@ -325,7 +449,13 @@ impl RouteStore {
     pub fn promote(&self, socket_path: &Path, anchor: &Path) -> Result<()> {
         let socket_path = canonical_socket(socket_path)?;
         let mut state = self.load(&socket_path)?;
-        state.anchor_root = canonical_git_root(anchor)?;
+        let RouteStrategy::Internal { anchor_root } = &mut state.routing else {
+            return Err(Error::User(
+                "external routes do not have a promotable anchor".to_owned(),
+            ));
+        };
+        *anchor_root = canonical_git_root(anchor)?;
+        state.schema_version = ROUTE_SCHEMA_VERSION;
         if std::env::var("ZERDR_TEST_FAIL_ROUTE_WRITE").is_ok_and(|value| value == "1") {
             return Err(Error::User("injected route write failure".to_owned()));
         }
@@ -369,7 +499,17 @@ impl RouteStore {
 }
 
 fn validate_route(state: &RouteState, expected_socket: &Path) -> Result<()> {
-    if state.schema_version != SCHEMA_VERSION || state.session_name != SESSION_NAME {
+    if !matches!(state.schema_version, SCHEMA_VERSION | ROUTE_SCHEMA_VERSION)
+        || state.session_name != SESSION_NAME
+    {
+        return Err(Error::User(format!(
+            "route has an incompatible schema or session for {}",
+            expected_socket.display()
+        )));
+    }
+    if state.schema_version == SCHEMA_VERSION
+        && !matches!(state.routing, RouteStrategy::Internal { .. })
+    {
         return Err(Error::User(format!(
             "route has an incompatible schema or session for {}",
             expected_socket.display()
@@ -383,12 +523,14 @@ fn validate_route(state: &RouteState, expected_socket: &Path) -> Result<()> {
             expected_socket.display()
         )));
     }
-    let anchor = canonical_git_root(&state.anchor_root)?;
-    if anchor != state.anchor_root {
-        return Err(Error::User(format!(
-            "route anchor is not a canonical Git checkout root: {}",
-            state.anchor_root.display()
-        )));
+    if let RouteStrategy::Internal { anchor_root } = &state.routing {
+        let anchor = canonical_git_root(anchor_root)?;
+        if anchor != *anchor_root {
+            return Err(Error::User(format!(
+                "route anchor is not a canonical Git checkout root: {}",
+                anchor_root.display()
+            )));
+        }
     }
     Ok(())
 }

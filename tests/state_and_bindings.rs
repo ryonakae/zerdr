@@ -7,7 +7,9 @@ use std::thread;
 use std::time::Duration;
 
 use tempfile::TempDir;
-use zerdr::state::{BindingStore, LeaseSet, LifecycleGuard, Paths, RouteStore, SyncGuard};
+use zerdr::state::{
+    BindingStore, LeaseSet, LifecycleGuard, Paths, RouteFocus, RouteStore, RouteStrategy, SyncGuard,
+};
 
 fn git_repo() -> (TempDir, std::path::PathBuf) {
     let temp = tempfile::tempdir().unwrap();
@@ -112,14 +114,154 @@ fn route_state_tracks_the_canonical_dynamic_anchor() {
 
     routes.initialize(&socket, &first, 41).unwrap();
     let initial = routes.load(&socket).unwrap();
-    assert_eq!(initial.schema_version, 1);
+    assert_eq!(initial.schema_version, 2);
     assert_eq!(initial.session_name, "zerdr");
     assert_eq!(initial.socket_path, socket.canonicalize().unwrap());
-    assert_eq!(initial.anchor_root, first);
+    assert_eq!(initial.internal_anchor(), Some(first.as_path()));
     assert_eq!(initial.wrapper_pid, 41);
 
+    let route_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(routes.path(&socket).unwrap()).unwrap()).unwrap();
+    assert_eq!(
+        route_json,
+        serde_json::json!({
+            "schema_version": 2,
+            "session_name": "zerdr",
+            "socket_path": socket.canonicalize().unwrap(),
+            "wrapper_pid": 41,
+            "routing": {
+                "mode": "internal",
+                "anchor_root": first,
+            },
+        })
+    );
+
     routes.promote(&socket, &second).unwrap();
-    assert_eq!(routes.load(&socket).unwrap().anchor_root, second);
+    assert_eq!(
+        routes.load(&socket).unwrap().internal_anchor(),
+        Some(second.as_path())
+    );
+}
+
+#[test]
+fn external_route_has_no_anchor_and_cannot_be_promoted() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let socket = state.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let routes = RouteStore::new(paths.routes_dir);
+
+    routes
+        .initialize_strategy(
+            &socket,
+            RouteStrategy::External {
+                focus: RouteFocus::Terminal,
+            },
+            73,
+        )
+        .unwrap();
+    let route_path = routes.path(&socket).unwrap();
+    let original = fs::read(&route_path).unwrap();
+    let route = routes.load(&socket).unwrap();
+    assert_eq!(route.internal_anchor(), None);
+    assert_eq!(
+        route.routing,
+        RouteStrategy::External {
+            focus: RouteFocus::Terminal,
+        }
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&original).unwrap(),
+        serde_json::json!({
+            "schema_version": 2,
+            "session_name": "zerdr",
+            "socket_path": socket.canonicalize().unwrap(),
+            "wrapper_pid": 73,
+            "routing": {
+                "mode": "external",
+                "focus": "terminal",
+            },
+        })
+    );
+
+    let (repo, _) = git_repo();
+    let error = routes
+        .promote(&socket, repo.path())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("external routes do not have a promotable anchor"));
+    assert_eq!(fs::read(route_path).unwrap(), original);
+}
+
+#[test]
+fn v1_route_loads_as_internal_and_promotes_to_v2() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let socket = state.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let (first, _) = git_repo();
+    let (second, _) = git_repo();
+    let first = first.path().canonicalize().unwrap();
+    let second = second.path().canonicalize().unwrap();
+    let routes = RouteStore::new(paths.routes_dir);
+    let route_path = routes.path(&socket).unwrap();
+    fs::create_dir_all(route_path.parent().unwrap()).unwrap();
+    fs::write(
+        &route_path,
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "session_name": "zerdr",
+            "socket_path": socket.canonicalize().unwrap(),
+            "anchor_root": first,
+            "wrapper_pid": 79,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let loaded = routes.load(&socket).unwrap();
+    assert_eq!(loaded.schema_version, 1);
+    assert_eq!(loaded.internal_anchor(), Some(first.as_path()));
+
+    routes.promote(&socket, &second).unwrap();
+    let promoted: serde_json::Value =
+        serde_json::from_slice(&fs::read(route_path).unwrap()).unwrap();
+    assert_eq!(promoted["schema_version"], 2);
+    assert_eq!(promoted["routing"]["mode"], "internal");
+    assert_eq!(
+        promoted["routing"]["anchor_root"],
+        second.display().to_string()
+    );
+    assert!(promoted.get("anchor_root").is_none());
+}
+
+#[test]
+fn mixed_v1_v2_route_shape_is_rejected_without_overwrite() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let socket = state.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let (repo, _) = git_repo();
+    let repo = repo.path().canonicalize().unwrap();
+    let routes = RouteStore::new(paths.routes_dir);
+    let route_path = routes.path(&socket).unwrap();
+    fs::create_dir_all(route_path.parent().unwrap()).unwrap();
+    let original = serde_json::to_vec(&serde_json::json!({
+        "schema_version": 1,
+        "session_name": "zerdr",
+        "socket_path": socket.canonicalize().unwrap(),
+        "anchor_root": repo,
+        "wrapper_pid": 81,
+        "routing": {
+            "mode": "internal",
+            "anchor_root": repo,
+        },
+    }))
+    .unwrap();
+    fs::write(&route_path, &original).unwrap();
+
+    assert!(routes.load(&socket).is_err());
+    assert_eq!(fs::read(route_path).unwrap(), original);
 }
 
 #[test]

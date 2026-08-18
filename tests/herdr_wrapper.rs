@@ -8,11 +8,70 @@ use std::time::Duration;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use support::TestEnv;
-use zerdr::state::{BindingStore, LeaseSet, Paths, RouteStore};
+use zerdr::state::{BindingStore, LeaseSet, Paths, RouteFocus, RouteStore, RouteStrategy};
+
+#[test]
+fn launcher_requires_a_compatible_plugin_before_spawning_herdr() {
+    let env = TestEnv::new();
+    env.prepare_launcher();
+
+    env.command()
+        .args(["--mode", "external"])
+        .env("ZERDR_TEST_PLUGINS_JSON", r#"{"result":{"plugins":[]}}"#)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("run `zerdr setup`"));
+
+    let log = env.read_log();
+    assert!(
+        log.contains("herdr\tplugin list --plugin zerdr --json"),
+        "{log}"
+    );
+    assert!(!log.contains("herdr\t--session zerdr"), "{log}");
+    let paths = Paths::for_test(env.root.path());
+    assert!(!paths.routes_dir.exists());
+    assert!(!paths.leases_dir.exists());
+}
+
+#[test]
+fn external_wrapper_establishes_authority_without_startup_zed_sync() {
+    let env = TestEnv::new();
+    env.prepare_launcher();
+    let socket = env.root.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let sessions = serde_json::json!({
+        "sessions": [{"name":"zerdr","running":true,"socket_path":socket}]
+    });
+
+    env.command()
+        .args(["--mode", "external"])
+        .env("ZERDR_TEST_PLATFORM", "macos")
+        .env("ZERDR_TEST_HERDR_SLEEP", "0.2")
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+        .success();
+
+    let log = env.read_log();
+    assert!(log.contains("herdr\t--session zerdr"), "{log}");
+    assert!(!log.contains("workspace list"), "{log}");
+    assert!(!log.contains("zed\t"), "{log}");
+    assert_eq!(
+        RouteStore::new(paths.routes_dir)
+            .load(&socket)
+            .unwrap()
+            .routing,
+        RouteStrategy::External {
+            focus: RouteFocus::Terminal,
+        }
+    );
+    assert!(!LeaseSet::new(paths.leases_dir).has_live(&socket).unwrap());
+}
 
 #[test]
 fn wrapper_holds_a_lease_runs_startup_sync_and_preserves_session() {
     let env = TestEnv::new();
+    env.prepare_launcher();
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
     let repo = env.root.path().join("repo");
@@ -42,7 +101,7 @@ fn wrapper_holds_a_lease_runs_startup_sync_and_preserves_session() {
     });
 
     env.command()
-        .args(["herdr", "--anchor"])
+        .args(["--mode", "internal", "--anchor"])
         .arg(&repo)
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
@@ -72,6 +131,7 @@ fn wrapper_holds_a_lease_runs_startup_sync_and_preserves_session() {
 #[test]
 fn concurrent_wrappers_admit_one_owner_and_reap_the_loser() {
     let env = TestEnv::new();
+    env.prepare_launcher();
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
     let paths = Paths::for_test(env.root.path());
@@ -103,7 +163,7 @@ fn concurrent_wrappers_admit_one_owner_and_reap_the_loser() {
         |anchor: &std::path::Path, ready: &std::path::Path, child_pid: &std::path::Path| {
             let mut command = env.std_command();
             command
-                .args(["herdr", "--anchor"])
+                .args(["--mode", "internal", "--anchor"])
                 .arg(anchor)
                 .env("ZED_TERM", "true")
                 .env("TERM_PROGRAM", "zed")
@@ -146,7 +206,7 @@ fn concurrent_wrappers_admit_one_owner_and_reap_the_loser() {
         .load(&socket)
         .unwrap();
     assert_eq!(route.wrapper_pid, winner.id());
-    assert_eq!(&route.anchor_root, winner_anchor);
+    assert_eq!(route.internal_anchor(), Some(winner_anchor.as_path()));
     let loser_pid = fs::read_to_string(loser_pid_file).unwrap();
     assert!(!process_exists(loser_pid.trim()));
 
@@ -159,6 +219,7 @@ fn concurrent_wrappers_admit_one_owner_and_reap_the_loser() {
 #[test]
 fn startup_sync_failure_notifies_but_keeps_the_client_until_its_normal_exit() {
     let env = TestEnv::new();
+    env.prepare_launcher();
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
     let paths = Paths::for_test(env.root.path());
@@ -190,7 +251,7 @@ fn startup_sync_failure_notifies_but_keeps_the_client_until_its_normal_exit() {
 
     let mut command = env.std_command();
     command
-        .args(["herdr", "--anchor"])
+        .args(["--mode", "internal", "--anchor"])
         .arg(&anchor)
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
@@ -216,8 +277,8 @@ fn startup_sync_failure_notifies_but_keeps_the_client_until_its_normal_exit() {
         RouteStore::new(paths.routes_dir)
             .load(&socket)
             .unwrap()
-            .anchor_root,
-        anchor
+            .internal_anchor(),
+        Some(anchor.as_path())
     );
 
     let output = wrapper.wait_with_output().unwrap();
@@ -228,10 +289,9 @@ fn startup_sync_failure_notifies_but_keeps_the_client_until_its_normal_exit() {
 #[test]
 fn post_readiness_initialization_failure_terminates_the_client() {
     let env = TestEnv::new();
+    env.prepare_launcher();
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
-    let blocked_root = env.root.path().join("blocked-root");
-    fs::write(&blocked_root, "not a directory").unwrap();
     let anchor = env.root.path().join("anchor");
     fs::create_dir_all(&anchor).unwrap();
     assert!(
@@ -248,11 +308,11 @@ fn post_readiness_initialization_failure_terminates_the_client() {
     });
 
     env.command()
-        .args(["herdr", "--anchor"])
+        .args(["--mode", "internal", "--anchor"])
         .arg(&anchor)
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
-        .env("ZERDR_TEST_ROOT", &blocked_root)
+        .env("ZERDR_TEST_FAIL_ROUTE_INITIALIZE", "1")
         .env("ZERDR_TEST_HERDR_SLEEP", "10")
         .env("ZERDR_TEST_CHILD_PID_FILE", &pid_file)
         .env("ZERDR_TEST_SESSION_WAIT_FOR_PID", "1")
@@ -273,6 +333,7 @@ fn post_readiness_initialization_failure_terminates_the_client() {
 #[test]
 fn readiness_timeout_terminates_the_spawned_herdr_client() {
     let env = TestEnv::new();
+    env.prepare_launcher();
     let pid_file = env.root.path().join("child.pid");
     let anchor = env.root.path().join("anchor");
     fs::create_dir_all(&anchor).unwrap();
@@ -286,7 +347,7 @@ fn readiness_timeout_terminates_the_spawned_herdr_client() {
     );
 
     env.command()
-        .args(["herdr", "--anchor"])
+        .args(["--mode", "internal", "--anchor"])
         .arg(&anchor)
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
@@ -311,6 +372,7 @@ fn readiness_timeout_terminates_the_spawned_herdr_client() {
 #[test]
 fn wrapper_propagates_the_herdr_client_exit_status() {
     let env = TestEnv::new();
+    env.prepare_launcher();
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
     let sessions = serde_json::json!({
@@ -329,7 +391,7 @@ fn wrapper_propagates_the_herdr_client_exit_status() {
     );
 
     env.command()
-        .args(["herdr", "--anchor"])
+        .args(["--mode", "internal", "--anchor"])
         .arg(&anchor)
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")

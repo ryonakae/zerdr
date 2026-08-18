@@ -100,7 +100,7 @@ fn unsupported_route_schema_notifies_without_workspace_or_zed_calls() {
     assert_route_corruption_blocks_sync(|_, _, route_path| {
         let mut route: serde_json::Value =
             serde_json::from_slice(&fs::read(route_path).unwrap()).unwrap();
-        route["schema_version"] = 2.into();
+        route["schema_version"] = 99.into();
         fs::write(route_path, serde_json::to_vec_pretty(&route).unwrap()).unwrap();
     });
 }
@@ -110,7 +110,7 @@ fn missing_route_anchor_notifies_without_workspace_or_zed_calls() {
     assert_route_corruption_blocks_sync(|_, _, route_path| {
         let route: serde_json::Value =
             serde_json::from_slice(&fs::read(route_path).unwrap()).unwrap();
-        fs::remove_dir_all(route["anchor_root"].as_str().unwrap()).unwrap();
+        fs::remove_dir_all(route["routing"]["anchor_root"].as_str().unwrap()).unwrap();
     });
 }
 
@@ -124,7 +124,7 @@ fn route_socket_mismatch_notifies_without_workspace_or_zed_calls() {
         RouteStore::new(paths.routes_dir.clone())
             .initialize(
                 &other_socket,
-                std::path::Path::new(route["anchor_root"].as_str().unwrap()),
+                std::path::Path::new(route["routing"]["anchor_root"].as_str().unwrap()),
                 std::process::id(),
             )
             .unwrap();
@@ -257,8 +257,8 @@ fn automatic_event_routes_through_anchor_adds_target_and_promotes_it() {
         RouteStore::new(paths.routes_dir)
             .load(&socket)
             .unwrap()
-            .anchor_root,
-        repo
+            .internal_anchor(),
+        Some(repo.as_path())
     );
     assert!(!log.contains("api snapshot"), "{log}");
     assert!(!log.contains("--new"), "{log}");
@@ -306,7 +306,10 @@ fn repeated_focus_of_current_anchor_still_runs_existing_then_add() {
             format!("zed\t--add {}", anchor.display()),
         ]
     );
-    assert_eq!(routes.load(&socket).unwrap().anchor_root, anchor);
+    assert_eq!(
+        routes.load(&socket).unwrap().internal_anchor(),
+        Some(anchor.as_path())
+    );
 }
 
 #[test]
@@ -346,7 +349,10 @@ fn existing_phase_failure_keeps_the_previous_anchor_and_skips_add() {
     assert!(log.contains("zed\t--existing"), "{log}");
     assert!(!log.contains("zed\t--add"), "{log}");
     assert_eq!(log.matches("notification show").count(), 1, "{log}");
-    assert_eq!(routes.load(&socket).unwrap().anchor_root, anchor);
+    assert_eq!(
+        routes.load(&socket).unwrap().internal_anchor(),
+        Some(anchor.as_path())
+    );
 }
 
 #[test]
@@ -386,7 +392,10 @@ fn add_phase_failure_keeps_the_previous_anchor() {
     assert!(log.contains("zed\t--existing"), "{log}");
     assert!(log.contains("zed\t--add"), "{log}");
     assert_eq!(log.matches("notification show").count(), 1, "{log}");
-    assert_eq!(routes.load(&socket).unwrap().anchor_root, anchor);
+    assert_eq!(
+        routes.load(&socket).unwrap().internal_anchor(),
+        Some(anchor.as_path())
+    );
 }
 
 #[test]
@@ -425,7 +434,10 @@ fn route_write_failure_after_zed_success_preserves_the_previous_anchor() {
     let log = env.read_log();
     assert!(log.contains("zed\t--existing"), "{log}");
     assert!(log.contains("zed\t--add"), "{log}");
-    assert_eq!(routes.load(&socket).unwrap().anchor_root, anchor);
+    assert_eq!(
+        routes.load(&socket).unwrap().internal_anchor(),
+        Some(anchor.as_path())
+    );
 }
 
 #[test]
@@ -900,5 +912,5 @@ fn zed_task_without_a_live_lease_leaves_actionable_terminal_error() {
         .env("ZERDR_TEST_NOTIFICATION_RESULT", "shown")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("zerdr herdr"));
+        .stderr(predicate::str::contains("Start bare `zerdr`"));
 }

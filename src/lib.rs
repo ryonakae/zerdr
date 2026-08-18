@@ -15,12 +15,19 @@ use error::{Error, Result};
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
-    if cli.command.requires_zed_terminal() {
-        runtime::require_zed_terminal()?;
+    let remote = runtime::detect_remote_environment();
+    if let Some(remote) = remote.as_ref()
+        && !matches!(cli.command, Some(Command::Doctor))
+    {
+        return Err(remote.rejection());
     }
 
-    match cli.command {
-        Command::Herdr { anchor } => herdr::run_wrapper(&anchor),
+    let Some(command) = cli.command else {
+        let routing = runtime::resolve_launch(cli.mode, cli.anchor.as_deref(), cli.focus)?;
+        return herdr::run_wrapper(routing);
+    };
+
+    match command {
         Command::Pick => run_manual(|synchronizer| synchronizer.pick()),
         Command::Next => run_manual(|synchronizer| synchronizer.navigate(1)),
         Command::Previous => run_manual(|synchronizer| synchronizer.navigate(-1)),
@@ -29,7 +36,10 @@ pub fn run() -> Result<()> {
         Command::Unbind => run_manual(|synchronizer| synchronizer.unbind()),
         Command::Setup => setup::setup(),
         Command::Uninstall { purge } => setup::uninstall(purge),
-        Command::Doctor => doctor::doctor(),
+        Command::Doctor => match remote {
+            Some(remote) => doctor::doctor_remote(remote.markers()),
+            None => doctor::doctor(),
+        },
         Command::SyncFromHerdr => sync::Synchronizer::from_env()?.event(),
     }
 }
@@ -49,7 +59,7 @@ fn run_manual(operation: impl FnOnce(&sync::Synchronizer) -> Result<()>) -> Resu
             Ok(())
         } else {
             Err(Error::User(format!(
-                "{message}. Start `zerdr herdr` in a Zed integrated terminal, then retry"
+                "{message}. Start bare `zerdr`, then retry"
             )))
         }
     } else {

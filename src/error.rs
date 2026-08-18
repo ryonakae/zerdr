@@ -6,9 +6,9 @@ use thiserror::Error;
 pub enum Error {
     #[error("{0}")]
     User(String),
-    #[error("the zerdr Herdr session is not running; start `zerdr herdr` in Zed first")]
+    #[error("the zerdr Herdr session is not running; start bare `zerdr` first")]
     SessionUnavailable,
-    #[error("no live zerdr client for this Herdr session; run `zerdr herdr` in Zed first")]
+    #[error("no live zerdr client for this Herdr session; run bare `zerdr` first")]
     NoLiveLease,
     #[error("failed to access {path}: {source}")]
     Io {

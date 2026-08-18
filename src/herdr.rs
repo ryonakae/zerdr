@@ -1,5 +1,5 @@
 use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -12,7 +12,7 @@ use signal_hook::iterator::{Handle as SignalHandle, Signals};
 
 use crate::error::{Error, Result};
 use crate::state::{
-    LeaseSet, LifecycleGuard, Paths, RouteStore, SESSION_NAME, SyncGuard, canonical_git_root,
+    LeaseSet, LifecycleGuard, Paths, RouteStore, RouteStrategy, SESSION_NAME, SyncGuard,
 };
 use crate::sync::Synchronizer;
 
@@ -252,9 +252,10 @@ impl Herdr {
     }
 }
 
-pub fn run_wrapper(anchor: &Path) -> Result<()> {
-    let anchor = canonical_git_root(anchor)?;
+pub fn run_wrapper(routing: RouteStrategy) -> Result<()> {
     let herdr = Herdr::from_env();
+    let paths = Paths::discover()?;
+    crate::setup::validate_launcher_installation(&paths, &herdr)?;
     let mut child = ManagedChild::new(herdr.spawn_client()?);
     let _signals = SignalForwarder::new(child.id())?;
     let timeout_ms = std::env::var("ZERDR_READY_TIMEOUT_MS")
@@ -285,7 +286,6 @@ pub fn run_wrapper(anchor: &Path) -> Result<()> {
         thread::sleep(Duration::from_millis(25));
     };
 
-    let paths = Paths::discover()?;
     let lifecycle = LifecycleGuard::acquire(&paths.lifecycle_lock_file)?;
     if let Some(marker) = std::env::var_os("ZERDR_TEST_ADMISSION_LOCK_MARKER") {
         std::fs::write(&marker, b"locked")
@@ -304,15 +304,21 @@ pub fn run_wrapper(anchor: &Path) -> Result<()> {
             "the {SESSION_NAME} Herdr session already has a live wrapper"
         )));
     }
-    RouteStore::new(paths.routes_dir.clone()).initialize(&socket, &anchor, std::process::id())?;
+    RouteStore::new(paths.routes_dir.clone()).initialize_strategy(
+        &socket,
+        routing.clone(),
+        std::process::id(),
+    )?;
     let _lease = leases.acquire(&socket, child.id())?;
     drop(admission);
     drop(lifecycle);
-    let synchronizer = Synchronizer::from_env()?;
-    if let Err(error) = synchronizer.sync_socket(&socket) {
-        let message = format!("startup synchronization failed: {error}");
-        let _ = herdr.notify_error(&message);
-        eprintln!("zerdr: {message}");
+    if matches!(routing, RouteStrategy::Internal { .. }) {
+        let synchronizer = Synchronizer::from_env()?;
+        if let Err(error) = synchronizer.sync_socket(&socket) {
+            let message = format!("startup synchronization failed: {error}");
+            let _ = herdr.notify_error(&message);
+            eprintln!("zerdr: {message}");
+        }
     }
 
     let status = child

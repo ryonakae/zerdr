@@ -139,7 +139,10 @@ impl Synchronizer {
         let workspaces = self.herdr.workspaces()?;
         let focused = focused_workspace(&workspaces)?;
         let root = self.root_for_workspace(focused)?;
-        self.zed.activate_existing(&route.anchor_root)?;
+        let anchor = route.internal_anchor().ok_or_else(|| {
+            Error::User("external route synchronization is not implemented yet".to_owned())
+        })?;
+        self.zed.activate_existing(anchor)?;
         self.zed.add_to_current(&root)?;
         routes.promote(socket, &root)?;
         Ok(root)

@@ -113,7 +113,8 @@ fi
             .env("ZERDR_TEST_ROOT", self.root.path())
             .env("ZERDR_TEST_LOG", &self.log)
             .env("ZERDR_HERDR_BIN", self.bin.join("herdr"))
-            .env("ZERDR_ZED_BIN", self.bin.join("zed"));
+            .env("ZERDR_ZED_BIN", self.bin.join("zed"))
+            .env("ZERDR_TEST_PLUGINS_JSON", compatible_plugins_json());
         command
     }
 
@@ -124,8 +125,14 @@ fi
             .env("ZERDR_TEST_ROOT", self.root.path())
             .env("ZERDR_TEST_LOG", &self.log)
             .env("ZERDR_HERDR_BIN", self.bin.join("herdr"))
-            .env("ZERDR_ZED_BIN", self.bin.join("zed"));
+            .env("ZERDR_ZED_BIN", self.bin.join("zed"))
+            .env("ZERDR_TEST_PLUGINS_JSON", compatible_plugins_json());
         command
+    }
+
+    pub fn prepare_launcher(&self) {
+        self.command().arg("setup").assert().success();
+        fs::write(&self.log, "").unwrap();
     }
 
     fn path(&self) -> std::ffi::OsString {
@@ -140,6 +147,19 @@ fi
     pub fn read_log(&self) -> String {
         fs::read_to_string(&self.log).unwrap_or_default()
     }
+}
+
+fn compatible_plugins_json() -> String {
+    serde_json::json!({
+        "result": {
+            "plugins": [{
+                "plugin_id": "zerdr",
+                "enabled": true,
+                "events": [{"on": "workspace.focused"}],
+            }]
+        }
+    })
+    .to_string()
 }
 
 fn write_executable(path: &Path, content: &str) {

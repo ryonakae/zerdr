@@ -19,6 +19,39 @@ const OWNED_LABELS: [&str; 5] = [
     "zerdr: Sync Workspace",
 ];
 
+#[test]
+fn remote_doctor_reports_all_markers_without_processes_locks_or_cleanup() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    let stale_route = paths.routes_dir.join("stale.json");
+    let stale_lease = paths.leases_dir.join("scope/stale.json");
+    fs::create_dir_all(stale_route.parent().unwrap()).unwrap();
+    fs::create_dir_all(stale_lease.parent().unwrap()).unwrap();
+    fs::write(&stale_route, b"stale route bytes").unwrap();
+    fs::write(&stale_lease, b"stale lease bytes").unwrap();
+
+    let assert = env
+        .command()
+        .arg("doctor")
+        .env("WSL_INTEROP", "socket")
+        .env("SSH_CLIENT", "client")
+        .env("container", "podman")
+        .env(
+            "ZERDR_TEST_REMOTE_MARKERS",
+            "/run/.containerenv,/.dockerenv",
+        )
+        .assert()
+        .failure();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let markers = "SSH_CLIENT, WSL_INTEROP, container, /.dockerenv, /run/.containerenv";
+    assert!(stdout.contains(markers), "{stdout}");
+
+    assert_eq!(env.read_log(), "");
+    assert_eq!(fs::read(stale_route).unwrap(), b"stale route bytes");
+    assert_eq!(fs::read(stale_lease).unwrap(), b"stale lease bytes");
+    assert!(!paths.lifecycle_lock_file.exists());
+}
+
 fn wait_for_path(path: &std::path::Path) {
     for _ in 0..300 {
         if path.exists() {
@@ -44,7 +77,7 @@ fn setup_is_idempotent_and_installs_exact_owned_tasks_without_keymap_changes() {
     }
     assert!(first.contains(r#""reveal_target": "center""#));
     assert!(first.contains(r#""ZERDR_TASK_MODE": "1""#));
-    assert!(first.contains(r#""args": ["herdr", "--anchor", "$ZED_WORKTREE_ROOT"]"#));
+    assert!(first.contains(r#""args": ["--mode", "internal", "--anchor", "$ZED_WORKTREE_ROOT"]"#));
     assert!(first.contains(r#""allow_concurrent_runs": true"#));
     assert!(first.contains(r#""use_new_terminal": true"#));
     assert!(first.contains(r#""hide": "never""#));
@@ -242,6 +275,7 @@ fn purge_refuses_to_change_installation_while_a_live_lease_exists() {
 #[test]
 fn doctor_waits_for_admission_and_preserves_the_new_live_route() {
     let env = TestEnv::new();
+    env.prepare_launcher();
     env.command().arg("setup").assert().success();
     let paths = Paths::for_test(env.root.path());
     let socket = env.root.path().join("herdr.sock");
@@ -277,7 +311,7 @@ fn doctor_waits_for_admission_and_preserves_the_new_live_route() {
     let proceed = env.root.path().join("admission-continue");
     let mut wrapper_command = env.std_command();
     wrapper_command
-        .args(["herdr", "--anchor"])
+        .args(["--mode", "internal", "--anchor"])
         .arg(&new_anchor)
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
@@ -309,7 +343,10 @@ fn doctor_waits_for_admission_and_preserves_the_new_live_route() {
         String::from_utf8_lossy(&doctor_output.stdout)
             .contains(&format!("route anchor is valid: {}", new_anchor.display()))
     );
-    assert_eq!(routes.load(&socket).unwrap().anchor_root, new_anchor);
+    assert_eq!(
+        routes.load(&socket).unwrap().internal_anchor(),
+        Some(new_anchor.as_path())
+    );
     assert!(wrapper.wait_with_output().unwrap().status.success());
 }
 

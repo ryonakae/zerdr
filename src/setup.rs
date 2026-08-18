@@ -30,6 +30,103 @@ pub(crate) struct InstallState {
     pub(crate) task_fingerprints: BTreeMap<String, String>,
 }
 
+#[derive(Deserialize)]
+struct PluginManifest {
+    id: String,
+    min_herdr_version: String,
+    events: Vec<PluginEvent>,
+}
+
+#[derive(Deserialize)]
+struct PluginEvent {
+    on: String,
+    command: Vec<String>,
+}
+
+pub(crate) fn validate_launcher_installation(paths: &Paths, herdr: &Herdr) -> Result<()> {
+    let plugins = herdr.plugin_list().map_err(setup_guidance)?;
+    if !plugin_is_compatible(&plugins) {
+        return Err(setup_guidance(Error::User(
+            "Herdr zerdr plugin is missing, disabled, or lacks workspace.focused".to_owned(),
+        )));
+    }
+    let install = load_install_state(&paths.install_state_file)
+        .map_err(setup_guidance)?
+        .ok_or_else(|| {
+            setup_guidance(Error::User(
+                "zerdr install ownership state is missing".to_owned(),
+            ))
+        })?;
+    let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
+    let manifest_text = fs::read_to_string(&manifest_path)
+        .map_err(|error| setup_guidance(Error::io(&manifest_path, error)))?;
+    let manifest: PluginManifest = toml::from_str(&manifest_text).map_err(|error| {
+        setup_guidance(Error::User(format!(
+            "generated Herdr manifest is invalid: {error}"
+        )))
+    })?;
+    let current = stable_executable()
+        .and_then(|path| path.canonicalize().map_err(|error| Error::io(path, error)))
+        .map_err(setup_guidance)?;
+    let installed = install
+        .executable
+        .canonicalize()
+        .map_err(|error| setup_guidance(Error::io(&install.executable, error)))?;
+    let event_executable = manifest
+        .events
+        .first()
+        .and_then(|event| event.command.first())
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            setup_guidance(Error::User(
+                "generated Herdr manifest has no event executable".to_owned(),
+            ))
+        })?;
+    let event_executable = event_executable
+        .canonicalize()
+        .map_err(|error| setup_guidance(Error::io(&event_executable, error)))?;
+    let compatible_manifest = manifest.id == "zerdr"
+        && manifest.min_herdr_version == "0.8.0"
+        && manifest.events.len() == 1
+        && manifest.events[0].on == "workspace.focused"
+        && manifest.events[0].command.len() == 2
+        && manifest.events[0].command[1] == "sync-from-herdr"
+        && installed == current
+        && event_executable == current;
+    if compatible_manifest {
+        Ok(())
+    } else {
+        Err(setup_guidance(Error::User(
+            "generated Herdr manifest or installed executable is incompatible".to_owned(),
+        )))
+    }
+}
+
+pub(crate) fn plugin_is_compatible(value: &Value) -> bool {
+    let plugins = value
+        .pointer("/result/plugins")
+        .or_else(|| value.get("plugins"))
+        .and_then(Value::as_array);
+    plugins.is_some_and(|plugins| {
+        plugins.iter().any(|plugin| {
+            plugin.get("plugin_id").and_then(Value::as_str) == Some("zerdr")
+                && plugin.get("enabled").and_then(Value::as_bool) == Some(true)
+                && plugin
+                    .get("events")
+                    .and_then(Value::as_array)
+                    .is_some_and(|events| {
+                        events.iter().any(|event| {
+                            event.get("on").and_then(Value::as_str) == Some("workspace.focused")
+                        })
+                    })
+        })
+    })
+}
+
+fn setup_guidance(error: Error) -> Error {
+    Error::User(format!("{error}; run `zerdr setup`"))
+}
+
 pub fn setup() -> Result<()> {
     let paths = Paths::discover()?;
     let executable = stable_executable()?;

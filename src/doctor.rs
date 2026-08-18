@@ -9,9 +9,29 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::herdr::Herdr;
-use crate::setup::{InstallState, fingerprint, generated_tasks, load_install_state, owned_labels};
+use crate::setup::{
+    InstallState, fingerprint, generated_tasks, load_install_state, owned_labels,
+    plugin_is_compatible,
+};
 use crate::state::{BindingStore, LeaseSet, LifecycleGuard, Paths, RouteStore, canonical_git_root};
 use crate::zed::Zed;
+
+pub fn doctor_remote(markers: &[String]) -> Result<()> {
+    let paths = Paths::discover()?;
+    let mut report = Report::default();
+    report.warn(format!(
+        "remote environment detected ({}); runtime checks and cleanup were skipped",
+        markers.join(", ")
+    ));
+    report.pass(format!("state directory: {}", paths.state_dir.display()));
+    report.pass(format!("data directory: {}", paths.data_dir.display()));
+    report.pass(format!(
+        "Zed tasks file: {}",
+        paths.zed_tasks_file.display()
+    ));
+    inspect_static_installation(&paths, &mut report);
+    report.finish()
+}
 
 pub fn doctor() -> Result<()> {
     let paths = Paths::discover()?;
@@ -167,10 +187,14 @@ pub fn doctor() -> Result<()> {
                                 "zerdr session has one live wrapper: {}",
                                 socket.display()
                             ));
-                            report.pass(format!(
-                                "route anchor is valid: {}",
-                                route.anchor_root.display()
-                            ));
+                            if let Some(anchor) = route.internal_anchor() {
+                                report.pass(format!(
+                                    "route anchor is valid: {}",
+                                    anchor.display()
+                                ));
+                            } else {
+                                report.pass("external route is valid");
+                            }
                         }
                         Ok(route) => report.fail(format!(
                             "route belongs to wrapper {}, but live wrapper is {}; restart `zerdr: Herdr`",
@@ -197,33 +221,44 @@ pub fn doctor() -> Result<()> {
     report.finish()
 }
 
+fn inspect_static_installation(paths: &Paths, report: &mut Report) {
+    let install = match load_install_state(&paths.install_state_file) {
+        Ok(Some(install)) => Some(install),
+        Ok(None) => {
+            report.fail("zerdr install ownership state is missing; run `zerdr setup`");
+            None
+        }
+        Err(error) => {
+            report.fail(format!("zerdr install ownership state is invalid: {error}"));
+            None
+        }
+    };
+    if let Some(install) = install.as_ref() {
+        if is_executable(&install.executable) {
+            report.pass(format!(
+                "installed zerdr executable exists: {}",
+                install.executable.display()
+            ));
+        } else {
+            report.fail(format!(
+                "installed zerdr executable is missing: {}; rerun `zerdr setup` from the installed binary",
+                install.executable.display()
+            ));
+        }
+        match inspect_manifest(paths, install) {
+            Ok(()) => report.pass("generated Herdr manifest command is compatible"),
+            Err(error) => report.fail(error.to_string()),
+        }
+        match inspect_tasks(paths, install) {
+            Ok(()) => report.pass("all five owned Zed task payloads are valid"),
+            Err(error) => report.fail(error.to_string()),
+        }
+    }
+}
+
 fn is_executable(path: &Path) -> bool {
     fs::metadata(path)
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-}
-
-fn plugin_is_compatible(value: &Value) -> bool {
-    let plugins = value
-        .pointer("/result/plugins")
-        .or_else(|| value.get("plugins"))
-        .and_then(Value::as_array);
-    plugins.is_some_and(|plugins| {
-        plugins.iter().any(|plugin| {
-            plugin.get("plugin_id").and_then(Value::as_str) == Some("zerdr")
-                && plugin
-                    .get("enabled")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                && plugin
-                    .get("events")
-                    .and_then(Value::as_array)
-                    .is_some_and(|events| {
-                        events.iter().any(|event| {
-                            event.get("on").and_then(Value::as_str) == Some("workspace.focused")
-                        })
-                    })
-        })
-    })
 }
 
 fn inspect_manifest(paths: &Paths, install: &InstallState) -> Result<()> {
