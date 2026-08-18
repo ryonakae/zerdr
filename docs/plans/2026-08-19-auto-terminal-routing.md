@@ -252,9 +252,18 @@ resolve local environment + concrete mode + anchor/focus
 - [x] Task 1: Establish the bare CLI, automatic mode resolution, local-only boundary, and versioned route contracts.
 - [x] Task 2: Make wrapper admission and setup migration mode-aware while preserving one authority.
 - [x] Task 3: Deliver external on-demand sync and terminal-independent manual commands.
-- [ ] Task 4: Add best-effort macOS terminal-focus restoration behind a platform boundary.
-- [ ] Task 5: Complete mode-aware diagnostics and public documentation.
+- [x] Task 4: Add best-effort macOS terminal-focus restoration behind a platform boundary.
+- [x] Task 5: Complete mode-aware diagnostics and public documentation.
 - [ ] Task 6: Complete automated regression and real internal/external E2E validation.
+
+### Validation record (2026-08-19)
+
+- Commits `dba4158`, `0a80943`, and `635bf30` implement Tasks 1-5 plus the independent-review authority/preflight fixes.
+- Local macOS gates at `635bf30`: format, Clippy with warnings denied, all 85 unit/integration tests, metadata, package listing, `actionlint`, and `git diff --check` passed.
+- Hosted run [32167081756](https://github.com/ryonakae/zerdr/actions/runs/32167081756) passed on `macos-latest` and `ubuntu-latest` for `0a80943`. A post-fix hosted run is required before archival.
+- Independent review found no blocking issue after the picker authority race fix and reported **Ready to merge: Yes**.
+- Real Zed/Herdr/Ghostty E2E has not run for this revision. Task 6 and plan archival remain incomplete.
+- No tag, GitHub Release, or Homebrew tap mutation occurred.
 
 Implementation-time minor file changes or internal differences must be reflected in the relevant task. Ask the user before changing requirements, Out of Scope, public contracts, persisted schemas, or task labels.
 
@@ -581,18 +590,18 @@ Implementation-time minor file changes or internal differences must be reflected
 
 ## Final Validation
 
-- [ ] `cargo test --test cli_contract && cargo test --test state_and_bindings` — Expected: bare/mode/remote/route-schema contracts pass.
-- [ ] `cargo test --test herdr_wrapper && cargo test --test setup_and_doctor` — Expected: mode lifecycle, task migration, preflight, and doctor contracts pass.
-- [ ] `cargo test --test sync_flow` — Expected: exact internal/external routing, manual commands, authority, and focus restoration seams pass.
-- [ ] `cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-targets --all-features` — Expected: all local quality gates pass.
-- [ ] `cargo metadata --no-deps --format-version 1 >/dev/null && cargo package --allow-dirty --no-verify --list >/dev/null` — Expected: target-specific dependency metadata and package contents remain valid.
-- [ ] `actionlint .github/workflows/*.yml && git diff --check` — Expected: workflows and changed files pass static validation.
+- [x] `cargo test --test cli_contract && cargo test --test state_and_bindings` — Passed: bare/mode/remote/route-schema contracts.
+- [x] `cargo test --test herdr_wrapper && cargo test --test setup_and_doctor` — Passed: mode lifecycle, task migration, preflight, and doctor contracts.
+- [x] `cargo test --test sync_flow` — Passed: exact internal/external routing, manual commands, authority, and focus restoration seams.
+- [x] `cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-targets --all-features` — Passed with 85 tests.
+- [x] `cargo metadata --no-deps --format-version 1 >/dev/null && cargo package --allow-dirty --no-verify --list >/dev/null` — Passed: target-specific dependency metadata and package contents.
+- [x] `actionlint .github/workflows/*.yml && git diff --check` — Passed: workflows and changed files.
 - [ ] Real macOS internal/external E2E checklist — Expected: every applicable Task 6 observation is recorded with exact versions.
 - [ ] Hosted macOS/Linux CI — Expected: both test jobs pass after push; unavailable or failing CI blocks completion/archive.
-- [ ] Original MVP plan points to this revision and contains no conflicting active launcher/external-terminal claim.
-- [ ] Requirement Coverage has no unmapped requirement or decision.
-- [ ] The plan and actual changed-file set agree, including documented minor implementation differences.
-- [ ] No release, tag, or Homebrew tap mutation occurred without explicit approval.
+- [x] Original MVP plan points to this revision; historical conflicting contracts are marked superseded.
+- [x] Requirement Coverage has no unmapped requirement or decision.
+- [x] The plan and actual changed-file set agree, including `objc2-app-kit` plus its transitive lockfile entries and the test support seams.
+- [x] No release, tag, or Homebrew tap mutation occurred without explicit approval.
 - [ ] After every item above succeeds, update the original MVP plan pointer to the archived path and move this file unchanged in name to `docs/plans/archived/2026-08-19-auto-terminal-routing.md`.
 
 ## Risks and Open Questions
