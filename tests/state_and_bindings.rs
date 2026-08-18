@@ -1,0 +1,217 @@
+use std::fs;
+use std::os::unix::fs::symlink;
+use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
+
+use tempfile::TempDir;
+use zerdr::state::{BindingStore, LeaseSet, LifecycleGuard, Paths, RouteStore, SyncGuard};
+
+fn git_repo() -> (TempDir, std::path::PathBuf) {
+    let temp = tempfile::tempdir().unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let nested = temp.path().join("nested/deep");
+    fs::create_dir_all(&nested).unwrap();
+    (temp, nested)
+}
+
+#[test]
+fn nested_bind_path_is_persisted_as_the_canonical_git_root() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let store = BindingStore::new(paths.bindings_file.clone());
+    let (repo, nested) = git_repo();
+
+    let root = store.bind("w1", &nested).unwrap();
+    assert_eq!(root, repo.path().canonicalize().unwrap());
+
+    let loaded = store.load().unwrap();
+    assert_eq!(loaded.schema_version, 1);
+    assert_eq!(loaded.session_name, "zerdr");
+    assert_eq!(loaded.bindings["w1"], root);
+}
+
+#[test]
+fn lazy_binding_does_not_replace_an_existing_explicit_binding() {
+    let state = tempfile::tempdir().unwrap();
+    let store = BindingStore::new(Paths::for_test(state.path()).bindings_file);
+    let (first_repo, first_nested) = git_repo();
+    let first_root = store.bind("w1", &first_nested).unwrap();
+
+    let resolved = store
+        .bind_if_absent("w1", state.path().join("missing").as_path())
+        .unwrap();
+
+    assert_eq!(resolved, first_root);
+    assert_eq!(resolved, first_repo.path().canonicalize().unwrap());
+}
+
+#[test]
+fn symlinked_bind_path_resolves_to_the_canonical_checkout_root() {
+    let state = tempfile::tempdir().unwrap();
+    let store = BindingStore::new(Paths::for_test(state.path()).bindings_file);
+    let (repo, _) = git_repo();
+    let links = tempfile::tempdir().unwrap();
+    let link = links.path().join("checkout-link");
+    symlink(repo.path(), &link).unwrap();
+
+    let resolved = store.bind("w1", &link.join("nested/deep")).unwrap();
+
+    assert_eq!(resolved, repo.path().canonicalize().unwrap());
+}
+
+#[test]
+fn duplicate_roots_are_preserved_for_distinct_workspaces() {
+    let state = tempfile::tempdir().unwrap();
+    let store = BindingStore::new(Paths::for_test(state.path()).bindings_file);
+    let (repo, _) = git_repo();
+
+    store.bind("w1", repo.path()).unwrap();
+    store.bind("w2", repo.path()).unwrap();
+
+    let loaded = store.load().unwrap();
+    assert_eq!(loaded.bindings.len(), 2);
+    assert_eq!(loaded.bindings["w1"], loaded.bindings["w2"]);
+}
+
+#[test]
+fn invalid_or_unsupported_state_is_not_overwritten() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    fs::create_dir_all(paths.bindings_file.parent().unwrap()).unwrap();
+    let original = r#"{"schema_version":2,"session_name":"zerdr","bindings":{}}"#;
+    fs::write(&paths.bindings_file, original).unwrap();
+    let store = BindingStore::new(paths.bindings_file.clone());
+    let (repo, _) = git_repo();
+
+    let error = store.bind("w1", repo.path()).unwrap_err().to_string();
+    assert!(error.contains("schema version 2"), "{error}");
+    assert_eq!(fs::read_to_string(paths.bindings_file).unwrap(), original);
+}
+
+#[test]
+fn route_state_tracks_the_canonical_dynamic_anchor() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let socket = state.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let (first, _) = git_repo();
+    let (second, _) = git_repo();
+    let first = first.path().canonicalize().unwrap();
+    let second = second.path().canonicalize().unwrap();
+    let routes = RouteStore::new(paths.routes_dir);
+
+    routes.initialize(&socket, &first, 41).unwrap();
+    let initial = routes.load(&socket).unwrap();
+    assert_eq!(initial.schema_version, 1);
+    assert_eq!(initial.session_name, "zerdr");
+    assert_eq!(initial.socket_path, socket.canonicalize().unwrap());
+    assert_eq!(initial.anchor_root, first);
+    assert_eq!(initial.wrapper_pid, 41);
+
+    routes.promote(&socket, &second).unwrap();
+    assert_eq!(routes.load(&socket).unwrap().anchor_root, second);
+}
+
+#[test]
+fn one_of_two_locked_leases_keeps_the_socket_live() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let socket = state.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let leases = LeaseSet::new(paths.leases_dir);
+
+    let first = leases.acquire(&socket, 101).unwrap();
+    let second = leases.acquire(&socket, 102).unwrap();
+    assert!(leases.has_live(&socket).unwrap());
+
+    drop(first);
+    assert!(leases.has_live(&socket).unwrap());
+    drop(second);
+    assert!(!leases.has_live(&socket).unwrap());
+}
+
+#[test]
+fn concurrent_binding_updates_preserve_every_workspace() {
+    let state = tempfile::tempdir().unwrap();
+    let store = BindingStore::new(Paths::for_test(state.path()).bindings_file);
+    let (repo, _) = git_repo();
+    let mut threads = Vec::new();
+    for index in 0..16 {
+        let store = store.clone();
+        let repo = repo.path().to_path_buf();
+        threads.push(thread::spawn(move || {
+            store.bind(&format!("w{index}"), &repo).unwrap();
+        }));
+    }
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    assert_eq!(store.load().unwrap().bindings.len(), 16);
+}
+
+#[test]
+fn lifecycle_lock_serializes_admission_cleanup_and_purge() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let first = LifecycleGuard::acquire(&paths.lifecycle_lock_file).unwrap();
+    let acquired = Arc::new(AtomicBool::new(false));
+    let thread_acquired = Arc::clone(&acquired);
+    let lock_path = paths.lifecycle_lock_file.clone();
+
+    let waiter = thread::spawn(move || {
+        let _second = LifecycleGuard::acquire(&lock_path).unwrap();
+        thread_acquired.store(true, Ordering::SeqCst);
+    });
+    thread::sleep(Duration::from_millis(50));
+    assert!(!acquired.load(Ordering::SeqCst));
+    drop(first);
+    waiter.join().unwrap();
+    assert!(acquired.load(Ordering::SeqCst));
+}
+
+#[test]
+fn sync_lock_serializes_all_callers_for_the_same_socket() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let socket = state.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let first = SyncGuard::acquire(&paths.sync_locks_dir, &socket).unwrap();
+    let acquired = Arc::new(AtomicBool::new(false));
+    let thread_acquired = Arc::clone(&acquired);
+    let lock_root = paths.sync_locks_dir.clone();
+    let thread_socket = socket.clone();
+
+    let waiter = thread::spawn(move || {
+        let _second = SyncGuard::acquire(&lock_root, &thread_socket).unwrap();
+        thread_acquired.store(true, Ordering::SeqCst);
+    });
+    thread::sleep(Duration::from_millis(50));
+    assert!(!acquired.load(Ordering::SeqCst));
+    drop(first);
+    waiter.join().unwrap();
+    assert!(acquired.load(Ordering::SeqCst));
+}
+
+#[test]
+fn another_socket_does_not_authorize_the_event_socket() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let first_socket = state.path().join("first.sock");
+    let second_socket = state.path().join("second.sock");
+    fs::write(&first_socket, "").unwrap();
+    fs::write(&second_socket, "").unwrap();
+    let leases = LeaseSet::new(paths.leases_dir);
+
+    let _guard = leases.acquire(&first_socket, 101).unwrap();
+    assert!(!leases.has_live(&second_socket).unwrap());
+}

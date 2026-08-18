@@ -1,0 +1,9 @@
+id = "zerdr"
+name = "zerdr"
+version = "@VERSION@"
+min_herdr_version = "0.8.0"
+platforms = ["macos", "linux"]
+
+[[events]]
+on = "workspace.focused"
+command = [@ZERDR_EXECUTABLE@, "sync-from-herdr"]

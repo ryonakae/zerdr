@@ -1,0 +1,43 @@
+[
+  {
+    "label": "zerdr: Herdr",
+    "command": @ZERDR_EXECUTABLE@,
+    "args": ["herdr", "--anchor", "$ZED_WORKTREE_ROOT"],
+    "allow_concurrent_runs": true,
+    "use_new_terminal": true,
+    "reveal": "always",
+    "hide": "never"
+  },
+  {
+    "label": "zerdr: Pick Workspace",
+    "command": @ZERDR_EXECUTABLE@,
+    "args": ["pick"],
+    "reveal": "always",
+    "reveal_target": "center",
+    "hide": "on_success"
+  },
+  {
+    "label": "zerdr: Next Workspace",
+    "command": @ZERDR_EXECUTABLE@,
+    "args": ["next"],
+    "env": { "ZERDR_TASK_MODE": "1" },
+    "reveal": "no_focus",
+    "hide": "on_success"
+  },
+  {
+    "label": "zerdr: Previous Workspace",
+    "command": @ZERDR_EXECUTABLE@,
+    "args": ["previous"],
+    "env": { "ZERDR_TASK_MODE": "1" },
+    "reveal": "no_focus",
+    "hide": "on_success"
+  },
+  {
+    "label": "zerdr: Sync Workspace",
+    "command": @ZERDR_EXECUTABLE@,
+    "args": ["sync"],
+    "env": { "ZERDR_TASK_MODE": "1" },
+    "reveal": "no_focus",
+    "hide": "on_success"
+  }
+]
