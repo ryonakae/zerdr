@@ -260,7 +260,7 @@ resolve local environment + concrete mode + anchor/focus
 
 - Commits `dba4158`, `0a80943`, and `635bf30` implement Tasks 1-5 plus the independent-review authority/preflight fixes.
 - Local macOS gates at `635bf30`: format, Clippy with warnings denied, all 85 unit/integration tests, metadata, package listing, `actionlint`, and `git diff --check` passed.
-- Hosted run [32167081756](https://github.com/ryonakae/zerdr/actions/runs/32167081756) passed on `macos-latest` and `ubuntu-latest` for `0a80943`. A post-fix hosted run is required before archival.
+- Post-fix hosted run [32169005159](https://github.com/ryonakae/zerdr/actions/runs/32169005159) passed on `macos-latest` and `ubuntu-latest` for `c9900b8`, which contains code commit `635bf30`.
 - Independent review found no blocking issue after the picker authority race fix and reported **Ready to merge: Yes**.
 - Real Zed/Herdr/Ghostty E2E has not run for this revision. Task 6 and plan archival remain incomplete.
 - No tag, GitHub Release, or Homebrew tap mutation occurred.
@@ -597,7 +597,7 @@ Implementation-time minor file changes or internal differences must be reflected
 - [x] `cargo metadata --no-deps --format-version 1 >/dev/null && cargo package --allow-dirty --no-verify --list >/dev/null` — Passed: target-specific dependency metadata and package contents.
 - [x] `actionlint .github/workflows/*.yml && git diff --check` — Passed: workflows and changed files.
 - [ ] Real macOS internal/external E2E checklist — Expected: every applicable Task 6 observation is recorded with exact versions.
-- [ ] Hosted macOS/Linux CI — Expected: both test jobs pass after push; unavailable or failing CI blocks completion/archive.
+- [x] Hosted macOS/Linux CI — Run 32169005159 passed both test jobs after the post-review fixes.
 - [x] Original MVP plan points to this revision; historical conflicting contracts are marked superseded.
 - [x] Requirement Coverage has no unmapped requirement or decision.
 - [x] The plan and actual changed-file set agree, including `objc2-app-kit` plus its transitive lockfile entries and the test support seams.
