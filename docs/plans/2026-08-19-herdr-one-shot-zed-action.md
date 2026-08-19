@@ -209,7 +209,7 @@ The root may be resolved before acquiring the socket lock, but route selection a
 
 - [x] Task 1: Deliver session-scoped binding state and wrapper-optional binding commands.
 - [x] Task 2: Deliver the captured-workspace one-shot action and route arbitration.
-- [ ] Task 3: Install and diagnose the complete plugin action without breaking wrapper upgrades.
+- [x] Task 3: Install and diagnose the complete plugin action without breaking wrapper upgrades.
 - [ ] Task 4: Document both workflows and complete repository-wide validation.
 
 Implementation-time minor file changes or internal differences must be reflected in the relevant task. Ask the user before changing requirements, Out of Scope, persisted schemas, or public contracts.
@@ -344,6 +344,7 @@ Implementation-time minor file changes or internal differences must be reflected
 - Create: `assets/herdr/keymap.example.toml` if the embedded-asset approach is used.
 - Modify: `src/setup.rs`
 - Modify: `src/doctor.rs`
+- Modify: `README.md` — publish the installed action's manual keybinding and runtime behavior when this task makes it available.
 - Modify: `tests/setup_and_doctor.rs`
 - Modify: `tests/support/mod.rs`
 
@@ -383,6 +384,8 @@ Implementation-time minor file changes or internal differences must be reflected
 **Validation:**
 - Run: `cargo test --test setup_and_doctor && cargo test --test herdr_wrapper`
 - Expected: manifest/setup rollback/idempotence, old-manifest launcher compatibility, complete-action diagnosis, plugin-only health, and live-route regressions pass.
+
+**Implementation record (2026-08-19):** Setup now materializes the exact action and prints an embedded Herdr keybinding example; launcher compatibility remains event-only while doctor performs full action/manifest checks. Doctor validates session-scoped bindings and treats no live follow wrapper as healthy only when all blocking checks pass. `README.md` was updated in this task because the action became installable. Task-level review found two truthful-diagnostics issues: failing installs still printed one-shot availability, and duplicate `workspace.focused`/`open-zed` identities could pass `any`-based checks. Exact one-identity validation, final-success-only availability, and regression tests fixed both. The 32 setup/doctor and 14 wrapper tests, format, Clippy with warnings denied, and `git diff --check` passed; independent re-review approved the fixes.
 
 ### Task 4: Public Documentation and Final Validation
 

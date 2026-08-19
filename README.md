@@ -23,6 +23,18 @@ zerdr
 
 Run `zerdr` from the terminal you want to use with Herdr. zerdr routes the focused workspace's checkout to Zed.
 
+To keep normal Herdr workspace switching independent from Zed, do not start the bare wrapper. Add a configurable Herdr keybinding instead:
+
+```toml
+[[keys.command]]
+key = "prefix+z"
+type = "plugin_action"
+command = "zerdr.open-zed"
+description = "open workspace in Zed"
+```
+
+The action opens the current workspace in Zed once and leaves Zed in front. `zerdr setup` prints this example but does not edit your Herdr configuration.
+
 ## Commands
 
 | Command | Description |
@@ -50,6 +62,8 @@ Bare `zerdr` accepts `--mode auto|internal|external`, `--anchor PATH`, and `--fo
 Use `--anchor PATH` to choose the first internal anchor. Use `--focus zed` on macOS to leave Zed in front after external routing.
 
 Zed can reuse a window that contains the target project. Its CLI cannot force a new window when no window contains that project.
+
+The one-shot plugin action reuses an applicable live wrapper route. Without a wrapper, it runs `zed TARGET`, so window placement follows Zed's `cli_default_open_behavior` setting. A corrupt live route is reported instead of falling back to another window.
 
 ## Requirements
 

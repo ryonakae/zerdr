@@ -34,6 +34,7 @@ pub(crate) struct InstallState {
 struct PluginManifest {
     id: String,
     min_herdr_version: String,
+    #[serde(default)]
     events: Vec<PluginEvent>,
 }
 
@@ -81,27 +82,21 @@ pub(crate) fn validate_launcher_installation(paths: &Paths, herdr: &Herdr) -> Re
         .executable
         .canonicalize()
         .map_err(|error| setup_guidance(Error::io(&install.executable, error)))?;
-    let event_executable = manifest
+    let focus_events = manifest
         .events
-        .first()
-        .and_then(|event| event.command.first())
-        .map(PathBuf::from)
-        .ok_or_else(|| {
-            setup_guidance(Error::User(
-                "generated Herdr manifest has no event executable".to_owned(),
-            ))
-        })?;
-    let event_executable = event_executable
-        .canonicalize()
-        .map_err(|error| setup_guidance(Error::io(&event_executable, error)))?;
+        .iter()
+        .filter(|event| event.on == "workspace.focused")
+        .collect::<Vec<_>>();
+    let compatible_event = focus_events.len() == 1
+        && focus_events[0].command.len() == 2
+        && focus_events[0].command[1] == "sync-from-herdr"
+        && Path::new(&focus_events[0].command[0])
+            .canonicalize()
+            .is_ok_and(|event_executable| event_executable == current);
     let compatible_manifest = manifest.id == "zerdr"
         && manifest.min_herdr_version == "0.8.0"
-        && manifest.events.len() == 1
-        && manifest.events[0].on == "workspace.focused"
-        && manifest.events[0].command.len() == 2
-        && manifest.events[0].command[1] == "sync-from-herdr"
         && installed == current
-        && event_executable == current;
+        && compatible_event;
     if compatible_manifest {
         Ok(())
     } else {
@@ -112,24 +107,79 @@ pub(crate) fn validate_launcher_installation(paths: &Paths, herdr: &Herdr) -> Re
 }
 
 pub(crate) fn plugin_is_compatible(value: &Value) -> bool {
-    let plugins = value
+    compatible_plugin(value).is_some_and(|plugin| has_focus_event(plugin, None))
+}
+
+pub(crate) fn plugin_has_complete_action(value: &Value, executable: &Path) -> bool {
+    let expected = executable.display().to_string();
+    compatible_plugin(value).is_some_and(|plugin| {
+        has_focus_event(plugin, Some(&expected))
+            && plugin
+                .get("actions")
+                .and_then(Value::as_array)
+                .map(|actions| {
+                    actions
+                        .iter()
+                        .filter(|action| {
+                            action.get("id").and_then(Value::as_str) == Some("open-zed")
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .is_some_and(|actions| {
+                    actions.len() == 1
+                        && actions[0].get("title").and_then(Value::as_str) == Some("Open Zed")
+                        && actions[0]
+                            .get("contexts")
+                            .and_then(Value::as_array)
+                            .is_some_and(|contexts| {
+                                contexts.len() == 1 && contexts[0].as_str() == Some("workspace")
+                            })
+                        && action_command_matches(actions[0], &expected, "open-from-herdr")
+                })
+    })
+}
+
+fn compatible_plugin(value: &Value) -> Option<&Value> {
+    value
         .pointer("/result/plugins")
         .or_else(|| value.get("plugins"))
-        .and_then(Value::as_array);
-    plugins.is_some_and(|plugins| {
-        plugins.iter().any(|plugin| {
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|plugin| {
             plugin.get("plugin_id").and_then(Value::as_str) == Some("zerdr")
                 && plugin.get("enabled").and_then(Value::as_bool) == Some(true)
-                && plugin
-                    .get("events")
-                    .and_then(Value::as_array)
-                    .is_some_and(|events| {
-                        events.iter().any(|event| {
-                            event.get("on").and_then(Value::as_str) == Some("workspace.focused")
-                        })
-                    })
         })
-    })
+}
+
+fn has_focus_event(plugin: &Value, executable: Option<&str>) -> bool {
+    plugin
+        .get("events")
+        .and_then(Value::as_array)
+        .map(|events| {
+            events
+                .iter()
+                .filter(|event| {
+                    event.get("on").and_then(Value::as_str) == Some("workspace.focused")
+                })
+                .collect::<Vec<_>>()
+        })
+        .is_some_and(|events| {
+            events.len() == 1
+                && executable.is_none_or(|executable| {
+                    action_command_matches(events[0], executable, "sync-from-herdr")
+                })
+        })
+}
+
+fn action_command_matches(value: &Value, executable: &str, subcommand: &str) -> bool {
+    value
+        .get("command")
+        .and_then(Value::as_array)
+        .is_some_and(|command| {
+            command.len() == 2
+                && command[0].as_str() == Some(executable)
+                && command[1].as_str() == Some(subcommand)
+        })
 }
 
 fn setup_guidance(error: Error) -> Error {
@@ -194,7 +244,11 @@ pub fn setup() -> Result<()> {
 
     println!("zerdr setup complete");
     println!(
-        "Add keybindings manually if desired:\n{}",
+        "Add this Herdr keybinding manually if desired:\n{}",
+        include_str!("../assets/herdr/keymap.example.toml")
+    );
+    println!(
+        "Add these Zed keybindings manually if desired:\n{}",
         include_str!("../assets/zed/keymap.example.json")
     );
     Ok(())

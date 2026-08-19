@@ -150,7 +150,11 @@ fi
             .env("ZERDR_TEST_LOG", &self.log)
             .env("ZERDR_HERDR_BIN", self.bin.join("herdr"))
             .env("ZERDR_ZED_BIN", self.bin.join("zed"))
-            .env("ZERDR_TEST_PLUGINS_JSON", compatible_plugins_json())
+            .env(
+                "ZERDR_TEST_PLUGINS_JSON",
+                compatible_plugins_json().to_string(),
+            )
+            .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
             .env_remove("HERDR_SOCKET_PATH")
             .env_remove("HERDR_WORKSPACE_ID");
         command
@@ -164,7 +168,11 @@ fi
             .env("ZERDR_TEST_LOG", &self.log)
             .env("ZERDR_HERDR_BIN", self.bin.join("herdr"))
             .env("ZERDR_ZED_BIN", self.bin.join("zed"))
-            .env("ZERDR_TEST_PLUGINS_JSON", compatible_plugins_json())
+            .env(
+                "ZERDR_TEST_PLUGINS_JSON",
+                compatible_plugins_json().to_string(),
+            )
+            .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
             .env_remove("HERDR_SOCKET_PATH")
             .env_remove("HERDR_WORKSPACE_ID");
         command
@@ -189,17 +197,31 @@ fi
     }
 }
 
-fn compatible_plugins_json() -> String {
+pub fn compatible_plugins_json() -> serde_json::Value {
     serde_json::json!({
         "result": {
             "plugins": [{
                 "plugin_id": "zerdr",
                 "enabled": true,
-                "events": [{"on": "workspace.focused"}],
+                "actions": [{
+                    "id": "open-zed",
+                    "title": "Open Zed",
+                    "contexts": ["workspace"],
+                    "command": [
+                        assert_cmd::cargo::cargo_bin!("zerdr").display().to_string(),
+                        "open-from-herdr"
+                    ]
+                }],
+                "events": [{
+                    "on": "workspace.focused",
+                    "command": [
+                        assert_cmd::cargo::cargo_bin!("zerdr").display().to_string(),
+                        "sync-from-herdr"
+                    ]
+                }],
             }]
         }
     })
-    .to_string()
 }
 
 fn write_executable(path: &Path, content: &str) {

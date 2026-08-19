@@ -11,7 +11,7 @@ use crate::error::{Error, Result};
 use crate::herdr::Herdr;
 use crate::setup::{
     InstallState, fingerprint, generated_tasks, load_install_state, owned_labels,
-    plugin_is_compatible,
+    plugin_has_complete_action,
 };
 use crate::state::{
     BindingStore, LeaseSet, LifecycleGuard, Paths, RouteFocus, RouteStore, RouteStrategy,
@@ -57,15 +57,13 @@ pub fn doctor() -> Result<()> {
         Err(error) => report.fail(format!("Herdr executable is unavailable: {error}")),
     }
 
-    match herdr.plugin_list() {
-        Ok(value) if plugin_is_compatible(&value) => {
-            report.pass("Herdr zerdr plugin is enabled for workspace.focused");
+    let plugins = match herdr.plugin_list() {
+        Ok(value) => Some(value),
+        Err(error) => {
+            report.fail(format!("could not inspect Herdr plugins: {error}"));
+            None
         }
-        Ok(_) => report.fail(
-            "Herdr zerdr plugin is missing, disabled, or lacks workspace.focused; run `zerdr setup`",
-        ),
-        Err(error) => report.fail(format!("could not inspect Herdr plugins: {error}")),
-    }
+    };
 
     match Zed::from_env().supports_existing_and_add() {
         Ok(true) => report.pass("Zed supports --existing and --add"),
@@ -86,6 +84,15 @@ pub fn doctor() -> Result<()> {
             None
         }
     };
+    if let (Some(plugins), Some(install)) = (plugins.as_ref(), install.as_ref()) {
+        if plugin_has_complete_action(plugins, &install.executable) {
+            report.pass("Herdr zerdr Open Zed action is registered");
+        } else {
+            report.fail(
+                "Herdr zerdr plugin is missing, disabled, or lacks the exact Open Zed action; run `zerdr setup`",
+            );
+        }
+    }
     if let Some(install) = install.as_ref() {
         if is_executable(&install.executable) {
             report.pass(format!(
@@ -183,7 +190,7 @@ pub fn doctor() -> Result<()> {
                     ));
                 }
                 match inspection.live_wrapper_pids.as_slice() {
-                    [] => report.warn("zerdr session has no live wrapper; run bare `zerdr`"),
+                    [] => report.pass("no live follow wrapper; one-shot mode does not require one"),
                     [wrapper_pid] => match routes.load(&socket) {
                         Ok(route) if route.wrapper_pid == *wrapper_pid => {
                             report.pass(format!(
@@ -241,9 +248,15 @@ pub fn doctor() -> Result<()> {
         Err(_) if lease_sweep.as_ref().is_some_and(|sweep| sweep.live_count > 0) => report.fail(
             "zerdr has live lease state but the Herdr session socket is unavailable; stop the stale wrapper or remove its state",
         ),
-        Err(_) => report.warn("zerdr Herdr session is not running; run bare `zerdr`"),
+        Err(Error::SessionUnavailable) => {
+            report.pass("no live follow wrapper; one-shot mode does not require one")
+        }
+        Err(error) => report.fail(format!("could not inspect the zerdr Herdr session: {error}")),
     }
 
+    if report.failures == 0 {
+        report.pass("one-shot Open Zed is available");
+    }
     report.finish()
 }
 
@@ -296,16 +309,33 @@ fn inspect_manifest(paths: &Paths, install: &InstallState) -> Result<()> {
         install.executable.display().to_string(),
         "sync-from-herdr".to_owned(),
     ];
+    let expected_action_command = vec![
+        install.executable.display().to_string(),
+        "open-from-herdr".to_owned(),
+    ];
+    let focus_events = manifest
+        .events
+        .iter()
+        .filter(|event| event.on == "workspace.focused")
+        .collect::<Vec<_>>();
+    let open_actions = manifest
+        .actions
+        .iter()
+        .filter(|action| action.id == "open-zed")
+        .collect::<Vec<_>>();
     let compatible = manifest.id == "zerdr"
         && manifest.min_herdr_version == "0.8.0"
-        && manifest.events.len() == 1
-        && manifest.events[0].on == "workspace.focused"
-        && manifest.events[0].command == expected_command;
+        && focus_events.len() == 1
+        && focus_events[0].command == expected_command
+        && open_actions.len() == 1
+        && open_actions[0].title == "Open Zed"
+        && open_actions[0].contexts == ["workspace"]
+        && open_actions[0].command == expected_action_command;
     if compatible {
         Ok(())
     } else {
         Err(Error::User(format!(
-            "generated Herdr manifest has the wrong event command; run `zerdr setup` ({})",
+            "generated Herdr manifest lacks the exact event or Open Zed action command; run `zerdr setup` ({})",
             path.display()
         )))
     }
@@ -360,7 +390,19 @@ fn inspect_tasks(paths: &Paths, install: &InstallState) -> Result<()> {
 struct PluginManifest {
     id: String,
     min_herdr_version: String,
+    #[serde(default)]
+    actions: Vec<PluginAction>,
+    #[serde(default)]
     events: Vec<PluginEvent>,
+}
+
+#[derive(Deserialize)]
+struct PluginAction {
+    id: String,
+    title: String,
+    #[serde(default)]
+    contexts: Vec<String>,
+    command: Vec<String>,
 }
 
 #[derive(Deserialize)]

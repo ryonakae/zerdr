@@ -4,6 +4,12 @@ version = "@VERSION@"
 min_herdr_version = "0.8.0"
 platforms = ["macos", "linux"]
 
+[[actions]]
+id = "open-zed"
+title = "Open Zed"
+contexts = ["workspace"]
+command = [@ZERDR_EXECUTABLE@, "open-from-herdr"]
+
 [[events]]
 on = "workspace.focused"
 command = [@ZERDR_EXECUTABLE@, "sync-from-herdr"]

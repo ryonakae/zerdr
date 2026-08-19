@@ -9,7 +9,7 @@ use zerdr::state::{LeaseSet, LifecycleGuard, Paths, RouteFocus, RouteStore, Rout
 
 use jsonc_parser::ParseOptions;
 use jsonc_parser::cst::CstRootNode;
-use support::TestEnv;
+use support::{TestEnv, compatible_plugins_json};
 
 const OWNED_LABELS: [&str; 5] = [
     "zerdr: Herdr",
@@ -63,10 +63,19 @@ fn wait_for_path(path: &std::path::Path) {
 }
 
 #[test]
-fn setup_is_idempotent_and_installs_exact_owned_tasks_without_keymap_changes() {
+fn setup_is_idempotent_and_installs_exact_plugin_and_tasks_without_config_changes() {
     let env = TestEnv::new();
+    let herdr_config = env.root.path().join("herdr/config.toml");
+    fs::create_dir_all(herdr_config.parent().unwrap()).unwrap();
+    fs::write(&herdr_config, "# user-owned\n").unwrap();
 
-    env.command().arg("setup").assert().success();
+    let first_output = env.command().arg("setup").assert().success();
+    let stdout = String::from_utf8_lossy(&first_output.get_output().stdout);
+    assert!(stdout.contains("prefix+z"), "{stdout}");
+    assert!(stdout.contains("plugin_action"), "{stdout}");
+    assert!(stdout.contains("zerdr.open-zed"), "{stdout}");
+    assert_eq!(fs::read_to_string(&herdr_config).unwrap(), "# user-owned\n");
+
     let tasks_path = env.root.path().join("zed/tasks.json");
     let first = fs::read_to_string(&tasks_path).unwrap();
     let root = CstRootNode::parse(&first, &ParseOptions::default()).unwrap();
@@ -82,13 +91,113 @@ fn setup_is_idempotent_and_installs_exact_owned_tasks_without_keymap_changes() {
     assert!(first.contains(r#""use_new_terminal": true"#));
     assert!(first.contains(r#""hide": "never""#));
     assert!(!env.root.path().join("zed/keymap.json").exists());
-    let manifest =
-        fs::read_to_string(env.root.path().join("data/plugin-v1/herdr-plugin.toml")).unwrap();
-    assert!(manifest.contains("workspace.focused"));
-    assert!(manifest.contains("sync-from-herdr"));
+    let manifest_path = env.root.path().join("data/plugin-v1/herdr-plugin.toml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    let parsed: toml::Value = toml::from_str(&manifest).unwrap();
+    let executable = assert_cmd::cargo::cargo_bin!("zerdr").display().to_string();
+    assert_eq!(
+        parsed["events"],
+        toml::Value::Array(vec![toml::Value::Table(toml::Table::from_iter([
+            (
+                "on".to_owned(),
+                toml::Value::String("workspace.focused".to_owned()),
+            ),
+            (
+                "command".to_owned(),
+                toml::Value::Array(vec![
+                    toml::Value::String(executable.clone()),
+                    toml::Value::String("sync-from-herdr".to_owned()),
+                ]),
+            ),
+        ]))])
+    );
+    assert_eq!(
+        parsed["actions"],
+        toml::Value::Array(vec![toml::Value::Table(toml::Table::from_iter([
+            ("id".to_owned(), toml::Value::String("open-zed".to_owned()),),
+            (
+                "title".to_owned(),
+                toml::Value::String("Open Zed".to_owned()),
+            ),
+            (
+                "contexts".to_owned(),
+                toml::Value::Array(vec![toml::Value::String("workspace".to_owned())]),
+            ),
+            (
+                "command".to_owned(),
+                toml::Value::Array(vec![
+                    toml::Value::String(executable),
+                    toml::Value::String("open-from-herdr".to_owned()),
+                ]),
+            ),
+        ]))])
+    );
 
-    env.command().arg("setup").assert().success();
+    let second_output = env.command().arg("setup").assert().success();
     assert_eq!(fs::read_to_string(tasks_path).unwrap(), first);
+    assert_eq!(fs::read_to_string(manifest_path).unwrap(), manifest);
+    assert_eq!(
+        second_output.get_output().stdout,
+        first_output.get_output().stdout
+    );
+    assert_eq!(fs::read_to_string(herdr_config).unwrap(), "# user-owned\n");
+}
+
+#[test]
+fn setup_upgrades_event_only_and_malformed_action_manifests() {
+    for action in [
+        "",
+        r#"
+[[actions]]
+id = "open-zed"
+title = "Wrong"
+contexts = ["global"]
+command = ["wrong", "command"]
+"#,
+    ] {
+        let env = TestEnv::new();
+        env.command().arg("setup").assert().success();
+        let paths = Paths::for_test(env.root.path());
+        let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
+        let executable = assert_cmd::cargo::cargo_bin!("zerdr").display().to_string();
+        let old_manifest = format!(
+            r#"id = "zerdr"
+name = "zerdr"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+platforms = ["macos", "linux"]
+
+[[events]]
+on = "workspace.focused"
+command = [{executable:?}, "sync-from-herdr"]
+{action}"#
+        );
+        fs::write(&manifest_path, old_manifest).unwrap();
+        let tasks_before = fs::read(&paths.zed_tasks_file).unwrap();
+        let install_before = fs::read(&paths.install_state_file).unwrap();
+
+        env.command().arg("setup").assert().success();
+
+        let upgraded: toml::Value =
+            toml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        let actions = upgraded["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0]["id"].as_str(), Some("open-zed"));
+        assert_eq!(actions[0]["title"].as_str(), Some("Open Zed"));
+        assert_eq!(
+            actions[0]["contexts"].as_array().unwrap(),
+            &[toml::Value::String("workspace".to_owned())]
+        );
+        assert_eq!(
+            actions[0]["command"].as_array().unwrap(),
+            &[
+                toml::Value::String(executable),
+                toml::Value::String("open-from-herdr".to_owned()),
+            ]
+        );
+        assert_eq!(fs::read(&paths.zed_tasks_file).unwrap(), tasks_before);
+        assert_eq!(fs::read(&paths.install_state_file).unwrap(), install_before);
+    }
 }
 
 #[test]
@@ -251,6 +360,33 @@ fn failed_setup_update_restores_previous_tasks_manifest_and_ownership_state() {
 }
 
 #[test]
+fn failed_plugin_link_restores_the_action_manifest_tasks_and_ownership_state() {
+    let env = TestEnv::new();
+    env.command().arg("setup").assert().success();
+    let paths = Paths::for_test(env.root.path());
+    let tasks_before = fs::read(&paths.zed_tasks_file).unwrap();
+    let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
+    let manifest_before = fs::read(&manifest_path).unwrap();
+    assert!(String::from_utf8_lossy(&manifest_before).contains("open-from-herdr"));
+    let state_before = fs::read(&paths.install_state_file).unwrap();
+
+    env.command()
+        .arg("setup")
+        .env(
+            "ZERDR_SETUP_EXECUTABLE",
+            env.root.path().join("different/zerdr"),
+        )
+        .env("ZERDR_TEST_PLUGIN_LINK_FAIL", "1")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("fake plugin link failure"));
+
+    assert_eq!(fs::read(&paths.zed_tasks_file).unwrap(), tasks_before);
+    assert_eq!(fs::read(manifest_path).unwrap(), manifest_before);
+    assert_eq!(fs::read(&paths.install_state_file).unwrap(), state_before);
+}
+
+#[test]
 fn purge_refuses_to_change_installation_while_a_live_lease_exists() {
     let env = TestEnv::new();
     env.command().arg("setup").assert().success();
@@ -301,12 +437,7 @@ fn doctor_waits_for_admission_and_preserves_the_new_live_route() {
         "sessions":[{"name":"zerdr","running":true,"socket_path":socket}]
     });
     let workspaces = serde_json::json!({"result":{"workspaces":[]}});
-    let plugins = serde_json::json!({
-        "result":{"plugins":[{
-            "plugin_id":"zerdr","enabled":true,
-            "events":[{"on":"workspace.focused"}]
-        }]}
-    });
+    let plugins = compatible_plugins_json();
     let marker = env.root.path().join("admission-locked");
     let proceed = env.root.path().join("admission-continue");
     let mut wrapper_command = env.std_command();
@@ -382,12 +513,7 @@ fn purge_rechecks_live_leases_after_waiting_for_wrapper_admission() {
 fn doctor_passes_installed_capabilities_and_prints_resolved_paths() {
     let env = TestEnv::new();
     env.command().arg("setup").assert().success();
-    let plugins = serde_json::json!({
-        "result":{"plugins":[{
-            "plugin_id":"zerdr","enabled":true,
-            "events":[{"on":"workspace.focused"}]
-        }]}
-    });
+    let plugins = compatible_plugins_json();
 
     env.command()
         .arg("doctor")
@@ -398,6 +524,344 @@ fn doctor_passes_installed_capabilities_and_prints_resolved_paths() {
             "PASS Zed supports --existing and --add",
         ))
         .stdout(predicates::str::contains("state directory"));
+}
+
+#[test]
+fn doctor_requires_the_exact_action_and_recommends_setup() {
+    let env = TestEnv::new();
+    env.command().arg("setup").assert().success();
+    let paths = Paths::for_test(env.root.path());
+    let executable = assert_cmd::cargo::cargo_bin!("zerdr").display().to_string();
+    fs::write(
+        paths.plugin_dir.join("herdr-plugin.toml"),
+        format!(
+            r#"id = "zerdr"
+name = "zerdr"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+platforms = ["macos", "linux"]
+
+[[events]]
+on = "workspace.focused"
+command = [{executable:?}, "sync-from-herdr"]
+"#
+        ),
+    )
+    .unwrap();
+    let event_only = serde_json::json!({
+        "result":{"plugins":[{
+            "plugin_id":"zerdr",
+            "enabled":true,
+            "events":[{
+                "on":"workspace.focused",
+                "command":[executable, "sync-from-herdr"]
+            }]
+        }]}
+    });
+
+    env.command()
+        .arg("doctor")
+        .env("ZERDR_TEST_PLUGINS_JSON", event_only.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains("Open Zed action"))
+        .stdout(predicates::str::contains("run `zerdr setup`"));
+    let stdout = String::from_utf8_lossy(
+        &env.command()
+            .arg("doctor")
+            .env("ZERDR_TEST_PLUGINS_JSON", event_only.to_string())
+            .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .into_owned();
+    assert!(
+        !stdout.contains("PASS one-shot Open Zed is available"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn doctor_rejects_duplicate_zerdr_action_or_event_identities() {
+    for duplicate in ["action", "event"] {
+        let env = TestEnv::new();
+        env.command().arg("setup").assert().success();
+        let mut plugins = compatible_plugins_json();
+        let plugin = &mut plugins["result"]["plugins"][0];
+        if duplicate == "action" {
+            plugin["actions"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "id":"open-zed",
+                    "title":"Wrong",
+                    "contexts":["global"],
+                    "command":["wrong","command"]
+                }));
+        } else {
+            plugin["events"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "on":"workspace.focused",
+                    "command":["wrong","command"]
+                }));
+        }
+
+        env.command()
+            .arg("doctor")
+            .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
+            .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
+            .assert()
+            .failure()
+            .stdout(predicates::str::contains("Open Zed action"));
+    }
+}
+
+#[test]
+fn doctor_rejects_duplicate_action_or_event_identities_in_the_materialized_manifest() {
+    for duplicate in ["action", "event"] {
+        let env = TestEnv::new();
+        env.command().arg("setup").assert().success();
+        let paths = Paths::for_test(env.root.path());
+        let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
+        let mut manifest = fs::read_to_string(&manifest_path).unwrap();
+        if duplicate == "action" {
+            manifest.push_str(
+                r#"
+[[actions]]
+id = "open-zed"
+title = "Wrong"
+contexts = ["global"]
+command = ["wrong", "command"]
+"#,
+            );
+        } else {
+            manifest.push_str(
+                r#"
+[[events]]
+on = "workspace.focused"
+command = ["wrong", "command"]
+"#,
+            );
+        }
+        fs::write(&manifest_path, manifest).unwrap();
+
+        env.command()
+            .arg("doctor")
+            .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
+            .assert()
+            .failure()
+            .stdout(predicates::str::contains(
+                "generated Herdr manifest lacks the exact event or Open Zed action command",
+            ));
+    }
+}
+
+#[test]
+fn doctor_matches_plugin_actions_and_events_semantically_without_order_dependence() {
+    let env = TestEnv::new();
+    env.command().arg("setup").assert().success();
+    let paths = Paths::for_test(env.root.path());
+    let executable = assert_cmd::cargo::cargo_bin!("zerdr").display().to_string();
+    fs::write(
+        paths.plugin_dir.join("herdr-plugin.toml"),
+        format!(
+            r#"id = "zerdr"
+name = "zerdr"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "unrelated"
+title = "Unrelated"
+contexts = ["global"]
+command = ["other"]
+
+[[actions]]
+id = "open-zed"
+title = "Open Zed"
+contexts = ["workspace"]
+command = [{executable:?}, "open-from-herdr"]
+
+[[events]]
+on = "other.event"
+command = ["other"]
+
+[[events]]
+on = "workspace.focused"
+command = [{executable:?}, "sync-from-herdr"]
+"#
+        ),
+    )
+    .unwrap();
+    let plugins = serde_json::json!({
+        "result":{"plugins":[
+            {"plugin_id":"unrelated","enabled":false,"actions":[],"events":[]},
+            {
+                "plugin_id":"zerdr",
+                "enabled":true,
+                "actions":[
+                    {"id":"unrelated","title":"Unrelated","contexts":["global"],"command":["other"]},
+                    {"id":"open-zed","title":"Open Zed","contexts":["workspace"],"command":[executable.clone(),"open-from-herdr"]}
+                ],
+                "events":[
+                    {"on":"other.event","command":["other"]},
+                    {"on":"workspace.focused","command":[executable,"sync-from-herdr"]}
+                ]
+            }
+        ]}
+    });
+
+    env.command()
+        .arg("doctor")
+        .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "PASS Herdr zerdr Open Zed action is registered",
+        ));
+}
+
+#[test]
+fn doctor_rejects_each_malformed_or_disabled_action_installation() {
+    for mutation in [
+        "id",
+        "title",
+        "contexts",
+        "command",
+        "executable",
+        "disabled",
+    ] {
+        let env = TestEnv::new();
+        env.command().arg("setup").assert().success();
+        let mut plugins = compatible_plugins_json();
+        let plugin = &mut plugins["result"]["plugins"][0];
+        match mutation {
+            "id" => plugin["actions"][0]["id"] = "wrong".into(),
+            "title" => plugin["actions"][0]["title"] = "Wrong".into(),
+            "contexts" => plugin["actions"][0]["contexts"] = serde_json::json!(["global"]),
+            "command" => {
+                plugin["actions"][0]["command"][1] = "wrong-command".into();
+            }
+            "executable" => plugin["actions"][0]["command"][0] = "wrong-executable".into(),
+            "disabled" => plugin["enabled"] = false.into(),
+            _ => unreachable!(),
+        }
+
+        env.command()
+            .arg("doctor")
+            .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
+            .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
+            .assert()
+            .failure()
+            .stdout(predicates::str::contains("Open Zed action"))
+            .stdout(predicates::str::contains("run `zerdr setup`"));
+    }
+}
+
+#[test]
+fn doctor_treats_absent_session_or_wrapper_as_healthy_plugin_only_state() {
+    for has_session in [false, true] {
+        let env = TestEnv::new();
+        env.command().arg("setup").assert().success();
+        let socket = env.root.path().join("herdr.sock");
+        let sessions = if has_session {
+            fs::write(&socket, "").unwrap();
+            serde_json::json!({
+                "sessions":[{
+                    "name":"zerdr",
+                    "running":true,
+                    "socket_path":socket
+                }]
+            })
+        } else {
+            serde_json::json!({"sessions":[]})
+        };
+
+        let assert = env
+            .command()
+            .arg("doctor")
+            .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+            .assert()
+            .success()
+            .stdout(predicates::str::contains(
+                "PASS one-shot Open Zed is available",
+            ));
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+        assert!(!stdout.contains("run bare `zerdr`"), "{stdout}");
+    }
+}
+
+#[test]
+fn doctor_validates_every_session_binding_and_preserves_legacy_bytes() {
+    let env = TestEnv::new();
+    env.command().arg("setup").assert().success();
+    let paths = Paths::for_test(env.root.path());
+    let repo = env.root.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    assert!(
+        ProcessCommand::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let repo = repo.canonicalize().unwrap();
+    fs::create_dir_all(paths.bindings_file.parent().unwrap()).unwrap();
+    fs::write(
+        &paths.bindings_file,
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version":2,
+            "sessions":{
+                "zerdr":{"shared":repo},
+                "default":{"shared":env.root.path().join("missing")}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    env.command()
+        .arg("doctor")
+        .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains("binding default/shared"));
+
+    let legacy = serde_json::to_vec(&serde_json::json!({
+        "schema_version":1,
+        "session_name":"zerdr",
+        "bindings":{"legacy":repo}
+    }))
+    .unwrap();
+    fs::write(&paths.bindings_file, &legacy).unwrap();
+    env.command()
+        .arg("doctor")
+        .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
+        .assert()
+        .success();
+    assert_eq!(fs::read(paths.bindings_file).unwrap(), legacy);
+}
+
+#[test]
+fn doctor_rejects_corrupt_session_discovery_without_live_authority() {
+    let env = TestEnv::new();
+    env.command().arg("setup").assert().success();
+
+    env.command()
+        .arg("doctor")
+        .env("ZERDR_TEST_SESSIONS_JSON", r#"{"unexpected":[]}"#)
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains(
+            "FAIL could not inspect the zerdr Herdr session",
+        ));
 }
 
 #[test]
@@ -427,12 +891,7 @@ fn doctor_validates_the_live_wrapper_route_and_anchor() {
     let sessions = serde_json::json!({
         "sessions":[{"name":"zerdr","running":true,"socket_path":socket}]
     });
-    let plugins = serde_json::json!({
-        "result":{"plugins":[{
-            "plugin_id":"zerdr","enabled":true,
-            "events":[{"on":"workspace.focused"}]
-        }]}
-    });
+    let plugins = compatible_plugins_json();
 
     env.command()
         .arg("doctor")
@@ -505,12 +964,7 @@ fn doctor_rejects_live_lease_state_when_session_discovery_fails() {
     let _lease = LeaseSet::new(paths.leases_dir)
         .acquire(&socket, 99)
         .unwrap();
-    let plugins = serde_json::json!({
-        "result":{"plugins":[{
-            "plugin_id":"zerdr","enabled":true,
-            "events":[{"on":"workspace.focused"}]
-        }]}
-    });
+    let plugins = compatible_plugins_json();
 
     env.command()
         .arg("doctor")
@@ -557,12 +1011,7 @@ fn doctor_removes_a_stale_route_while_preserving_another_live_scope() {
     let sessions = serde_json::json!({
         "sessions":[{"name":"zerdr","running":true,"socket_path":live_socket}]
     });
-    let plugins = serde_json::json!({
-        "result":{"plugins":[{
-            "plugin_id":"zerdr","enabled":true,
-            "events":[{"on":"workspace.focused"}]
-        }]}
-    });
+    let plugins = compatible_plugins_json();
 
     env.command()
         .arg("doctor")
@@ -602,12 +1051,7 @@ fn doctor_rejects_multiple_live_wrappers() {
     let sessions = serde_json::json!({
         "sessions":[{"name":"zerdr","running":true,"socket_path":socket}]
     });
-    let plugins = serde_json::json!({
-        "result":{"plugins":[{
-            "plugin_id":"zerdr","enabled":true,
-            "events":[{"on":"workspace.focused"}]
-        }]}
-    });
+    let plugins = compatible_plugins_json();
 
     env.command()
         .arg("doctor")
@@ -633,12 +1077,7 @@ fn doctor_rejects_a_live_wrapper_without_route_state() {
     let sessions = serde_json::json!({
         "sessions":[{"name":"zerdr","running":true,"socket_path":socket}]
     });
-    let plugins = serde_json::json!({
-        "result":{"plugins":[{
-            "plugin_id":"zerdr","enabled":true,
-            "events":[{"on":"workspace.focused"}]
-        }]}
-    });
+    let plugins = compatible_plugins_json();
 
     env.command()
         .arg("doctor")
@@ -692,12 +1131,7 @@ fn doctor_reports_and_removes_stale_lease_files() {
         .path();
     fs::copy(live_path, scope.join("stale.json")).unwrap();
     drop(lease);
-    let plugins = serde_json::json!({
-        "result":{"plugins":[{
-            "plugin_id":"zerdr","enabled":true,
-            "events":[{"on":"workspace.focused"}]
-        }]}
-    });
+    let plugins = compatible_plugins_json();
 
     env.command()
         .arg("doctor")
@@ -724,12 +1158,7 @@ fn doctor_rejects_a_modified_owned_task_payload() {
         installed.replacen(r#""args": ["sync"]"#, r#""args": ["unexpected"]"#, 1),
     )
     .unwrap();
-    let plugins = serde_json::json!({
-        "result":{"plugins":[{
-            "plugin_id":"zerdr","enabled":true,
-            "events":[{"on":"workspace.focused"}]
-        }]}
-    });
+    let plugins = compatible_plugins_json();
 
     env.command()
         .arg("doctor")

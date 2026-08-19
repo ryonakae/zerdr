@@ -34,6 +34,103 @@ fn launcher_requires_a_compatible_plugin_before_spawning_herdr() {
 }
 
 #[test]
+fn launcher_accepts_an_event_only_pre_action_installation() {
+    let env = TestEnv::new();
+    env.prepare_launcher();
+    let paths = Paths::for_test(env.root.path());
+    let executable = assert_cmd::cargo::cargo_bin!("zerdr").display().to_string();
+    fs::write(
+        paths.plugin_dir.join("herdr-plugin.toml"),
+        format!(
+            r#"id = "zerdr"
+name = "zerdr"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+platforms = ["macos", "linux"]
+
+[[events]]
+on = "workspace.focused"
+command = [{executable:?}, "sync-from-herdr"]
+"#
+        ),
+    )
+    .unwrap();
+    let plugins = serde_json::json!({
+        "result":{"plugins":[{
+            "plugin_id":"zerdr",
+            "enabled":true,
+            "events":[{
+                "on":"workspace.focused",
+                "command":[executable,"sync-from-herdr"]
+            }]
+        }]}
+    });
+    let socket = env.root.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let sessions = serde_json::json!({
+        "sessions":[{"name":"zerdr","running":true,"socket_path":socket}]
+    });
+
+    env.command()
+        .args(["--mode", "external"])
+        .env("ZERDR_TEST_PLATFORM", "linux")
+        .env("ZERDR_TEST_HERDR_SLEEP", "0.1")
+        .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .env(
+            "ZERDR_TEST_WORKSPACES_JSON",
+            r#"{"result":{"workspaces":[]}}"#,
+        )
+        .assert()
+        .success();
+
+    assert!(env.read_log().contains("herdr\t--session zerdr"));
+}
+
+#[test]
+fn launcher_rejects_duplicate_focus_event_identities_in_manifest_or_plugin_registry() {
+    for source in ["manifest", "registry"] {
+        let env = TestEnv::new();
+        env.prepare_launcher();
+        let paths = Paths::for_test(env.root.path());
+        let mut invocation = env.command();
+        invocation.args(["--mode", "external"]);
+
+        if source == "manifest" {
+            let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
+            let mut manifest = fs::read_to_string(&manifest_path).unwrap();
+            manifest.push_str(
+                r#"
+[[events]]
+on = "workspace.focused"
+command = ["wrong", "sync-from-herdr"]
+"#,
+            );
+            fs::write(manifest_path, manifest).unwrap();
+        } else {
+            let mut plugins = serde_json::from_str::<serde_json::Value>(
+                &support::compatible_plugins_json().to_string(),
+            )
+            .unwrap();
+            plugins["result"]["plugins"][0]["events"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "on":"workspace.focused",
+                    "command":["wrong","sync-from-herdr"]
+                }));
+            invocation.env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string());
+        }
+
+        invocation
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains("run `zerdr setup`"));
+        assert!(!env.read_log().contains("herdr\t--session zerdr"));
+    }
+}
+
+#[test]
 fn launcher_preflight_rejects_unsupported_install_state_and_manifest() {
     let invalid_install = TestEnv::new();
     invalid_install.prepare_launcher();
