@@ -261,7 +261,7 @@ resolve local environment + concrete mode + anchor/focus
 - Current local macOS gates: format, Clippy with warnings denied, all 86 unit/integration tests, metadata, package listing, `actionlint`, and `git diff --check` passed.
 - Startup-route hosted run [32206634772](https://github.com/ryonakae/zerdr/actions/runs/32206634772) passed on `macos-latest` and `ubuntu-latest` for `76cda7b`.
 - Independent review found no blocking issue after the picker authority race fix and reported **Ready to merge: Yes**.
-- Pre-revision Ghostty dogfooding confirmed later external focus events activate the matching Zed project. macOS did not return foreground focus to Ghostty; the accepted best-effort fallback left Zed foreground. The newly agreed initial external startup route has not yet been exercised against real Zed/Herdr/Ghostty, so Task 6 and plan archival remain incomplete.
+- Ghostty dogfooding confirmed both the initial external startup route and later focus events activate the matching Zed project as designed. macOS did not return foreground focus to Ghostty; the accepted best-effort fallback left Zed foreground. Broader Task 6 cases remain deferred, so the plan is not archived.
 - No tag, GitHub Release, or Homebrew tap mutation occurred.
 
 Implementation-time minor file changes or internal differences must be reflected in the relevant task. Ask the user before changing requirements, Out of Scope, public contracts, persisted schemas, or task labels.
