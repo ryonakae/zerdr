@@ -257,9 +257,9 @@ resolve local environment + concrete mode + anchor/focus
 
 ### Validation record (2026-08-19)
 
-- Commits `dba4158`, `0a80943`, and `635bf30` implement Tasks 1-5 plus the independent-review authority/preflight fixes. The current revision adds the dogfood-driven initial external startup route.
+- Commits `dba4158`, `0a80943`, and `635bf30` implement Tasks 1-5 plus the independent-review authority/preflight fixes. Commit `76cda7b` adds the dogfood-driven initial external startup route.
 - Current local macOS gates: format, Clippy with warnings denied, all 86 unit/integration tests, metadata, package listing, `actionlint`, and `git diff --check` passed.
-- Post-fix hosted run [32169005159](https://github.com/ryonakae/zerdr/actions/runs/32169005159) passed on `macos-latest` and `ubuntu-latest` for `c9900b8`, which contains code commit `635bf30`.
+- Startup-route hosted run [32206634772](https://github.com/ryonakae/zerdr/actions/runs/32206634772) passed on `macos-latest` and `ubuntu-latest` for `76cda7b`.
 - Independent review found no blocking issue after the picker authority race fix and reported **Ready to merge: Yes**.
 - Pre-revision Ghostty dogfooding confirmed later external focus events activate the matching Zed project. macOS did not return foreground focus to Ghostty; the accepted best-effort fallback left Zed foreground. The newly agreed initial external startup route has not yet been exercised against real Zed/Herdr/Ghostty, so Task 6 and plan archival remain incomplete.
 - No tag, GitHub Release, or Homebrew tap mutation occurred.
@@ -596,7 +596,7 @@ Implementation-time minor file changes or internal differences must be reflected
 - [x] `cargo metadata --no-deps --format-version 1 >/dev/null && cargo package --allow-dirty --no-verify --list >/dev/null` — Passed: target-specific dependency metadata and package contents.
 - [x] `actionlint .github/workflows/*.yml && git diff --check` — Passed: workflows and changed files.
 - [ ] Real macOS internal/external E2E checklist — Expected: every applicable Task 6 observation is recorded with exact versions.
-- [ ] Hosted macOS/Linux CI — Run 32169005159 passed the prior post-review revision; the initial external startup route requires a fresh run.
+- [x] Hosted macOS/Linux CI — Run 32206634772 passed both test jobs with the initial external startup route.
 - [x] Original MVP plan points to this revision; historical conflicting contracts are marked superseded.
 - [x] Requirement Coverage has no unmapped requirement or decision.
 - [x] The plan and actual changed-file set agree, including `objc2-app-kit` plus its transitive lockfile entries and the test support seams.
