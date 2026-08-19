@@ -312,13 +312,11 @@ pub fn run_wrapper(routing: RouteStrategy) -> Result<()> {
     let _lease = leases.acquire(&socket, child.id())?;
     drop(admission);
     drop(lifecycle);
-    if matches!(routing, RouteStrategy::Internal { .. }) {
-        let synchronizer = Synchronizer::from_env()?;
-        if let Err(error) = synchronizer.sync_socket(&socket) {
-            let message = format!("startup synchronization failed: {error}");
-            let _ = herdr.notify_error(&message);
-            eprintln!("zerdr: {message}");
-        }
+    let synchronizer = Synchronizer::from_env()?;
+    if let Err(error) = synchronizer.sync_socket(&socket) {
+        let message = format!("startup synchronization failed: {error}");
+        let _ = herdr.notify_error(&message);
+        eprintln!("zerdr: {message}");
     }
 
     let status = child

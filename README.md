@@ -24,7 +24,7 @@ zerdr
 zerdr selects a routing mode from the terminal environment:
 
 - A Zed integrated terminal uses **internal mode**. The current Git checkout anchors one managed Zed window. Workspace changes run `zed --existing ANCHOR`, then `zed --add TARGET`.
-- Ghostty, iTerm, and other local terminals use **external mode**. Each workspace focus event runs `zed --existing TARGET`.
+- Ghostty, iTerm, and other local terminals use **external mode**. Startup and each later workspace focus event run `zed --existing TARGET` for the focused workspace.
 
 `zerdr setup` installs the Herdr focus hook and five optional global Zed tasks. Run setup again after replacing or moving the zerdr executable.
 
@@ -65,7 +65,7 @@ zerdr --mode internal --anchor "$ZED_WORKTREE_ROOT"
 
 ### External mode
 
-External mode performs no Zed command at startup. A later `workspace.focused` event or `zerdr sync` runs one `zed --existing TARGET` request.
+After route and lease admission, external mode runs one `zed --existing TARGET` request for the initially focused workspace. Each later `workspace.focused` event or `zerdr sync` repeats that direct route.
 
 Zed focuses an existing window that already contains the target project. For an unopened project, Zed may add the checkout to an eligible multi-project window instead of opening a new window. Its public CLI does not offer “reuse if open, otherwise force a new window.”
 

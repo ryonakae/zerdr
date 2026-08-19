@@ -168,29 +168,60 @@ fn auto_mode_selects_internal_in_zed_and_external_elsewhere() {
 }
 
 #[test]
-fn external_wrapper_establishes_authority_without_startup_zed_sync() {
+fn external_wrapper_syncs_the_initial_workspace_without_requiring_the_zed_task() {
     let env = TestEnv::new();
     env.prepare_launcher();
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
     let paths = Paths::for_test(env.root.path());
     fs::remove_file(&paths.zed_tasks_file).unwrap();
+    let repo = env.root.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    assert!(
+        ProcessCommand::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let repo = repo.canonicalize().unwrap();
+    BindingStore::new(paths.bindings_file.clone())
+        .bind("w1", &repo)
+        .unwrap();
     let sessions = serde_json::json!({
         "sessions": [{"name":"zerdr","running":true,"socket_path":socket}]
     });
+    let workspaces = serde_json::json!({"result":{"workspaces":[{
+        "workspace_id":"w1","label":"repo","focused":true,
+        "worktree":{"checkout_path":repo}
+    }]}});
 
     env.command()
         .args(["--mode", "external"])
         .env("ZERDR_TEST_PLATFORM", "macos")
         .env("ZERDR_TEST_HERDR_SLEEP", "0.2")
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
+        .env("ZERDR_TEST_FOCUS_BACKEND", "1")
+        .env("ZERDR_TEST_FRONTMOST_BEFORE", "com.mitchellh.ghostty")
+        .env("ZERDR_TEST_FRONTMOST_AFTER", "dev.zed.Zed")
         .assert()
         .success();
 
     let log = env.read_log();
     assert!(log.contains("herdr\t--session zerdr"), "{log}");
-    assert!(!log.contains("workspace list"), "{log}");
-    assert!(!log.contains("zed\t"), "{log}");
+    assert!(log.contains("workspace list"), "{log}");
+    assert_eq!(log.matches("zed\t--existing").count(), 1, "{log}");
+    assert!(
+        log.contains(&format!("zed\t--existing {}", repo.display())),
+        "{log}"
+    );
+    assert!(!log.contains("zed\t--add"), "{log}");
+    assert!(
+        log.contains("focus\tactivate com.mitchellh.ghostty"),
+        "{log}"
+    );
     assert_eq!(
         RouteStore::new(paths.routes_dir)
             .load(&socket)
@@ -349,6 +380,51 @@ fn concurrent_wrappers_admit_one_owner_and_reap_the_loser() {
     let _ = winner.wait().unwrap();
     wait_for_lease_count(&paths, 0);
     assert!(!LeaseSet::new(paths.leases_dir).has_live(&socket).unwrap());
+}
+
+#[test]
+fn external_startup_sync_failure_notifies_without_terminating_the_client() {
+    let env = TestEnv::new();
+    env.prepare_launcher();
+    let socket = env.root.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let target = env.root.path().join("target");
+    fs::create_dir_all(&target).unwrap();
+    assert!(
+        ProcessCommand::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&target)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let target = target.canonicalize().unwrap();
+    BindingStore::new(paths.bindings_file)
+        .bind("w1", &target)
+        .unwrap();
+    let sessions = serde_json::json!({
+        "sessions": [{"name":"zerdr","running":true,"socket_path":socket}]
+    });
+    let workspaces = serde_json::json!({"result":{"workspaces":[{
+        "workspace_id":"w1","label":"target","focused":true,
+        "worktree":{"checkout_path":target}
+    }]}});
+
+    env.command()
+        .args(["--mode", "external", "--focus", "zed"])
+        .env("ZERDR_TEST_PLATFORM", "macos")
+        .env("ZERDR_TEST_HERDR_SLEEP", "0.2")
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
+        .env("ZERDR_TEST_ZED_FAIL", "1")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("startup synchronization failed"));
+
+    let log = env.read_log();
+    assert_eq!(log.matches("zed\t--existing").count(), 1, "{log}");
+    assert_eq!(log.matches("notification show").count(), 1, "{log}");
 }
 
 #[test]

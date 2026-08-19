@@ -13,7 +13,7 @@ The desired primary interface is now bare `zerdr`. It must detect whether it run
 Deliver one automatic launcher with two explicit, lease-authorized routing modes:
 
 - **internal:** launch Herdr from a local Zed terminal, use the current Git checkout as the bootstrap anchor, and preserve the existing anchored `--existing` → `--add` pipeline;
-- **external:** launch Herdr from a supported local non-Zed terminal, perform no startup Zed sync, and run `zed --existing TARGET` for each later focused workspace.
+- **external:** launch Herdr from a supported local non-Zed terminal, run `zed --existing TARGET` once for the initially focused workspace, and repeat that direct route for each later focus event.
 
 The implementation must preserve the fixed `zerdr` Herdr session, one-live-wrapper invariant, canonical Git-root identity, binding behavior, setup ownership rules, failure notifications, and distribution gates.
 
@@ -44,7 +44,7 @@ The implementation must preserve the fixed `zerdr` Herdr session, one-live-wrapp
 - **R4 — Internal precondition:** An automatically derived or explicit internal anchor is assumed to belong to the intended Zed window. zerdr documents that it cannot verify this through the public Zed API.
 - **R5 — External focus policy:** `--focus terminal|zed` applies only to external routing. On macOS, omitted focus defaults to `terminal`; on Linux it defaults to `zed`, and explicit `terminal` is rejected as unsupported before child spawn.
 - **R6 — External sync:** External focus handling resolves only the focused canonical Git root and invokes exactly `zed --existing TARGET`. It performs no `--add`, anchor promotion, or all-workspace ensure pass.
-- **R7 — Startup behavior:** Internal mode retains startup sync. External mode establishes route authority and shows Herdr without invoking Zed until a later `workspace.focused` event or explicit manual sync.
+- **R7 — Startup behavior:** After route and lease authority are established, both modes nonfatally synchronize the initially focused workspace through the same authenticated mode-specific pipeline used by later events. Internal startup runs `--existing ANCHOR` then `--add TARGET`; external startup runs exactly one `--existing TARGET` with its resolved focus policy. Failure notifies but does not terminate the admitted Herdr UI or release authority.
 - **R8 — Event semantics:** Eligible focus events are not deduplicated. Each event rereads current Herdr focus under the socket lock and performs the mode-specific route. If Herdr emits no event for an already-focused workspace, `zerdr sync` is the explicit retry/refocus operation.
 - **R9 — Best-effort macOS restoration:** With external `--focus terminal`, zerdr records the frontmost application immediately before invoking Zed. After Zed returns, it restores that application only if the application observed by the post-command check is Zed. If that check observes another non-Zed application, no restoration occurs. A user switch in the unavoidable interval after the check and before activation can still be overridden. Restoration failure is silent and never changes Zed sync success/failure.
 - **R10 — Platform boundary:** External synchronization remains available on macOS and Linux. Only macOS implements terminal focus restoration. Remote detection is authoritative and cannot be overridden: SSH is detected by nonempty `SSH_CONNECTION`, `SSH_CLIENT`, or `SSH_TTY`; WSL by nonempty `WSL_DISTRO_NAME` or `WSL_INTEROP`; container/dev-container by nonempty `container`, `REMOTE_CONTAINERS`, `DEVCONTAINER`, or `CODESPACES`, or by `/.dockerenv` or `/run/.containerenv`. Detection collects every matching marker and reports them in this fixed order: `SSH_CONNECTION`, `SSH_CLIENT`, `SSH_TTY`, `WSL_DISTRO_NAME`, `WSL_INTEROP`, `container`, `REMOTE_CONTAINERS`, `DEVCONTAINER`, `CODESPACES`, `/.dockerenv`, `/run/.containerenv`. Detected remote environments reject all commands that launch, mutate, or synchronize. `--help` and `--version` remain available. `doctor` performs static read-only installation inspection, reports all detected markers in that order, and skips Herdr/Zed process calls, locks, lease/route cleanup, and every other state mutation.
@@ -60,7 +60,7 @@ The implementation must preserve the fixed `zerdr` Herdr session, one-live-wrapp
 - **D1 — Wrapper-scoped authority:** Keep the current child-owned wrapper and locked lease instead of adopting an always-on plugin daemon. Routing occurs only while bare zerdr owns the session.
 - **D2 — Persist resolved strategy:** Resolve `auto`, platform defaults, anchor, and focus policy before child spawn; persist only a concrete internal or external strategy in socket-scoped route state.
 - **D3 — Direct external routing:** Reuse the existing `Zed::activate_existing` process boundary. The accepted fallback is that an unopened project may be added to an eligible existing multi-project window instead of receiving a new window.
-- **D4 — No external startup focus:** External launch intentionally does not call Zed because doing so would immediately take focus away from the newly opened Herdr terminal.
+- **D4 — Initial external route:** External launch synchronizes the initially focused workspace after admission. Dogfooding showed that presenting the matching Zed project at startup is clearer than waiting for the first later focus event. Terminal restoration remains best-effort, so Zed may remain foreground when macOS does not honor reactivation.
 - **D5 — AppKit, not Accessibility:** macOS focus restoration uses public frontmost/running-application APIs through a target-specific Rust boundary. It does not identify individual Zed windows; Zed CLI selects and orders the target window first.
 - **D6 — Best-effort race guard:** Restore the captured application only when the post-command frontmost application is recognized as Zed. This avoids pulling the user back when a non-Zed app is already visible at the check, but it cannot make the check and activation atomic; a later user switch may still be overridden.
 - **D7 — Separate route schema version:** Keep binding and lease schemas at their current version. Introduce a route-specific schema version so evolving routing metadata does not invalidate unrelated persisted state.
@@ -186,8 +186,7 @@ resolve local environment + concrete mode + anchor/focus
        reject any live wrapper
        write concrete route
        acquire one lease
-  -> internal: nonfatal startup sync
-     external: no startup Zed call
+  -> nonfatal startup sync through the persisted internal/external strategy
   -> wait for Herdr child; route may remain stale after lease removal
 ```
 
@@ -219,7 +218,7 @@ resolve local environment + concrete mode + anchor/focus
 - Modify: `src/runtime.rs` — resolve terminal mode, remote/container rejection, CWD/anchor rules, platform focus defaults, and launch-only option validation.
 - Create: `src/focus.rs` — platform boundary for capture/conditional restore with macOS implementation and non-macOS contract.
 - Modify: `src/state.rs` — route-specific schema version, tagged internal/external route strategy, v1 read compatibility, validation, and internal-only promotion.
-- Modify: `src/herdr.rs` — accept a resolved route strategy, plugin preflight, mode-neutral admission, internal-only startup sync, and mode-aware conflict errors.
+- Modify: `src/herdr.rs` — accept a resolved route strategy, plugin preflight, mode-neutral admission, authenticated mode-specific startup sync, and mode-aware conflict errors.
 - Modify: `src/sync.rs` — branch internal/external routing after authority/root validation and permit manual commands from any supported local terminal.
 - Modify: `src/zed.rs` — surround external `--existing` calls with the focus-restoration boundary while preserving process error semantics.
 - Modify: `src/setup.rs` — migrate the owned Herdr task payload and expose/reuse compatible-plugin validation for launcher preflight.
@@ -258,11 +257,11 @@ resolve local environment + concrete mode + anchor/focus
 
 ### Validation record (2026-08-19)
 
-- Commits `dba4158`, `0a80943`, and `635bf30` implement Tasks 1-5 plus the independent-review authority/preflight fixes.
-- Local macOS gates at `635bf30`: format, Clippy with warnings denied, all 85 unit/integration tests, metadata, package listing, `actionlint`, and `git diff --check` passed.
+- Commits `dba4158`, `0a80943`, and `635bf30` implement Tasks 1-5 plus the independent-review authority/preflight fixes. The current revision adds the dogfood-driven initial external startup route.
+- Current local macOS gates: format, Clippy with warnings denied, all 86 unit/integration tests, metadata, package listing, `actionlint`, and `git diff --check` passed.
 - Post-fix hosted run [32169005159](https://github.com/ryonakae/zerdr/actions/runs/32169005159) passed on `macos-latest` and `ubuntu-latest` for `c9900b8`, which contains code commit `635bf30`.
 - Independent review found no blocking issue after the picker authority race fix and reported **Ready to merge: Yes**.
-- Real Zed/Herdr/Ghostty E2E has not run for this revision. Task 6 and plan archival remain incomplete.
+- Pre-revision Ghostty dogfooding confirmed later external focus events activate the matching Zed project. macOS did not return foreground focus to Ghostty; the accepted best-effort fallback left Zed foreground. The newly agreed initial external startup route has not yet been exercised against real Zed/Herdr/Ghostty, so Task 6 and plan archival remain incomplete.
 - No tag, GitHub Release, or Homebrew tap mutation occurred.
 
 Implementation-time minor file changes or internal differences must be reflected in the relevant task. Ask the user before changing requirements, Out of Scope, public contracts, persisted schemas, or task labels.
@@ -350,7 +349,7 @@ Implementation-time minor file changes or internal differences must be reflected
 - Reuse the current `ManagedChild`, readiness timeout, signal forwarding, lifecycle lock, socket lock, route write, and lease acquisition sequence.
 - Verify the exact R14 plugin-list, install-state, manifest, and current-executable predicate before child spawn. Reuse parsing/inspection logic with doctor rather than maintaining two definitions. Do not inspect generated Zed tasks or task fingerprints for launch eligibility.
 - Persist the resolved route before acquiring the lease, under the same admission locks as today.
-- Keep internal startup sync nonfatal. Skip all startup workspace/Zed calls for external routes.
+- Keep startup sync nonfatal for both routes. Internal uses the anchored two-command pipeline; external reads only the focused workspace and runs one direct `--existing` with its focus policy.
 - Report both requested and live route mode when rejecting a candidate where possible; never terminate the owner.
 - Update only fingerprint-owned task payloads. The migrated Herdr task has exact args `["--mode", "internal", "--anchor", "$ZED_WORKTREE_ROOT"]` and retains `allow_concurrent_runs: true`, `use_new_terminal: true`, `reveal: "always"`, and `hide: "never"`; setup records the new full-payload fingerprint. Preserve foreign/modified labels, JSONC, rollback, idempotence, and no-keymap behavior.
 
@@ -359,7 +358,7 @@ Implementation-time minor file changes or internal differences must be reflected
 - current executable reached through a symlink or relative spelling but resolving to the manifest executable → compatible.
 - compatible plugin/manifest + missing/modified optional Zed task → bare launch remains allowed.
 - internal launch → route/lease established, startup two-command sync retained.
-- external launch → external route/lease established, Herdr remains live, no startup workspace or Zed log.
+- external launch → external route/lease established, initial focused workspace produces exactly one `zed --existing TARGET`, no `--add`, and Herdr remains live.
 - external and internal candidates racing from no owner → one winner; loser child reaped; route mode/PID belong to winner.
 - same-mode or opposite-mode second launch → candidate failure while owner UI, lease, and route remain.
 - internal/external child exit and signal paths → lease cleanup/session preservation unchanged.
@@ -368,7 +367,7 @@ Implementation-time minor file changes or internal differences must be reflected
 
 **Complete when:**
 - Both launch modes use one lifecycle without weakening race safety.
-- External launch demonstrably makes no startup Zed call.
+- External launch demonstrably performs one mode-correct initial route and no all-workspace ensure pass.
 - Setup migration is idempotent and optional-task absence does not block launcher preflight.
 
 **Validation:**
@@ -538,7 +537,7 @@ Implementation-time minor file changes or internal differences must be reflected
 **Test cases:**
 - Zed terminal + Git CWD + bare `zerdr` → internal route, existing anchored startup sync, one wrapper.
 - Zed terminal + non-Git CWD → pre-spawn failure; explicit anchor fallback succeeds.
-- Ghostty + bare `zerdr` → external route, Herdr appears, no startup Zed activation.
+- Ghostty + bare `zerdr` → external route, Herdr appears, and the initially focused workspace produces one Zed activation.
 - External focus A/B in one Zed window → matching project/window ordered by Zed; Ghostty is frontmost again after each command on macOS.
 - External focus C already in another Zed window → that window becomes Zed's selected/top window; Ghostty returns foreground.
 - External focus unopened D → D opens or is added according to Zed's eligible-window behavior; no claim of mandatory new window.
@@ -576,7 +575,7 @@ Implementation-time minor file changes or internal differences must be reflected
 | R2 | 1, 6 | Zed/non-Zed environment matrix; real Zed and Ghostty launch |
 | R3-R5 | 1, 4, 6 | Option conflict/CWD/platform tests; focus override E2E |
 | R6, D3 | 3, 6 | Exact one-command external logs; existing/absent project E2E |
-| R7, D4 | 2, 6 | No-startup-Zed fake log and Ghostty observation |
+| R7, D4 | 2, 6 | Exact one-call external startup log, nonfatal failure test, and Ghostty observation |
 | R8 | 3, 6 | Repeat-event logs and manual sync E2E |
 | R9, D5-D6 | 4, 6 | Fake frontmost/race/failure tests; macOS foreground observations |
 | R10 | 1, 4-6 | Remote marker/doctor matrix, Linux seam, platform E2E boundaries |
@@ -593,11 +592,11 @@ Implementation-time minor file changes or internal differences must be reflected
 - [x] `cargo test --test cli_contract && cargo test --test state_and_bindings` — Passed: bare/mode/remote/route-schema contracts.
 - [x] `cargo test --test herdr_wrapper && cargo test --test setup_and_doctor` — Passed: mode lifecycle, task migration, preflight, and doctor contracts.
 - [x] `cargo test --test sync_flow` — Passed: exact internal/external routing, manual commands, authority, and focus restoration seams.
-- [x] `cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-targets --all-features` — Passed with 85 tests.
+- [x] `cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-targets --all-features` — Passed with 86 tests.
 - [x] `cargo metadata --no-deps --format-version 1 >/dev/null && cargo package --allow-dirty --no-verify --list >/dev/null` — Passed: target-specific dependency metadata and package contents.
 - [x] `actionlint .github/workflows/*.yml && git diff --check` — Passed: workflows and changed files.
 - [ ] Real macOS internal/external E2E checklist — Expected: every applicable Task 6 observation is recorded with exact versions.
-- [x] Hosted macOS/Linux CI — Run 32169005159 passed both test jobs after the post-review fixes.
+- [ ] Hosted macOS/Linux CI — Run 32169005159 passed the prior post-review revision; the initial external startup route requires a fresh run.
 - [x] Original MVP plan points to this revision; historical conflicting contracts are marked superseded.
 - [x] Requirement Coverage has no unmapped requirement or decision.
 - [x] The plan and actual changed-file set agree, including `objc2-app-kit` plus its transitive lockfile entries and the test support seams.
