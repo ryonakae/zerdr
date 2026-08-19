@@ -187,7 +187,7 @@ fn external_wrapper_syncs_the_initial_workspace_without_requiring_the_zed_task()
     );
     let repo = repo.canonicalize().unwrap();
     BindingStore::new(paths.bindings_file.clone())
-        .bind("w1", &repo)
+        .bind("zerdr", "w1", &repo)
         .unwrap();
     let sessions = serde_json::json!({
         "sessions": [{"name":"zerdr","running":true,"socket_path":socket}]
@@ -252,7 +252,7 @@ fn wrapper_holds_a_lease_runs_startup_sync_and_preserves_session() {
     );
     let repo = repo.canonicalize().unwrap();
     BindingStore::new(Paths::for_test(env.root.path()).bindings_file)
-        .bind("w1", &repo)
+        .bind("zerdr", "w1", &repo)
         .unwrap();
     let sessions = serde_json::json!({
         "ok": true,
@@ -401,7 +401,7 @@ fn external_startup_sync_failure_notifies_without_terminating_the_client() {
     );
     let target = target.canonicalize().unwrap();
     BindingStore::new(paths.bindings_file)
-        .bind("w1", &target)
+        .bind("zerdr", "w1", &target)
         .unwrap();
     let sessions = serde_json::json!({
         "sessions": [{"name":"zerdr","running":true,"socket_path":socket}]
@@ -450,7 +450,7 @@ fn startup_sync_failure_notifies_but_keeps_the_client_until_its_normal_exit() {
     let anchor = anchor.canonicalize().unwrap();
     let target = target.canonicalize().unwrap();
     BindingStore::new(paths.bindings_file)
-        .bind("w1", &target)
+        .bind("zerdr", "w1", &target)
         .unwrap();
     let sessions = serde_json::json!({
         "sessions": [{"name":"zerdr","running":true,"socket_path":socket}]

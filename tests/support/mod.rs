@@ -21,6 +21,36 @@ impl TestEnv {
         let log = root.path().join("process.log");
         let herdr = r##"#!/bin/sh
 printf 'herdr\t%s\n' "$*" >> "$ZERDR_TEST_LOG"
+if [ "$1" = "--session" ] && [ "$3" = "workspace" ] && [ "$4" = "list" ]; then
+  if [ -n "$ZERDR_TEST_WORKSPACE_LIST_MARKER" ]; then
+    : > "$ZERDR_TEST_WORKSPACE_LIST_MARKER"
+    while [ ! -e "$ZERDR_TEST_WORKSPACE_LIST_CONTINUE" ]; do sleep 0.01; done
+  fi
+  if [ "$2" = "default" ] && [ -n "$ZERDR_TEST_WORKSPACES_DEFAULT_JSON" ]; then
+    printf '%s\n' "$ZERDR_TEST_WORKSPACES_DEFAULT_JSON"
+  elif [ "$2" = "zerdr" ] && [ -n "$ZERDR_TEST_WORKSPACES_ZERDR_JSON" ]; then
+    printf '%s\n' "$ZERDR_TEST_WORKSPACES_ZERDR_JSON"
+  else
+    printf '%s\n' "$ZERDR_TEST_WORKSPACES_JSON"
+  fi
+  exit 0
+fi
+if [ "$1" = "--session" ] && [ "$3" = "workspace" ] && [ "$4" = "focus" ]; then
+  printf '%s\n' '{"ok":true,"result":{}}'
+  exit 0
+fi
+if [ "$1" = "--session" ] && [ "$3" = "api" ] && [ "$4" = "snapshot" ]; then
+  printf '%s\n' "$ZERDR_TEST_SNAPSHOT_JSON"
+  exit 0
+fi
+if [ "$1" = "--session" ] && [ "$3" = "notification" ] && [ "$4" = "show" ]; then
+  if [ "${ZERDR_TEST_NOTIFICATION_RESULT:-shown}" = "shown" ]; then
+    printf '%s\n' '{"ok":true,"result":{"shown":true}}'
+  else
+    printf '%s\n' '{"ok":true,"result":{"shown":false,"reason":"no_foreground_client"}}'
+  fi
+  exit 0
+fi
 case "$*" in
   "--version")
     printf '%s\n' 'herdr 0.8.0 protocol 19'
@@ -118,7 +148,9 @@ fi
             .env("ZERDR_TEST_LOG", &self.log)
             .env("ZERDR_HERDR_BIN", self.bin.join("herdr"))
             .env("ZERDR_ZED_BIN", self.bin.join("zed"))
-            .env("ZERDR_TEST_PLUGINS_JSON", compatible_plugins_json());
+            .env("ZERDR_TEST_PLUGINS_JSON", compatible_plugins_json())
+            .env_remove("HERDR_SOCKET_PATH")
+            .env_remove("HERDR_WORKSPACE_ID");
         command
     }
 
@@ -130,7 +162,9 @@ fi
             .env("ZERDR_TEST_LOG", &self.log)
             .env("ZERDR_HERDR_BIN", self.bin.join("herdr"))
             .env("ZERDR_ZED_BIN", self.bin.join("zed"))
-            .env("ZERDR_TEST_PLUGINS_JSON", compatible_plugins_json());
+            .env("ZERDR_TEST_PLUGINS_JSON", compatible_plugins_json())
+            .env_remove("HERDR_SOCKET_PATH")
+            .env_remove("HERDR_WORKSPACE_ID");
         command
     }
 

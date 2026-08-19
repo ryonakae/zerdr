@@ -40,29 +40,53 @@ impl Herdr {
     }
 
     pub fn session_socket(&self) -> Result<PathBuf> {
+        self.find_session_socket(SESSION_NAME)?
+            .ok_or(Error::SessionUnavailable)
+    }
+
+    pub fn session_socket_for(&self, session_name: &str) -> Result<PathBuf> {
+        self.find_session_socket(session_name)?
+            .ok_or_else(|| Error::User(format!("Herdr session {session_name:?} is not running")))
+    }
+
+    pub fn session_name_for_socket(&self, socket_path: &std::path::Path) -> Result<String> {
+        let expected = socket_path
+            .canonicalize()
+            .map_err(|error| Error::io(socket_path, error))?;
         let value = self.json_output(["session", "list", "--json"])?;
         let sessions = find_array(&value, "sessions")
             .ok_or_else(|| Error::User("Herdr session list did not contain sessions".to_owned()))?;
         for session in sessions {
-            let name = string_field(session, &["name", "session_name"]);
-            if name.as_deref() == Some(SESSION_NAME)
-                && session
-                    .get("running")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true)
+            if !session
+                .get("running")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
             {
-                let socket =
-                    string_field(session, &["socket_path", "socket"]).ok_or_else(|| {
-                        Error::User("zerdr Herdr session has no socket path".to_owned())
-                    })?;
-                return Ok(PathBuf::from(socket));
+                continue;
+            }
+            let Some(name) = string_field(session, &["name", "session_name"]) else {
+                continue;
+            };
+            let Some(socket) = string_field(session, &["socket_path", "socket"]) else {
+                continue;
+            };
+            let socket = PathBuf::from(socket);
+            if socket.canonicalize().ok().as_ref() == Some(&expected) {
+                return Ok(name);
             }
         }
-        Err(Error::SessionUnavailable)
+        Err(Error::User(format!(
+            "no running Herdr session matches socket {}",
+            expected.display()
+        )))
     }
 
     pub fn workspaces(&self) -> Result<Vec<Workspace>> {
-        let value = self.session_json_output(["workspace", "list"])?;
+        self.workspaces_for(SESSION_NAME)
+    }
+
+    pub fn workspaces_for(&self, session_name: &str) -> Result<Vec<Workspace>> {
+        let value = self.session_json_output_for(session_name, ["workspace", "list"])?;
         let values = find_array(&value, "workspaces").ok_or_else(|| {
             Error::User("Herdr workspace list did not contain workspaces".to_owned())
         })?;
@@ -79,17 +103,24 @@ impl Herdr {
     }
 
     pub fn notify_error(&self, message: &str) -> Result<bool> {
-        let output = self.session_output([
-            OsStr::new("notification"),
-            OsStr::new("show"),
-            OsStr::new("zerdr sync failed"),
-            OsStr::new("--body"),
-            OsStr::new(message),
-            OsStr::new("--position"),
-            OsStr::new("top-right"),
-            OsStr::new("--sound"),
-            OsStr::new("request"),
-        ])?;
+        self.notify_error_for(SESSION_NAME, message)
+    }
+
+    pub fn notify_error_for(&self, session_name: &str, message: &str) -> Result<bool> {
+        let output = self.session_output_for(
+            session_name,
+            [
+                OsStr::new("notification"),
+                OsStr::new("show"),
+                OsStr::new("zerdr sync failed"),
+                OsStr::new("--body"),
+                OsStr::new(message),
+                OsStr::new("--position"),
+                OsStr::new("top-right"),
+                OsStr::new("--sound"),
+                OsStr::new("request"),
+            ],
+        )?;
         let value: Value =
             serde_json::from_slice(&output.stdout).map_err(|source| Error::Json {
                 what: "Herdr notification response".to_owned(),
@@ -195,12 +226,42 @@ impl Herdr {
         }))
     }
 
+    fn find_session_socket(&self, session_name: &str) -> Result<Option<PathBuf>> {
+        let value = self.json_output(["session", "list", "--json"])?;
+        let sessions = find_array(&value, "sessions")
+            .ok_or_else(|| Error::User("Herdr session list did not contain sessions".to_owned()))?;
+        for session in sessions {
+            let name = string_field(session, &["name", "session_name"]);
+            if name.as_deref() == Some(session_name)
+                && session
+                    .get("running")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true)
+            {
+                let socket =
+                    string_field(session, &["socket_path", "socket"]).ok_or_else(|| {
+                        Error::User(format!("Herdr session {session_name:?} has no socket path"))
+                    })?;
+                return Ok(Some(PathBuf::from(socket)));
+            }
+        }
+        Ok(None)
+    }
+
     fn session_json_output<I, S>(&self, args: I) -> Result<Value>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut complete = vec![OsString::from("--session"), OsString::from(SESSION_NAME)];
+        self.session_json_output_for(SESSION_NAME, args)
+    }
+
+    fn session_json_output_for<I, S>(&self, session_name: &str, args: I) -> Result<Value>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut complete = vec![OsString::from("--session"), OsString::from(session_name)];
         complete.extend(args.into_iter().map(|value| value.as_ref().to_os_string()));
         self.json_output(complete)
     }
@@ -210,7 +271,15 @@ impl Herdr {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut complete = vec![OsString::from("--session"), OsString::from(SESSION_NAME)];
+        self.session_output_for(SESSION_NAME, args)
+    }
+
+    fn session_output_for<I, S>(&self, session_name: &str, args: I) -> Result<Output>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut complete = vec![OsString::from("--session"), OsString::from(session_name)];
         complete.extend(args.into_iter().map(|value| value.as_ref().to_os_string()));
         self.output(complete)
     }

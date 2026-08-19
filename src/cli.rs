@@ -46,10 +46,19 @@ pub enum Command {
     Previous,
     /// Synchronize Zed to the focused Herdr workspace.
     Sync,
-    /// Bind the focused workspace to a Git checkout.
-    Bind { path: Option<PathBuf> },
-    /// Remove the focused workspace binding.
-    Unbind,
+    /// Bind the selected workspace to a Git checkout.
+    Bind {
+        /// Target the focused workspace in this Herdr session.
+        #[arg(long)]
+        session: Option<String>,
+        path: Option<PathBuf>,
+    },
+    /// Remove the selected workspace binding.
+    Unbind {
+        /// Target the focused workspace in this Herdr session.
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// Install the Herdr plugin and Zed tasks.
     Setup,
     /// Remove the Herdr plugin and Zed tasks.

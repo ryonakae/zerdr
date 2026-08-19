@@ -27,6 +27,25 @@ fn help_lists_public_commands_and_hides_event_entry_point() {
 }
 
 #[test]
+fn bind_and_unbind_help_expose_only_the_session_targeting_option() {
+    for command in ["bind", "unbind"] {
+        cargo_bin_cmd!("zerdr")
+            .args([command, "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("--session <SESSION>"));
+    }
+
+    for command in ["pick", "next", "previous", "sync"] {
+        cargo_bin_cmd!("zerdr")
+            .args([command, "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("--session").not());
+    }
+}
+
+#[test]
 fn manual_commands_dispatch_outside_the_zed_terminal_environment() {
     for command in ["pick", "next", "previous", "sync", "bind", "unbind"] {
         let env = TestEnv::new();

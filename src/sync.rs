@@ -6,7 +6,8 @@ use crate::error::{Error, Result};
 use crate::herdr::{Herdr, Workspace};
 use crate::picker;
 use crate::state::{
-    BindingStore, LeaseSet, Paths, RouteStore, RouteStrategy, SyncGuard, canonical_git_root,
+    BindingStore, LeaseSet, Paths, RouteState, RouteStore, RouteStrategy, SESSION_NAME, SyncGuard,
+    canonical_git_root,
 };
 use crate::zed::Zed;
 
@@ -14,6 +15,12 @@ pub struct Synchronizer {
     paths: Paths,
     herdr: Herdr,
     zed: Zed,
+}
+
+struct BindingSelection {
+    session_name: String,
+    socket: PathBuf,
+    workspace_id: Option<String>,
 }
 
 impl Synchronizer {
@@ -77,7 +84,11 @@ impl Synchronizer {
         let mut workspaces = self.herdr.workspaces()?;
         let bindings = BindingStore::new(self.paths.bindings_file.clone()).load()?;
         for workspace in &mut workspaces {
-            if let Some(root) = bindings.bindings.get(&workspace.id) {
+            if let Some(root) = bindings
+                .sessions
+                .get(SESSION_NAME)
+                .and_then(|session| session.get(&workspace.id))
+            {
                 workspace.checkout_path = Some(root.clone());
             }
         }
@@ -89,11 +100,10 @@ impl Synchronizer {
         self.switch_or_sync(&socket, &workspaces[index], authority)
     }
 
-    pub fn bind(&self, candidate: Option<&Path>) -> Result<()> {
-        let socket = self.herdr.session_socket()?;
-        let authority = self.acquire_manual_authority(&socket)?;
-        let workspaces = self.herdr.workspaces()?;
-        let focused = focused_workspace(&workspaces)?;
+    pub fn bind(&self, session_name: Option<&str>, candidate: Option<&Path>) -> Result<()> {
+        let selection = self.binding_selection(session_name)?;
+        let _guard = self.acquire_binding_authority(&selection.socket)?;
+        let workspace_id = self.binding_workspace_id(&selection)?;
         let cwd;
         let candidate = if let Some(candidate) = candidate {
             candidate
@@ -103,20 +113,23 @@ impl Synchronizer {
             })?;
             &cwd
         };
-        self.validate_route_authority(&socket)?;
-        BindingStore::new(self.paths.bindings_file.clone()).bind(&focused.id, candidate)?;
-        drop(authority);
-        self.sync_socket(&socket)?;
+        let root = BindingStore::new(self.paths.bindings_file.clone()).bind(
+            &selection.session_name,
+            &workspace_id,
+            candidate,
+        )?;
+        if let Some(route) = self.binding_route(&selection.socket)? {
+            self.apply_route(&selection.socket, &route, &root)?;
+        }
         Ok(())
     }
 
-    pub fn unbind(&self) -> Result<()> {
-        let socket = self.herdr.session_socket()?;
-        let _authority = self.acquire_manual_authority(&socket)?;
-        let workspaces = self.herdr.workspaces()?;
-        let focused = focused_workspace(&workspaces)?;
-        self.validate_route_authority(&socket)?;
-        BindingStore::new(self.paths.bindings_file.clone()).unbind(&focused.id)?;
+    pub fn unbind(&self, session_name: Option<&str>) -> Result<()> {
+        let selection = self.binding_selection(session_name)?;
+        let _guard = self.acquire_binding_authority(&selection.socket)?;
+        let workspace_id = self.binding_workspace_id(&selection)?;
+        BindingStore::new(self.paths.bindings_file.clone())
+            .unbind(&selection.session_name, &workspace_id)?;
         Ok(())
     }
 
@@ -163,7 +176,7 @@ impl Synchronizer {
 
     pub fn root_for_workspace(&self, workspace: &Workspace) -> Result<PathBuf> {
         let store = BindingStore::new(self.paths.bindings_file.clone());
-        if let Some(root) = store.get(&workspace.id)? {
+        if let Some(root) = store.get(SESSION_NAME, &workspace.id)? {
             if !root.exists() {
                 return Err(Error::User(format!(
                     "binding for {} points to missing path {}; run `zerdr bind PATH`",
@@ -193,7 +206,7 @@ impl Synchronizer {
                 ))
             })?
         };
-        store.bind_if_absent(&workspace.id, candidate)
+        store.bind_if_absent(SESSION_NAME, &workspace.id, candidate)
     }
 
     pub fn herdr(&self) -> &Herdr {
@@ -202,6 +215,91 @@ impl Synchronizer {
 
     pub fn paths(&self) -> &Paths {
         &self.paths
+    }
+
+    fn binding_selection(&self, explicit_session: Option<&str>) -> Result<BindingSelection> {
+        if let Some(session_name) = explicit_session {
+            return Ok(BindingSelection {
+                session_name: session_name.to_owned(),
+                socket: self.herdr.session_socket_for(session_name)?,
+                workspace_id: None,
+            });
+        }
+
+        let socket = std::env::var_os("HERDR_SOCKET_PATH");
+        let workspace_id = std::env::var_os("HERDR_WORKSPACE_ID");
+        match (socket, workspace_id) {
+            (Some(socket), Some(workspace_id)) => {
+                let socket = PathBuf::from(socket);
+                let session_name = self.herdr.session_name_for_socket(&socket)?;
+                let workspace_id = workspace_id.into_string().map_err(|_| {
+                    Error::User("HERDR_WORKSPACE_ID must be valid UTF-8".to_owned())
+                })?;
+                Ok(BindingSelection {
+                    session_name,
+                    socket,
+                    workspace_id: Some(workspace_id),
+                })
+            }
+            (None, None) => Ok(BindingSelection {
+                session_name: SESSION_NAME.to_owned(),
+                socket: self.herdr.session_socket()?,
+                workspace_id: None,
+            }),
+            _ => Err(Error::User(
+                "HERDR_SOCKET_PATH and HERDR_WORKSPACE_ID must be set together".to_owned(),
+            )),
+        }
+    }
+
+    fn binding_workspace_id(&self, selection: &BindingSelection) -> Result<String> {
+        if let Some(workspace_id) = selection.workspace_id.as_ref() {
+            return Ok(workspace_id.clone());
+        }
+        let workspaces = self.herdr.workspaces_for(&selection.session_name)?;
+        Ok(focused_workspace(&workspaces)?.id.clone())
+    }
+
+    fn acquire_binding_authority(&self, socket: &Path) -> Result<SyncGuard> {
+        let guard = SyncGuard::acquire(&self.paths.sync_locks_dir, socket)?;
+        self.binding_route(socket)?;
+        Ok(guard)
+    }
+
+    fn binding_route(&self, socket: &Path) -> Result<Option<RouteState>> {
+        let inspection = LeaseSet::new(self.paths.leases_dir.clone()).inspect(socket)?;
+        let wrapper_pid = match inspection.live_wrapper_pids.as_slice() {
+            [] => return Ok(None),
+            [wrapper_pid] => *wrapper_pid,
+            wrapper_pids => {
+                return Err(Error::User(format!(
+                    "the Herdr session has {} live wrappers ({wrapper_pids:?}); keep only one bare `zerdr` wrapper",
+                    wrapper_pids.len()
+                )));
+            }
+        };
+        let route = RouteStore::new(self.paths.routes_dir.clone()).load(socket)?;
+        if route.wrapper_pid != wrapper_pid {
+            return Err(Error::User(format!(
+                "route belongs to wrapper {}, but live wrapper is {wrapper_pid}; restart bare `zerdr`",
+                route.wrapper_pid
+            )));
+        }
+        Ok(Some(route))
+    }
+
+    fn apply_route(&self, socket: &Path, route: &RouteState, root: &Path) -> Result<()> {
+        match &route.routing {
+            RouteStrategy::Internal { anchor_root } => {
+                self.zed.activate_existing(anchor_root)?;
+                self.zed.add_to_current(root)?;
+                RouteStore::new(self.paths.routes_dir.clone()).promote(socket, root)?;
+            }
+            RouteStrategy::External { focus } => {
+                crate::focus::with_external_focus(*focus, || self.zed.activate_existing(root))?;
+            }
+        }
+        Ok(())
     }
 
     fn acquire_manual_authority(&self, socket: &Path) -> Result<SyncGuard> {

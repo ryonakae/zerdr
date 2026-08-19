@@ -32,15 +32,15 @@ Run `zerdr` from the terminal you want to use with Herdr. zerdr routes the focus
 | `zerdr next` | Focus the next workspace in Herdr display order. |
 | `zerdr previous` | Focus the previous workspace in Herdr display order. |
 | `zerdr sync` | Reapply the focused Herdr workspace route to Zed. |
-| `zerdr bind [PATH]` | Bind the focused workspace to a Git checkout and sync it. |
-| `zerdr unbind` | Remove the focused workspace binding. |
+| `zerdr bind [--session NAME] [PATH]` | Bind the selected workspace to a Git checkout; sync it when a wrapper is live. |
+| `zerdr unbind [--session NAME]` | Remove the selected workspace binding. |
 | `zerdr setup` | Install or update the Herdr plugin and five global Zed tasks. |
 | `zerdr uninstall [--purge]` | Remove integration files; `--purge` removes zerdr state too. |
 | `zerdr doctor` | Check required commands, installed files, bindings, routes, and leases. |
 
 Bare `zerdr` accepts `--mode auto|internal|external`, `--anchor PATH`, and `--focus terminal|zed`. Launch options cannot accompany a subcommand.
 
-`pick`, `next`, `previous`, `sync`, `bind`, and `unbind` require a live `zerdr` wrapper and use its routing mode.
+`pick`, `next`, `previous`, and `sync` require a live `zerdr` wrapper and use its routing mode. `bind` and `unbind` use the current Herdr pane when available, otherwise the `zerdr` session; pass `--session NAME` to target another session. Without a live wrapper, binding changes do not route Zed.
 
 ## Routing modes
 

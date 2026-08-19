@@ -33,8 +33,12 @@ pub fn run() -> Result<()> {
         Command::Next => run_manual(|synchronizer| synchronizer.navigate(1)),
         Command::Previous => run_manual(|synchronizer| synchronizer.navigate(-1)),
         Command::Sync => run_manual(|synchronizer| synchronizer.sync_manual()),
-        Command::Bind { path } => run_manual(|synchronizer| synchronizer.bind(path.as_deref())),
-        Command::Unbind => run_manual(|synchronizer| synchronizer.unbind()),
+        Command::Bind { session, path } => {
+            run_manual(|synchronizer| synchronizer.bind(session.as_deref(), path.as_deref()))
+        }
+        Command::Unbind { session } => {
+            run_manual(|synchronizer| synchronizer.unbind(session.as_deref()))
+        }
         Command::Setup => setup::setup(),
         Command::Uninstall { purge } => setup::uninstall(purge),
         Command::Doctor => match remote {

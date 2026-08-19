@@ -15,6 +15,7 @@ use crate::error::{Error, Result};
 
 pub const SESSION_NAME: &str = "zerdr";
 const SCHEMA_VERSION: u32 = 1;
+const BINDING_SCHEMA_VERSION: u32 = 2;
 const ROUTE_SCHEMA_VERSION: u32 = 2;
 static UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -102,20 +103,27 @@ fn default_zed_tasks_file() -> PathBuf {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct BindingState {
     pub schema_version: u32,
-    pub session_name: String,
-    pub bindings: BTreeMap<String, PathBuf>,
+    pub sessions: BTreeMap<String, BTreeMap<String, PathBuf>>,
 }
 
 impl Default for BindingState {
     fn default() -> Self {
         Self {
-            schema_version: SCHEMA_VERSION,
-            session_name: SESSION_NAME.to_owned(),
-            bindings: BTreeMap::new(),
+            schema_version: BINDING_SCHEMA_VERSION,
+            sessions: BTreeMap::new(),
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BindingStateV1 {
+    schema_version: u32,
+    session_name: String,
+    bindings: BTreeMap<String, PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -133,32 +141,36 @@ impl BindingStore {
             return Ok(BindingState::default());
         }
         let bytes = fs::read(&self.path).map_err(|error| Error::io(&self.path, error))?;
-        let state: BindingState = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
-            what: self.path.display().to_string(),
-            source,
-        })?;
-        validate_binding_state(&state)?;
-        Ok(state)
+        self.parse(&bytes)
     }
 
-    pub fn save(&self, state: &BindingState) -> Result<()> {
-        let _lock = self.acquire_write_lock()?;
-        self.save_unlocked(state)
-    }
-
-    pub fn bind(&self, workspace_id: &str, candidate: &Path) -> Result<PathBuf> {
+    pub fn bind(
+        &self,
+        session_name: &str,
+        workspace_id: &str,
+        candidate: &Path,
+    ) -> Result<PathBuf> {
         let root = canonical_git_root(candidate)?;
         let _lock = self.acquire_write_lock()?;
         let mut state = self.load()?;
-        state.bindings.insert(workspace_id.to_owned(), root.clone());
+        state
+            .sessions
+            .entry(session_name.to_owned())
+            .or_default()
+            .insert(workspace_id.to_owned(), root.clone());
         self.save_unlocked(&state)?;
         Ok(root)
     }
 
-    pub fn bind_if_absent(&self, workspace_id: &str, candidate: &Path) -> Result<PathBuf> {
+    pub fn bind_if_absent(
+        &self,
+        session_name: &str,
+        workspace_id: &str,
+        candidate: &Path,
+    ) -> Result<PathBuf> {
         {
             let _lock = self.acquire_write_lock()?;
-            if let Some(existing) = self.load()?.bindings.get(workspace_id) {
+            if let Some(existing) = self.get_from_state(&self.load()?, session_name, workspace_id) {
                 return Ok(existing.clone());
             }
         }
@@ -167,7 +179,9 @@ impl BindingStore {
             Ok(root) => root,
             Err(resolution_error) => {
                 let _lock = self.acquire_write_lock()?;
-                if let Some(existing) = self.load()?.bindings.get(workspace_id) {
+                if let Some(existing) =
+                    self.get_from_state(&self.load()?, session_name, workspace_id)
+                {
                     return Ok(existing.clone());
                 }
                 return Err(resolution_error);
@@ -176,36 +190,105 @@ impl BindingStore {
 
         let _lock = self.acquire_write_lock()?;
         let mut state = self.load()?;
-        if let Some(existing) = state.bindings.get(workspace_id) {
+        if let Some(existing) = self.get_from_state(&state, session_name, workspace_id) {
             return Ok(existing.clone());
         }
-        state.bindings.insert(workspace_id.to_owned(), root.clone());
+        state
+            .sessions
+            .entry(session_name.to_owned())
+            .or_default()
+            .insert(workspace_id.to_owned(), root.clone());
         self.save_unlocked(&state)?;
         Ok(root)
     }
 
-    pub fn set_canonical(&self, workspace_id: &str, root: &Path) -> Result<()> {
-        let root = root
-            .canonicalize()
-            .map_err(|error| Error::io(root, error))?;
+    pub fn set_canonical(&self, session_name: &str, workspace_id: &str, root: &Path) -> Result<()> {
+        let root = canonical_git_root(root)?;
         let _lock = self.acquire_write_lock()?;
         let mut state = self.load()?;
-        state.bindings.insert(workspace_id.to_owned(), root);
+        state
+            .sessions
+            .entry(session_name.to_owned())
+            .or_default()
+            .insert(workspace_id.to_owned(), root);
         self.save_unlocked(&state)
     }
 
-    pub fn unbind(&self, workspace_id: &str) -> Result<bool> {
+    pub fn unbind(&self, session_name: &str, workspace_id: &str) -> Result<bool> {
         let _lock = self.acquire_write_lock()?;
         let mut state = self.load()?;
-        let removed = state.bindings.remove(workspace_id).is_some();
-        if removed {
-            self.save_unlocked(&state)?;
-        }
+        let removed = state
+            .sessions
+            .get_mut(session_name)
+            .is_some_and(|bindings| bindings.remove(workspace_id).is_some());
+        self.save_unlocked(&state)?;
         Ok(removed)
     }
 
-    pub fn get(&self, workspace_id: &str) -> Result<Option<PathBuf>> {
-        Ok(self.load()?.bindings.get(workspace_id).cloned())
+    pub fn get(&self, session_name: &str, workspace_id: &str) -> Result<Option<PathBuf>> {
+        Ok(self
+            .get_from_state(&self.load()?, session_name, workspace_id)
+            .cloned())
+    }
+
+    fn parse(&self, bytes: &[u8]) -> Result<BindingState> {
+        let value: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|source| Error::Json {
+                what: self.path.display().to_string(),
+                source,
+            })?;
+        let schema_version = value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                Error::User(format!(
+                    "binding state has no valid schema version: {}",
+                    self.path.display()
+                ))
+            })?;
+        match schema_version {
+            1 => {
+                let legacy: BindingStateV1 =
+                    serde_json::from_value(value).map_err(|source| Error::Json {
+                        what: self.path.display().to_string(),
+                        source,
+                    })?;
+                if legacy.schema_version != SCHEMA_VERSION || legacy.session_name != SESSION_NAME {
+                    return Err(Error::User(format!(
+                        "legacy binding state belongs to session {:?}, expected {SESSION_NAME:?}",
+                        legacy.session_name
+                    )));
+                }
+                Ok(BindingState {
+                    schema_version: BINDING_SCHEMA_VERSION,
+                    sessions: BTreeMap::from([(SESSION_NAME.to_owned(), legacy.bindings)]),
+                })
+            }
+            version if version == u64::from(BINDING_SCHEMA_VERSION) => {
+                let state: BindingState =
+                    serde_json::from_value(value).map_err(|source| Error::Json {
+                        what: self.path.display().to_string(),
+                        source,
+                    })?;
+                validate_binding_state(&state)?;
+                Ok(state)
+            }
+            version => Err(Error::User(format!(
+                "unsupported binding schema version {version}; expected 1 or {BINDING_SCHEMA_VERSION}"
+            ))),
+        }
+    }
+
+    fn get_from_state<'a>(
+        &self,
+        state: &'a BindingState,
+        session_name: &str,
+        workspace_id: &str,
+    ) -> Option<&'a PathBuf> {
+        state
+            .sessions
+            .get(session_name)
+            .and_then(|bindings| bindings.get(workspace_id))
     }
 
     fn save_unlocked(&self, state: &BindingState) -> Result<()> {
@@ -233,16 +316,10 @@ impl BindingStore {
 }
 
 fn validate_binding_state(state: &BindingState) -> Result<()> {
-    if state.schema_version != SCHEMA_VERSION {
+    if state.schema_version != BINDING_SCHEMA_VERSION {
         return Err(Error::User(format!(
-            "unsupported binding schema version {}; expected {SCHEMA_VERSION}",
+            "unsupported binding schema version {}; expected {BINDING_SCHEMA_VERSION}",
             state.schema_version
-        )));
-    }
-    if state.session_name != SESSION_NAME {
-        return Err(Error::User(format!(
-            "binding state belongs to session {:?}, expected {SESSION_NAME:?}",
-            state.session_name
         )));
     }
     Ok(())

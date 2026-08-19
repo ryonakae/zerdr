@@ -33,13 +33,12 @@ fn nested_bind_path_is_persisted_as_the_canonical_git_root() {
     let store = BindingStore::new(paths.bindings_file.clone());
     let (repo, nested) = git_repo();
 
-    let root = store.bind("w1", &nested).unwrap();
+    let root = store.bind("zerdr", "w1", &nested).unwrap();
     assert_eq!(root, repo.path().canonicalize().unwrap());
 
     let loaded = store.load().unwrap();
-    assert_eq!(loaded.schema_version, 1);
-    assert_eq!(loaded.session_name, "zerdr");
-    assert_eq!(loaded.bindings["w1"], root);
+    assert_eq!(loaded.schema_version, 2);
+    assert_eq!(loaded.sessions["zerdr"]["w1"], root);
 }
 
 #[test]
@@ -47,10 +46,10 @@ fn lazy_binding_does_not_replace_an_existing_explicit_binding() {
     let state = tempfile::tempdir().unwrap();
     let store = BindingStore::new(Paths::for_test(state.path()).bindings_file);
     let (first_repo, first_nested) = git_repo();
-    let first_root = store.bind("w1", &first_nested).unwrap();
+    let first_root = store.bind("zerdr", "w1", &first_nested).unwrap();
 
     let resolved = store
-        .bind_if_absent("w1", state.path().join("missing").as_path())
+        .bind_if_absent("zerdr", "w1", state.path().join("missing").as_path())
         .unwrap();
 
     assert_eq!(resolved, first_root);
@@ -66,7 +65,9 @@ fn symlinked_bind_path_resolves_to_the_canonical_checkout_root() {
     let link = links.path().join("checkout-link");
     symlink(repo.path(), &link).unwrap();
 
-    let resolved = store.bind("w1", &link.join("nested/deep")).unwrap();
+    let resolved = store
+        .bind("zerdr", "w1", &link.join("nested/deep"))
+        .unwrap();
 
     assert_eq!(resolved, repo.path().canonicalize().unwrap());
 }
@@ -77,27 +78,122 @@ fn duplicate_roots_are_preserved_for_distinct_workspaces() {
     let store = BindingStore::new(Paths::for_test(state.path()).bindings_file);
     let (repo, _) = git_repo();
 
-    store.bind("w1", repo.path()).unwrap();
-    store.bind("w2", repo.path()).unwrap();
+    store.bind("zerdr", "w1", repo.path()).unwrap();
+    store.bind("zerdr", "w2", repo.path()).unwrap();
 
     let loaded = store.load().unwrap();
-    assert_eq!(loaded.bindings.len(), 2);
-    assert_eq!(loaded.bindings["w1"], loaded.bindings["w2"]);
+    assert_eq!(loaded.sessions["zerdr"].len(), 2);
+    assert_eq!(
+        loaded.sessions["zerdr"]["w1"],
+        loaded.sessions["zerdr"]["w2"]
+    );
 }
 
 #[test]
-fn invalid_or_unsupported_state_is_not_overwritten() {
+fn legacy_v1_loads_as_zerdr_session_without_rewriting_bytes() {
     let state = tempfile::tempdir().unwrap();
     let paths = Paths::for_test(state.path());
     fs::create_dir_all(paths.bindings_file.parent().unwrap()).unwrap();
-    let original = r#"{"schema_version":2,"session_name":"zerdr","bindings":{}}"#;
-    fs::write(&paths.bindings_file, original).unwrap();
+    let (first, _) = git_repo();
+    let (second, _) = git_repo();
+    let original = serde_json::to_vec(&serde_json::json!({
+        "schema_version": 1,
+        "session_name": "zerdr",
+        "bindings": {
+            "w1": first.path().canonicalize().unwrap(),
+            "w2": second.path().canonicalize().unwrap(),
+        },
+    }))
+    .unwrap();
+    fs::write(&paths.bindings_file, &original).unwrap();
+
+    let loaded = BindingStore::new(paths.bindings_file.clone())
+        .load()
+        .unwrap();
+
+    assert_eq!(loaded.schema_version, 2);
+    assert_eq!(loaded.sessions.len(), 1);
+    assert_eq!(loaded.sessions["zerdr"].len(), 2);
+    assert_eq!(fs::read(paths.bindings_file).unwrap(), original);
+}
+
+#[test]
+fn no_op_unbind_migrates_valid_v1_state_to_v2() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    fs::create_dir_all(paths.bindings_file.parent().unwrap()).unwrap();
+    let (repo, _) = git_repo();
+    fs::write(
+        &paths.bindings_file,
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "session_name": "zerdr",
+            "bindings": {"w1": repo.path().canonicalize().unwrap()},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let store = BindingStore::new(paths.bindings_file.clone());
+
+    assert!(!store.unbind("default", "missing").unwrap());
+
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&fs::read(paths.bindings_file).unwrap()).unwrap();
+    assert_eq!(persisted["schema_version"], 2);
+    assert_eq!(
+        persisted["sessions"]["zerdr"]["w1"],
+        repo.path().canonicalize().unwrap().display().to_string()
+    );
+    assert!(persisted.get("session_name").is_none());
+    assert!(persisted.get("bindings").is_none());
+}
+
+#[test]
+fn identical_workspace_ids_are_isolated_by_session() {
+    let state = tempfile::tempdir().unwrap();
+    let store = BindingStore::new(Paths::for_test(state.path()).bindings_file);
+    let (default_repo, _) = git_repo();
+    let (zerdr_repo, _) = git_repo();
+
+    store.bind("default", "w1", default_repo.path()).unwrap();
+    store.bind("zerdr", "w1", zerdr_repo.path()).unwrap();
+
+    assert_eq!(
+        store.get("default", "w1").unwrap().unwrap(),
+        default_repo.path().canonicalize().unwrap()
+    );
+    assert_eq!(
+        store.get("zerdr", "w1").unwrap().unwrap(),
+        zerdr_repo.path().canonicalize().unwrap()
+    );
+    assert!(store.unbind("default", "w1").unwrap());
+    assert!(store.get("default", "w1").unwrap().is_none());
+    assert!(store.get("zerdr", "w1").unwrap().is_some());
+}
+
+#[test]
+fn invalid_or_unsupported_state_is_not_overwritten_by_bind_or_unbind() {
+    let invalid_states = [
+        b"{".as_slice(),
+        br#"{"schema_version":99,"sessions":{}}"#,
+        br#"{"schema_version":1,"session_name":"default","bindings":{}}"#,
+        br#"{"schema_version":1,"session_name":"zerdr","bindings":{},"sessions":{}}"#,
+        br#"{"schema_version":2,"sessions":{},"session_name":"zerdr","bindings":{}}"#,
+    ];
     let (repo, _) = git_repo();
 
-    let error = store.bind("w1", repo.path()).unwrap_err().to_string();
-    assert!(error.contains("schema version 2"), "{error}");
-    assert_eq!(fs::read_to_string(paths.bindings_file).unwrap(), original);
+    for original in invalid_states {
+        let state = tempfile::tempdir().unwrap();
+        let paths = Paths::for_test(state.path());
+        fs::create_dir_all(paths.bindings_file.parent().unwrap()).unwrap();
+        fs::write(&paths.bindings_file, original).unwrap();
+        let store = BindingStore::new(paths.bindings_file.clone());
+
+        assert!(store.bind("zerdr", "w1", repo.path()).is_err());
+        assert_eq!(fs::read(&paths.bindings_file).unwrap(), original);
+        assert!(store.unbind("zerdr", "w1").is_err());
+        assert_eq!(fs::read(&paths.bindings_file).unwrap(), original);
+    }
 }
 
 #[test]
@@ -283,22 +379,39 @@ fn one_of_two_locked_leases_keeps_the_socket_live() {
 }
 
 #[test]
-fn concurrent_binding_updates_preserve_every_workspace() {
+fn concurrent_first_migration_and_multi_session_updates_preserve_every_workspace() {
     let state = tempfile::tempdir().unwrap();
-    let store = BindingStore::new(Paths::for_test(state.path()).bindings_file);
+    let paths = Paths::for_test(state.path());
+    fs::create_dir_all(paths.bindings_file.parent().unwrap()).unwrap();
     let (repo, _) = git_repo();
+    fs::write(
+        &paths.bindings_file,
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "session_name": "zerdr",
+            "bindings": {"legacy": repo.path().canonicalize().unwrap()},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let store = BindingStore::new(paths.bindings_file);
     let mut threads = Vec::new();
     for index in 0..16 {
         let store = store.clone();
         let repo = repo.path().to_path_buf();
         threads.push(thread::spawn(move || {
-            store.bind(&format!("w{index}"), &repo).unwrap();
+            let session = if index % 2 == 0 { "zerdr" } else { "default" };
+            store.bind(session, &format!("w{index}"), &repo).unwrap();
         }));
     }
     for thread in threads {
         thread.join().unwrap();
     }
-    assert_eq!(store.load().unwrap().bindings.len(), 16);
+    let loaded = store.load().unwrap();
+    assert_eq!(loaded.schema_version, 2);
+    assert_eq!(loaded.sessions["zerdr"].len(), 9);
+    assert_eq!(loaded.sessions["default"].len(), 8);
+    assert!(loaded.sessions["zerdr"].contains_key("legacy"));
 }
 
 #[test]

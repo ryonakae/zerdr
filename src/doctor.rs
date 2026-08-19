@@ -111,22 +111,24 @@ pub fn doctor() -> Result<()> {
     match BindingStore::new(paths.bindings_file.clone()).load() {
         Ok(state) => {
             let mut missing = false;
-            for (workspace, root) in state.bindings {
-                match canonical_git_root(&root) {
-                    Ok(canonical) if canonical == root => {}
-                    Ok(canonical) => {
-                        missing = true;
-                        report.fail(format!(
-                            "binding {workspace} is not canonical: {} resolves to {}; run `zerdr bind PATH`",
-                            root.display(),
-                            canonical.display()
-                        ));
-                    }
-                    Err(error) => {
-                        missing = true;
-                        report.fail(format!(
-                            "binding {workspace} is not a valid Git checkout root: {error}"
-                        ));
+            for (session, bindings) in state.sessions {
+                for (workspace, root) in bindings {
+                    match canonical_git_root(&root) {
+                        Ok(canonical) if canonical == root => {}
+                        Ok(canonical) => {
+                            missing = true;
+                            report.fail(format!(
+                                "binding {session}/{workspace} is not canonical: {} resolves to {}; run `zerdr bind --session {session} PATH`",
+                                root.display(),
+                                canonical.display()
+                            ));
+                        }
+                        Err(error) => {
+                            missing = true;
+                            report.fail(format!(
+                                "binding {session}/{workspace} is not a valid Git checkout root: {error}"
+                            ));
+                        }
                     }
                 }
             }
