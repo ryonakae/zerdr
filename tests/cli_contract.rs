@@ -23,7 +23,8 @@ fn help_lists_public_commands_and_hides_event_entry_point() {
         .stdout(predicate::str::contains("setup"))
         .stdout(predicate::str::contains("uninstall"))
         .stdout(predicate::str::contains("doctor"))
-        .stdout(predicate::str::contains("sync-from-herdr").not());
+        .stdout(predicate::str::contains("sync-from-herdr").not())
+        .stdout(predicate::str::contains("open-from-herdr").not());
 }
 
 #[test]
@@ -81,6 +82,7 @@ fn launch_options_are_rejected_with_every_subcommand_in_either_order() {
         "uninstall",
         "doctor",
         "sync-from-herdr",
+        "open-from-herdr",
     ];
     let options: [&[&str]; 3] = [
         &["--mode", "external"],
@@ -160,6 +162,7 @@ fn every_remote_marker_and_runtime_command_is_rejected_before_any_process() {
         Some("setup"),
         Some("uninstall"),
         Some("sync-from-herdr"),
+        Some("open-from-herdr"),
     ] {
         let env = TestEnv::new();
         let mut invocation = env.command();

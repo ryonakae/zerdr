@@ -208,7 +208,7 @@ The root may be resolved before acquiring the socket lock, but route selection a
 ## Progress
 
 - [x] Task 1: Deliver session-scoped binding state and wrapper-optional binding commands.
-- [ ] Task 2: Deliver the captured-workspace one-shot action and route arbitration.
+- [x] Task 2: Deliver the captured-workspace one-shot action and route arbitration.
 - [ ] Task 3: Install and diagnose the complete plugin action without breaking wrapper upgrades.
 - [ ] Task 4: Document both workflows and complete repository-wide validation.
 
@@ -330,6 +330,8 @@ Implementation-time minor file changes or internal differences must be reflected
 **Validation:**
 - Run: `cargo test --test sync_flow && cargo test --test cli_contract`
 - Expected: standalone/live-route action matrices, target-race coverage, notification behavior, remote/hidden CLI contracts, and existing follow sync pass.
+
+**Implementation record (2026-08-19):** The hidden action, typed context, strict root selection, plain Zed adapter, same-socket route arbitration, arbitrary-session notification, and captured-target lock test were implemented in the listed files. `src/herdr.rs` needed no Task 2 change because Task 1 had already added the required named-session APIs. The focused suites passed 69 tests; format, Clippy with warnings denied, and `git diff --check` also passed. Task-level independent review compared Herdr 0.8.0's official action context/runtime types and approved the implementation with no blocking/high findings. Manifest installation and GUI E2E remain in Tasks 3-4.
 
 ### Task 3: Unified Plugin Installation, Upgrade Compatibility, and Diagnostics
 

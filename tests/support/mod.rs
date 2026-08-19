@@ -26,7 +26,9 @@ if [ "$1" = "--session" ] && [ "$3" = "workspace" ] && [ "$4" = "list" ]; then
     : > "$ZERDR_TEST_WORKSPACE_LIST_MARKER"
     while [ ! -e "$ZERDR_TEST_WORKSPACE_LIST_CONTINUE" ]; do sleep 0.01; done
   fi
-  if [ "$2" = "default" ] && [ -n "$ZERDR_TEST_WORKSPACES_DEFAULT_JSON" ]; then
+  if [ -n "$ZERDR_TEST_WORKSPACES_FILE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line"; done < "$ZERDR_TEST_WORKSPACES_FILE"
+  elif [ "$2" = "default" ] && [ -n "$ZERDR_TEST_WORKSPACES_DEFAULT_JSON" ]; then
     printf '%s\n' "$ZERDR_TEST_WORKSPACES_DEFAULT_JSON"
   elif [ "$2" = "zerdr" ] && [ -n "$ZERDR_TEST_WORKSPACES_ZERDR_JSON" ]; then
     printf '%s\n' "$ZERDR_TEST_WORKSPACES_ZERDR_JSON"

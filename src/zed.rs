@@ -16,6 +16,21 @@ impl Zed {
         }
     }
 
+    pub fn open(&self, root: &Path) -> Result<()> {
+        let output = Command::new(&self.program)
+            .arg(root)
+            .output()
+            .map_err(|error| Error::User(format!("failed to run Zed: {error}")))?;
+        if !output.status.success() {
+            return Err(Error::Process {
+                program: self.program.to_string_lossy().into_owned(),
+                status: output.status.code().unwrap_or(1),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            });
+        }
+        Ok(())
+    }
+
     pub fn activate_existing(&self, root: &Path) -> Result<()> {
         let output = Command::new(&self.program)
             .arg("--existing")

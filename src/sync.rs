@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
@@ -21,6 +22,18 @@ struct BindingSelection {
     session_name: String,
     socket: PathBuf,
     workspace_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActionContext {
+    workspace_id: String,
+    workspace_cwd: Option<PathBuf>,
+    worktree: Option<ActionWorktree>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActionWorktree {
+    checkout_path: Option<PathBuf>,
 }
 
 impl Synchronizer {
@@ -60,6 +73,24 @@ impl Synchronizer {
         let socket = self.herdr.session_socket()?;
         self.sync_socket(&socket)?;
         Ok(())
+    }
+
+    pub fn open_from_herdr(&self) -> Result<()> {
+        let action_id = std::env::var("HERDR_PLUGIN_ACTION_ID")
+            .map_err(|_| Error::User("missing HERDR_PLUGIN_ACTION_ID".to_owned()))?;
+        if action_id != "open-zed" {
+            return Err(Error::User(format!(
+                "unexpected Herdr plugin action {action_id:?}; expected open-zed"
+            )));
+        }
+        let socket = std::env::var_os("HERDR_SOCKET_PATH")
+            .map(PathBuf::from)
+            .ok_or_else(|| Error::User("missing HERDR_SOCKET_PATH".to_owned()))?;
+        let session_name = self.herdr.session_name_for_socket(&socket)?;
+        match self.open_from_herdr_session(&session_name, &socket) {
+            Ok(()) => Ok(()),
+            Err(error) => self.notify_action_error(&session_name, error),
+        }
     }
 
     pub fn navigate(&self, direction: isize) -> Result<()> {
@@ -217,6 +248,90 @@ impl Synchronizer {
         &self.paths
     }
 
+    fn open_from_herdr_session(&self, session_name: &str, socket: &Path) -> Result<()> {
+        let context = action_context_from_env()?;
+        let root = self.action_root(session_name, &context)?;
+        if let Some(marker) = std::env::var_os("ZERDR_TEST_SYNC_WAIT_MARKER") {
+            std::fs::write(&marker, b"waiting")
+                .map_err(|error| Error::io(PathBuf::from(marker), error))?;
+        }
+        let _guard = SyncGuard::acquire(&self.paths.sync_locks_dir, socket)?;
+        let inspection = LeaseSet::new(self.paths.leases_dir.clone()).inspect(socket)?;
+        match inspection.live_wrapper_pids.as_slice() {
+            [] => self.zed.open(&root),
+            [wrapper_pid] => {
+                let route = RouteStore::new(self.paths.routes_dir.clone()).load(socket)?;
+                if route.wrapper_pid != *wrapper_pid {
+                    return Err(Error::User(format!(
+                        "route belongs to wrapper {}, but live wrapper is {wrapper_pid}; restart bare `zerdr`",
+                        route.wrapper_pid
+                    )));
+                }
+                self.apply_action_route(socket, &route, &root)
+            }
+            wrapper_pids => Err(Error::User(format!(
+                "the Herdr session has {} live wrappers ({wrapper_pids:?}); keep only one bare `zerdr` wrapper",
+                wrapper_pids.len()
+            ))),
+        }
+    }
+
+    fn apply_action_route(&self, socket: &Path, route: &RouteState, root: &Path) -> Result<()> {
+        match &route.routing {
+            RouteStrategy::Internal { anchor_root } => {
+                self.zed.activate_existing(anchor_root)?;
+                self.zed.add_to_current(root)?;
+                RouteStore::new(self.paths.routes_dir.clone()).promote(socket, root)?;
+            }
+            RouteStrategy::External { .. } => self.zed.activate_existing(root)?,
+        }
+        Ok(())
+    }
+
+    fn action_root(&self, session_name: &str, context: &ActionContext) -> Result<PathBuf> {
+        let store = BindingStore::new(self.paths.bindings_file.clone());
+        if let Some(root) = store.get(session_name, &context.workspace_id)? {
+            if !root.exists() {
+                return Err(Error::User(format!(
+                    "binding for {} points to missing path {}; run `zerdr bind PATH`",
+                    context.workspace_id,
+                    root.display()
+                )));
+            }
+            let canonical = canonical_git_root(&root)?;
+            if canonical != root {
+                return Err(Error::User(format!(
+                    "binding for {} is not the canonical Git checkout root: {}",
+                    context.workspace_id,
+                    root.display()
+                )));
+            }
+            return Ok(root);
+        }
+        let candidate = context
+            .worktree
+            .as_ref()
+            .and_then(|worktree| worktree.checkout_path.as_deref())
+            .or(context.workspace_cwd.as_deref())
+            .ok_or_else(|| {
+                Error::User(format!(
+                    "workspace {} has no checkout path or working directory; run `zerdr bind PATH`",
+                    context.workspace_id
+                ))
+            })?;
+        canonical_git_root(candidate)
+    }
+
+    fn notify_action_error(&self, session_name: &str, error: Error) -> Result<()> {
+        let message = error.to_string();
+        match self.herdr.notify_error_for(session_name, &message) {
+            Ok(_) => Err(error),
+            Err(notification_error) => Err(Error::User(format!(
+                "{message}; additionally failed to notify Herdr: {notification_error}"
+            ))),
+        }
+    }
+
     fn binding_selection(&self, explicit_session: Option<&str>) -> Result<BindingSelection> {
         if let Some(session_name) = explicit_session {
             return Ok(BindingSelection {
@@ -363,6 +478,24 @@ pub fn focused_workspace(workspaces: &[Workspace]) -> Result<&Workspace> {
         .iter()
         .find(|workspace| workspace.focused)
         .ok_or_else(|| Error::User("Herdr has no focused workspace".to_owned()))
+}
+
+fn action_context_from_env() -> Result<ActionContext> {
+    let raw = std::env::var("HERDR_PLUGIN_CONTEXT_JSON")
+        .map_err(|_| Error::User("missing HERDR_PLUGIN_CONTEXT_JSON".to_owned()))?;
+    let value: Value = serde_json::from_str(&raw).map_err(|source| Error::Json {
+        what: "HERDR_PLUGIN_CONTEXT_JSON".to_owned(),
+        source,
+    })?;
+    if !value.is_object() {
+        return Err(Error::User(
+            "HERDR_PLUGIN_CONTEXT_JSON must be a JSON object".to_owned(),
+        ));
+    }
+    serde_json::from_value(value).map_err(|source| Error::Json {
+        what: "HERDR_PLUGIN_CONTEXT_JSON".to_owned(),
+        source,
+    })
 }
 
 fn validate_plugin_context() -> Result<()> {

@@ -46,6 +46,7 @@ pub fn run() -> Result<()> {
             None => doctor::doctor(),
         },
         Command::SyncFromHerdr => sync::Synchronizer::from_env()?.event(),
+        Command::OpenFromHerdr => sync::Synchronizer::from_env()?.open_from_herdr(),
     }
 }
 

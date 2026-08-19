@@ -39,6 +39,27 @@ fn authorize(paths: &Paths, socket: &std::path::Path) -> LeaseGuard {
         .unwrap()
 }
 
+fn one_shot_action(
+    env: &TestEnv,
+    socket: &std::path::Path,
+    target: &std::path::Path,
+) -> assert_cmd::assert::Assert {
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"default","socket_path":socket}]}
+    });
+    let context = serde_json::json!({
+        "workspace_id":"w-captured",
+        "worktree":{"checkout_path":target}
+    });
+    env.command()
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env("HERDR_SOCKET_PATH", socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+}
+
 fn assert_route_corruption_blocks_sync(
     corrupt: impl FnOnce(&Paths, &std::path::Path, &std::path::Path),
 ) {
@@ -111,6 +132,701 @@ fn every_manual_command_rejects_a_route_owner_mismatch_before_workspace_or_state
         assert!(!log.contains("zed\t"), "{log}");
     }
     assert!(!paths.bindings_file.exists());
+}
+
+#[test]
+fn one_shot_action_without_a_live_lease_plain_opens_the_captured_checkout() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let target = git_repo(&env.root.path().join("target-parent"));
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"default","running":true,"socket_path":socket}]}
+    });
+    let context = serde_json::json!({
+        "workspace_id":"w-captured",
+        "workspace_cwd":env.root.path().join("unrelated"),
+        "worktree":{"checkout_path":target}
+    });
+
+    env.command()
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+
+    assert_eq!(
+        env.read_log().lines().collect::<Vec<_>>(),
+        vec![
+            "herdr\tsession list --json",
+            &format!("zed\t{}", target.display()),
+        ]
+    );
+    let paths = Paths::for_test(env.root.path());
+    assert!(!paths.bindings_file.exists());
+    assert!(!paths.routes_dir.exists());
+}
+
+#[test]
+fn one_shot_action_uses_nested_workspace_cwd_without_persisting_a_binding() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let target = git_repo(&env.root.path().join("target-parent"));
+    let nested = target.join("nested/deep");
+    fs::create_dir_all(&nested).unwrap();
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"default","socket_path":socket}]}
+    });
+    let context = serde_json::json!({
+        "workspace_id":"w-captured",
+        "workspace_cwd":nested
+    });
+
+    env.command()
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+        .success();
+
+    assert!(
+        env.read_log()
+            .contains(&format!("zed\t{}", target.display()))
+    );
+    assert!(!Paths::for_test(env.root.path()).bindings_file.exists());
+}
+
+#[test]
+fn one_shot_action_prefers_an_explicit_session_binding_over_context() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let bound = git_repo(&env.root.path().join("bound-parent"));
+    let context_root = git_repo(&env.root.path().join("context-parent"));
+    let paths = Paths::for_test(env.root.path());
+    BindingStore::new(paths.bindings_file.clone())
+        .bind("default", "w1", &bound)
+        .unwrap();
+    let original_bindings = fs::read(&paths.bindings_file).unwrap();
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"default","socket_path":socket}]}
+    });
+    let context = serde_json::json!({
+        "workspace_id":"w1",
+        "worktree":{"checkout_path":context_root}
+    });
+
+    env.command()
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+        .success();
+
+    let log = env.read_log();
+    assert!(log.contains(&format!("zed\t{}", bound.display())), "{log}");
+    assert!(!log.contains(&context_root.display().to_string()), "{log}");
+    assert_eq!(fs::read(paths.bindings_file).unwrap(), original_bindings);
+}
+
+#[test]
+fn one_shot_action_does_not_fall_back_after_an_invalid_checkout_candidate() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let invalid = env.root.path().join("not-a-repo");
+    fs::create_dir_all(&invalid).unwrap();
+    let valid_cwd = git_repo(&env.root.path().join("valid-parent"));
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"default","socket_path":socket}]}
+    });
+    let context = serde_json::json!({
+        "workspace_id":"w1",
+        "workspace_cwd":valid_cwd,
+        "worktree":{"checkout_path":invalid}
+    });
+
+    env.command()
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not inside a Git checkout"));
+
+    let log = env.read_log();
+    assert_eq!(log.matches("notification show").count(), 1, "{log}");
+    assert!(!log.contains("zed\t"), "{log}");
+    assert!(!Paths::for_test(env.root.path()).bindings_file.exists());
+}
+
+#[test]
+fn one_shot_action_rejects_a_stale_binding_without_using_valid_context() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let stale = git_repo(&env.root.path().join("stale-parent"));
+    let context_root = git_repo(&env.root.path().join("context-parent"));
+    let paths = Paths::for_test(env.root.path());
+    BindingStore::new(paths.bindings_file.clone())
+        .bind("default", "w1", &stale)
+        .unwrap();
+    fs::remove_dir_all(&stale).unwrap();
+    let original_bindings = fs::read(&paths.bindings_file).unwrap();
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"default","socket_path":socket}]}
+    });
+    let context = serde_json::json!({
+        "workspace_id":"w1",
+        "worktree":{"checkout_path":context_root}
+    });
+
+    env.command()
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("points to missing path"));
+
+    let log = env.read_log();
+    assert_eq!(log.matches("notification show").count(), 1, "{log}");
+    assert!(!log.contains("zed\t"), "{log}");
+    assert_eq!(fs::read(paths.bindings_file).unwrap(), original_bindings);
+}
+
+#[test]
+fn one_shot_action_resolves_session_before_notifying_malformed_context() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"default","socket_path":socket}]}
+    });
+
+    env.command()
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", "[]")
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("HERDR_PLUGIN_CONTEXT_JSON"));
+
+    let log = env.read_log();
+    let lines = log.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "{log}");
+    assert_eq!(lines[0], "herdr\tsession list --json");
+    assert!(
+        lines[1].starts_with("herdr\t--session default notification show"),
+        "{log}"
+    );
+    assert!(lines[1].contains("must be a JSON object"), "{log}");
+}
+
+#[test]
+fn one_shot_action_with_unresolvable_socket_reports_stderr_without_notification() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("unknown.sock");
+    fs::write(&socket, "").unwrap();
+    let other_socket = env.root.path().join("default.sock");
+    fs::write(&other_socket, "").unwrap();
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"default","socket_path":other_socket}]}
+    });
+
+    env.command()
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "no running Herdr session matches socket",
+        ));
+
+    assert_eq!(env.read_log(), "herdr\tsession list --json\n");
+}
+
+#[test]
+fn one_shot_action_zed_failure_notifies_once_and_remains_nonzero() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let target = git_repo(&env.root.path().join("target-parent"));
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"default","socket_path":socket}]}
+    });
+    let context = serde_json::json!({
+        "workspace_id":"w1",
+        "worktree":{"checkout_path":target}
+    });
+
+    env.command()
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .env("ZERDR_TEST_ZED_FAIL", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("fake Zed failure"));
+
+    let log = env.read_log();
+    assert_eq!(log.matches("notification show").count(), 1, "{log}");
+    assert_eq!(log.matches("zed\t").count(), 1, "{log}");
+    assert!(!Paths::for_test(env.root.path()).bindings_file.exists());
+}
+
+#[test]
+fn one_shot_action_with_a_live_internal_route_uses_existing_add_and_promotes() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let anchor = git_repo(&env.root.path().join("anchor-parent"));
+    let target = git_repo(&env.root.path().join("target-parent"));
+    let routes = RouteStore::new(paths.routes_dir.clone());
+    routes
+        .initialize(&socket, &anchor, std::process::id())
+        .unwrap();
+    let _lease = LeaseSet::new(paths.leases_dir.clone())
+        .acquire(&socket, 99)
+        .unwrap();
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"default","socket_path":socket}]}
+    });
+    let context = serde_json::json!({
+        "workspace_id":"w1",
+        "worktree":{"checkout_path":target}
+    });
+
+    env.command()
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+        .success();
+
+    let log = env.read_log();
+    assert_eq!(
+        log.lines()
+            .filter(|line| line.starts_with("zed\t"))
+            .collect::<Vec<_>>(),
+        vec![
+            format!("zed\t--existing {}", anchor.display()),
+            format!("zed\t--add {}", target.display()),
+        ],
+        "{log}"
+    );
+    assert!(!log.contains("focus\t"), "{log}");
+    assert_eq!(
+        routes.load(&socket).unwrap().internal_anchor(),
+        Some(target.as_path())
+    );
+}
+
+#[test]
+fn one_shot_action_with_a_live_external_terminal_route_never_restores_focus() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let target = git_repo(&env.root.path().join("target-parent"));
+    RouteStore::new(paths.routes_dir.clone())
+        .initialize_strategy(
+            &socket,
+            RouteStrategy::External {
+                focus: RouteFocus::Terminal,
+            },
+            std::process::id(),
+        )
+        .unwrap();
+    let _lease = LeaseSet::new(paths.leases_dir)
+        .acquire(&socket, 99)
+        .unwrap();
+
+    one_shot_action(&env, &socket, &target)
+        .success()
+        .stderr(predicate::str::is_empty());
+
+    let log = env.read_log();
+    assert_eq!(
+        log.lines()
+            .filter(|line| line.starts_with("zed\t"))
+            .collect::<Vec<_>>(),
+        vec![format!("zed\t--existing {}", target.display())],
+        "{log}"
+    );
+    assert!(!log.contains("focus\t"), "{log}");
+}
+
+#[test]
+fn one_shot_action_without_a_live_lease_ignores_a_stale_route() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let anchor = git_repo(&env.root.path().join("anchor-parent"));
+    let target = git_repo(&env.root.path().join("target-parent"));
+    let routes = RouteStore::new(paths.routes_dir);
+    routes
+        .initialize(&socket, &anchor, std::process::id())
+        .unwrap();
+    let route_path = routes.path(&socket).unwrap();
+    let original_route = fs::read(&route_path).unwrap();
+
+    one_shot_action(&env, &socket, &target).success();
+
+    let log = env.read_log();
+    assert_eq!(
+        log.lines()
+            .filter(|line| line.starts_with("zed\t"))
+            .collect::<Vec<_>>(),
+        vec![format!("zed\t{}", target.display())],
+        "{log}"
+    );
+    assert_eq!(fs::read(route_path).unwrap(), original_route);
+}
+
+#[test]
+fn one_shot_action_with_a_live_lease_rejects_a_missing_route_without_plain_fallback() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let target = git_repo(&env.root.path().join("target-parent"));
+    let _lease = LeaseSet::new(paths.leases_dir)
+        .acquire(&socket, 99)
+        .unwrap();
+
+    one_shot_action(&env, &socket, &target).failure();
+
+    let log = env.read_log();
+    assert_eq!(log.matches("notification show").count(), 1, "{log}");
+    assert!(!log.contains("zed\t"), "{log}");
+}
+
+#[test]
+fn one_shot_action_with_a_live_lease_rejects_a_malformed_route_without_plain_fallback() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let anchor = git_repo(&env.root.path().join("anchor-parent"));
+    let target = git_repo(&env.root.path().join("target-parent"));
+    let routes = RouteStore::new(paths.routes_dir);
+    routes
+        .initialize(&socket, &anchor, std::process::id())
+        .unwrap();
+    let route_path = routes.path(&socket).unwrap();
+    fs::write(&route_path, "{").unwrap();
+    let original_route = fs::read(&route_path).unwrap();
+    let _lease = LeaseSet::new(paths.leases_dir)
+        .acquire(&socket, 99)
+        .unwrap();
+
+    one_shot_action(&env, &socket, &target).failure();
+
+    let log = env.read_log();
+    assert_eq!(log.matches("notification show").count(), 1, "{log}");
+    assert!(!log.contains("zed\t"), "{log}");
+    assert_eq!(fs::read(route_path).unwrap(), original_route);
+}
+
+#[test]
+fn one_shot_action_rejects_a_route_owner_mismatch_without_plain_fallback() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let anchor = git_repo(&env.root.path().join("anchor-parent"));
+    let target = git_repo(&env.root.path().join("target-parent"));
+    RouteStore::new(paths.routes_dir)
+        .initialize(&socket, &anchor, std::process::id() + 1)
+        .unwrap();
+    let _lease = LeaseSet::new(paths.leases_dir)
+        .acquire(&socket, 99)
+        .unwrap();
+
+    one_shot_action(&env, &socket, &target)
+        .failure()
+        .stderr(predicate::str::contains("route belongs to wrapper"));
+
+    let log = env.read_log();
+    assert_eq!(log.matches("notification show").count(), 1, "{log}");
+    assert!(!log.contains("zed\t"), "{log}");
+}
+
+#[test]
+fn one_shot_action_rejects_multiple_live_wrappers_without_plain_fallback() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let target = git_repo(&env.root.path().join("target-parent"));
+    let leases = LeaseSet::new(paths.leases_dir);
+    let _first = leases.acquire(&socket, 99).unwrap();
+    let _second = leases.acquire(&socket, 100).unwrap();
+
+    one_shot_action(&env, &socket, &target)
+        .failure()
+        .stderr(predicate::str::contains("2 live wrappers"));
+
+    let log = env.read_log();
+    assert_eq!(log.matches("notification show").count(), 1, "{log}");
+    assert!(!log.contains("zed\t"), "{log}");
+}
+
+#[test]
+fn one_shot_action_keeps_the_captured_target_after_focus_changes_while_waiting_for_lock() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let captured = git_repo(&env.root.path().join("captured-parent"));
+    let newly_focused = git_repo(&env.root.path().join("new-parent"));
+    let workspace_file = env.root.path().join("workspaces.json");
+    fs::write(
+        &workspace_file,
+        serde_json::json!({"result":{"workspaces":[
+            {"workspace_id":"w-captured","focused":true,"worktree":{"checkout_path":captured}},
+            {"workspace_id":"w-new","focused":false,"worktree":{"checkout_path":newly_focused}}
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    let lock = SyncGuard::acquire(&paths.sync_locks_dir, &socket).unwrap();
+    let marker = env.root.path().join("action-waiting");
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"default","socket_path":socket}]}
+    });
+    let context = serde_json::json!({
+        "workspace_id":"w-captured",
+        "worktree":{"checkout_path":captured}
+    });
+    let mut command = env.std_command();
+    command
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .env("ZERDR_TEST_WORKSPACES_FILE", &workspace_file)
+        .env("ZERDR_TEST_SYNC_WAIT_MARKER", &marker);
+    let mut child = command.spawn().unwrap();
+    for _ in 0..200 {
+        if marker.exists() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(marker.exists());
+    assert!(child.try_wait().unwrap().is_none());
+
+    fs::write(
+        &workspace_file,
+        serde_json::json!({"result":{"workspaces":[
+            {"workspace_id":"w-captured","focused":false,"worktree":{"checkout_path":captured}},
+            {"workspace_id":"w-new","focused":true,"worktree":{"checkout_path":newly_focused}}
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    drop(lock);
+
+    assert!(child.wait().unwrap().success());
+    let log = env.read_log();
+    assert!(
+        log.contains(&format!("zed\t{}", captured.display())),
+        "{log}"
+    );
+    assert!(!log.contains(&newly_focused.display().to_string()), "{log}");
+    assert!(!log.contains("workspace list"), "{log}");
+}
+
+#[test]
+fn one_shot_action_rejects_invalid_marker_or_missing_socket_before_processes() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+
+    env.command()
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "wrong-action")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("expected open-zed"));
+    assert_eq!(env.read_log(), "");
+
+    env.command()
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env_remove("HERDR_SOCKET_PATH")
+        .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("missing HERDR_SOCKET_PATH"));
+    assert_eq!(env.read_log(), "");
+}
+
+#[test]
+fn one_shot_action_missing_workspace_or_root_notifies_the_resolved_session() {
+    for context in [r#"{"workspace_cwd":"/tmp"}"#, r#"{"workspace_id":"w1"}"#] {
+        let env = TestEnv::new();
+        let socket = env.root.path().join("default.sock");
+        fs::write(&socket, "").unwrap();
+        let sessions = serde_json::json!({
+            "result":{"sessions":[{"name":"default","socket_path":socket}]}
+        });
+
+        env.command()
+            .arg("open-from-herdr")
+            .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+            .env("HERDR_SOCKET_PATH", &socket)
+            .env("HERDR_PLUGIN_CONTEXT_JSON", context)
+            .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+            .assert()
+            .failure();
+
+        let log = env.read_log();
+        assert_eq!(log.matches("notification show").count(), 1, "{log}");
+        assert!(!log.contains("zed\t"), "{log}");
+        assert!(!Paths::for_test(env.root.path()).bindings_file.exists());
+    }
+}
+
+#[test]
+fn one_shot_action_rejects_a_noncanonical_binding_without_using_context() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let bound_root = git_repo(&env.root.path().join("bound-parent"));
+    let noncanonical = bound_root.join("nested");
+    fs::create_dir_all(&noncanonical).unwrap();
+    let context_root = git_repo(&env.root.path().join("context-parent"));
+    let paths = Paths::for_test(env.root.path());
+    fs::create_dir_all(paths.bindings_file.parent().unwrap()).unwrap();
+    fs::write(
+        &paths.bindings_file,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version":2,
+            "sessions":{"default":{"w-captured":noncanonical}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let original_bindings = fs::read(&paths.bindings_file).unwrap();
+
+    one_shot_action(&env, &socket, &context_root)
+        .failure()
+        .stderr(predicate::str::contains(
+            "not the canonical Git checkout root",
+        ));
+
+    let log = env.read_log();
+    assert_eq!(log.matches("notification show").count(), 1, "{log}");
+    assert!(!log.contains("zed\t"), "{log}");
+    assert_eq!(fs::read(paths.bindings_file).unwrap(), original_bindings);
+}
+
+#[test]
+fn one_shot_action_locked_malformed_lease_notifies_without_opening_zed() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let target = git_repo(&env.root.path().join("target-parent"));
+    let _valid = LeaseSet::new(paths.leases_dir.clone())
+        .acquire(&socket, 99)
+        .unwrap();
+    let socket_scope = fs::read_dir(&paths.leases_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let malformed_path = socket_scope.join("malformed.json");
+    let mut malformed = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(&malformed_path)
+        .unwrap();
+    malformed.lock_exclusive().unwrap();
+    malformed.write_all(b"{").unwrap();
+    malformed.flush().unwrap();
+
+    one_shot_action(&env, &socket, &target)
+        .failure()
+        .stderr(predicate::str::contains("locked lease"));
+
+    let log = env.read_log();
+    assert_eq!(log.matches("notification show").count(), 1, "{log}");
+    assert!(!log.contains("zed\t"), "{log}");
+}
+
+#[test]
+fn one_shot_action_internal_add_failure_keeps_anchor_and_notifies() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let anchor = git_repo(&env.root.path().join("anchor-parent"));
+    let target = git_repo(&env.root.path().join("target-parent"));
+    let routes = RouteStore::new(paths.routes_dir.clone());
+    routes
+        .initialize(&socket, &anchor, std::process::id())
+        .unwrap();
+    let _lease = LeaseSet::new(paths.leases_dir)
+        .acquire(&socket, 99)
+        .unwrap();
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"default","socket_path":socket}]}
+    });
+    let context = serde_json::json!({
+        "workspace_id":"w-captured",
+        "worktree":{"checkout_path":target}
+    });
+
+    env.command()
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .env("ZERDR_TEST_ZED_FAIL_ON", "--add")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("fake Zed --add failure"));
+
+    let log = env.read_log();
+    assert_eq!(log.matches("notification show").count(), 1, "{log}");
+    assert_eq!(
+        routes.load(&socket).unwrap().internal_anchor(),
+        Some(anchor.as_path())
+    );
 }
 
 #[test]

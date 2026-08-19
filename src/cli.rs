@@ -71,4 +71,6 @@ pub enum Command {
     Doctor,
     #[command(hide = true)]
     SyncFromHerdr,
+    #[command(hide = true)]
+    OpenFromHerdr,
 }
