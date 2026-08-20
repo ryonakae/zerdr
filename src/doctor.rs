@@ -346,21 +346,19 @@ fn inspect_manifest(paths: &Paths, install: &InstallState) -> Result<()> {
     }
 }
 
-/// Zed only runs `zerdr thread` for new terminal threads when its own settings point at
-/// the installed executable, and setup refuses to overwrite a value it does not own.
+/// The init command is optional automation, so its state is reported without failing:
+/// attaching manually with `zerdr thread` is the default workflow.
 fn report_init_command(paths: &Paths, install: &InstallState, report: &mut Report) {
     let expected = terminal_init_command(&install.executable);
+    let not_set = "Zed terminal_init_command is not set; attach by running `zerdr thread` inside a Zed terminal thread";
     let text = match fs::read_to_string(&paths.zed_settings_file) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            report.fail(format!(
-                "Zed terminal_init_command is not installed: {} is missing; run `zerdr setup`",
-                paths.zed_settings_file.display()
-            ));
+            report.pass(not_set);
             return;
         }
         Err(error) => {
-            report.fail(format!(
+            report.warn(format!(
                 "could not read the Zed settings file: {}",
                 Error::io(&paths.zed_settings_file, error)
             ));
@@ -369,13 +367,15 @@ fn report_init_command(paths: &Paths, install: &InstallState, report: &mut Repor
     };
     match installed_init_command(&text) {
         Ok(Some(current)) if current == expected => {
-            report.pass(format!("Zed terminal_init_command is installed: {current}"));
+            report.pass(format!(
+                "Zed terminal_init_command automates zerdr thread: {current}"
+            ));
         }
-        Ok(Some(current)) => report.fail(format!(
-            "Zed terminal_init_command is not owned by zerdr: {current:?}; set it to {expected:?} to attach terminal threads to Herdr"
+        Ok(Some(current)) => report.pass(format!(
+            "Zed terminal_init_command is set to a custom value: {current:?}"
         )),
-        Ok(None) => report.fail("Zed terminal_init_command is not installed; run `zerdr setup`"),
-        Err(error) => report.fail(format!("could not inspect the Zed settings file: {error}")),
+        Ok(None) => report.pass(not_set),
+        Err(error) => report.warn(format!("could not inspect the Zed settings file: {error}")),
     }
 }
 

@@ -28,7 +28,8 @@ pub(crate) struct InstallState {
     pub(crate) schema_version: u32,
     pub(crate) executable: PathBuf,
     pub(crate) task_fingerprints: BTreeMap<String, String>,
-    /// Absent in state files written before `zerdr thread` existed.
+    /// Recorded only by older versions that managed Zed's `agent.terminal_init_command`;
+    /// kept so setup and uninstall can migrate that value away.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) terminal_init_command_fingerprint: Option<String>,
 }
@@ -213,8 +214,12 @@ pub fn setup() -> Result<()> {
         .map_err(|error| Error::User(format!("Zed settings file is not UTF-8: {error}")))?
         .unwrap_or("{}\n")
         .to_owned();
-    let (merged_settings, foreign_init_command) =
-        merge_init_command(&original_settings_text, &init_command, old_install.as_ref())?;
+    // The init command became optional manual automation; a value written by an older
+    // zerdr (still owned per the recorded fingerprint) is migrated away here.
+    let migrated_settings = match old_install.as_ref() {
+        Some(previous) => remove_owned_init_command(&original_settings_text, previous)?,
+        None => original_settings_text.clone(),
+    };
     let install = InstallState {
         schema_version: INSTALL_SCHEMA_VERSION,
         executable: executable.clone(),
@@ -222,9 +227,7 @@ pub fn setup() -> Result<()> {
             .iter()
             .map(|task| (task_label(task).unwrap().to_owned(), fingerprint(task)))
             .collect(),
-        terminal_init_command_fingerprint: foreign_init_command
-            .is_none()
-            .then(|| fingerprint(&Value::String(init_command.clone()))),
+        terminal_init_command_fingerprint: None,
     };
 
     let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
@@ -243,12 +246,12 @@ pub fn setup() -> Result<()> {
         rollback_plugin(&herdr, &paths, previous_manifest.as_deref());
         return Err(error);
     }
-    if merged_settings.as_bytes() != original_settings_text.as_bytes() {
+    if migrated_settings.as_bytes() != original_settings_text.as_bytes() {
         let write = backup_before_mutation(&paths, "settings", &original_settings).and_then(|()| {
             write_checked(
                 &settings_file,
                 original_settings.as_deref(),
-                merged_settings.as_bytes(),
+                migrated_settings.as_bytes(),
             )
         });
         if let Err(error) = write {
@@ -273,11 +276,9 @@ pub fn setup() -> Result<()> {
     }
 
     println!("zerdr setup complete");
-    if let Some(foreign) = foreign_init_command {
-        println!(
-            "Preserved your Zed agent.terminal_init_command {foreign:?}; set it to {init_command:?} to attach terminal threads to Herdr"
-        );
-    }
+    println!(
+        "Attach a Zed terminal thread to Herdr by running `zerdr thread` inside it.\nOptional automation: set Zed's agent.terminal_init_command to {init_command:?} to attach every new terminal thread."
+    );
     println!(
         "Add this Herdr keybinding manually if desired:\n{}",
         include_str!("../assets/herdr/keymap.example.toml")
@@ -473,52 +474,6 @@ pub(crate) fn installed_init_command(text: &str) -> Result<Option<String>> {
         .and_then(|value| value.pointer("/agent/terminal_init_command"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned))
-}
-
-/// Add or refresh `agent.terminal_init_command`, leaving a value zerdr does not own
-/// untouched. Returns the new document text and the value that blocked the write.
-fn merge_init_command(
-    text: &str,
-    expected: &str,
-    previous: Option<&InstallState>,
-) -> Result<(String, Option<String>)> {
-    if let Some(current) = installed_init_command(text)? {
-        if current == expected {
-            return Ok((text.to_owned(), None));
-        }
-        let owned = previous
-            .and_then(|state| state.terminal_init_command_fingerprint.as_deref())
-            .is_some_and(|recorded| recorded == fingerprint(&Value::String(current.clone())));
-        if !owned {
-            return Ok((text.to_owned(), Some(current)));
-        }
-    }
-
-    let root = CstRootNode::parse(text, &ParseOptions::default())
-        .map_err(|error| Error::User(format!("failed to parse Zed settings JSONC: {error}")))?;
-    let object = root.object_value().ok_or_else(|| {
-        Error::User("Zed settings file must contain a top-level object".to_owned())
-    })?;
-    let agent = match object.object_value("agent") {
-        Some(agent) => agent,
-        None => object
-            .append("agent", CstInputValue::Object(Vec::new()))
-            .object_value()
-            .ok_or_else(|| Error::User("could not create the Zed agent settings".to_owned()))?,
-    };
-    match agent.get("terminal_init_command") {
-        Some(property) => {
-            property.set_value(CstInputValue::String(expected.to_owned()));
-        }
-        None => {
-            agent.append(
-                "terminal_init_command",
-                CstInputValue::String(expected.to_owned()),
-            );
-        }
-    }
-    object.ensure_multiline();
-    Ok((root.to_string(), None))
 }
 
 /// Drop `agent.terminal_init_command` when it still matches what setup recorded.

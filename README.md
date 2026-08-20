@@ -43,7 +43,7 @@ The action opens the current workspace in Zed once and leaves Zed in front. `zer
 
 ## Terminal threads
 
-`zerdr setup` also points Zed's `agent.terminal_init_command` at `zerdr thread`, so opening a terminal thread in Zed's agent panel attaches it to a Herdr agent. The thread finds the Herdr workspace for the project you have open and takes a free agent there; if every agent is already attached to another thread, it starts a new one in a new Herdr tab. Opening a thread therefore always gets you an agent.
+Open a terminal thread in Zed's agent panel and run `zerdr thread` inside it. zerdr finds the Herdr workspace for the project you have open and attaches the thread to a free agent there; if every agent is already attached to another thread, it starts a new one in a new Herdr tab. Either way you end up talking to an agent.
 
 While attached, zerdr mirrors the agent's name and Herdr terminal title into the threads sidebar and rings the terminal bell when the agent stops working, which is what makes Zed notify you. Enable Zed's notifications to see it:
 
@@ -56,9 +56,11 @@ While attached, zerdr mirrors the agent's name and Herdr terminal title into the
 }
 ```
 
-Because Herdr owns the session, closing a thread or restarting Zed does not stop the agent. Reopen the thread to attach again, or reach the same agent over SSH with `herdr` from another machine.
+Because Herdr owns the session, closing a thread or restarting Zed does not stop the agent. Reopen a thread and run `zerdr thread` to attach again, or reach the same agent over SSH with `herdr` from another machine.
 
-Threads only attach to workspaces Herdr already manages. In a checkout without one, `zerdr thread` says so rather than adding a workspace, since the init command runs for every project you open in Zed. Run `zerdr thread --create` there when you do want the workspace.
+Attaching is deliberately manual, so Zed sessions that do not involve Herdr stay untouched. If you want every new terminal thread attached automatically, set Zed's `agent.terminal_init_command` to `zerdr thread` yourself; `zerdr setup` prints the exact value and a `terminal::SendText` keybinding example for typing the command with one key.
+
+Threads only attach to workspaces Herdr already manages. In a checkout without one, `zerdr thread` says so rather than adding a workspace. Run `zerdr thread --create` there when you do want the workspace.
 
 ## Commands
 
@@ -72,7 +74,7 @@ Threads only attach to workspaces Herdr already manages. In a checkout without o
 | `zerdr [--session NAME] bind [PATH]` | Bind the selected workspace to a Git checkout; sync it when a wrapper is live. |
 | `zerdr [--session NAME] unbind` | Remove the selected workspace binding. |
 | `zerdr [--session NAME] thread [TARGET]` | Attach a Zed terminal thread to a Herdr agent; `TARGET` is a pane id or agent name. Add `--kind KIND` to choose what to start, or `--create` to allow creating the workspace. |
-| `zerdr setup` | Install or update the Herdr plugin, five global Zed tasks, and Zed's terminal thread init command. |
+| `zerdr setup` | Install or update the Herdr plugin and five global Zed tasks. |
 | `zerdr uninstall [--purge]` | Remove integration files; `--purge` removes zerdr state too. |
 | `zerdr [--session NAME] doctor` | Check required commands, installed files, bindings, routes, and leases for the selected session. |
 
@@ -96,7 +98,7 @@ The one-shot plugin action reuses an applicable live wrapper route. Without a wr
 - **Rust 1.93.1:** required for the current source installation.
 - **Zed 1.15.0 or newer:** the `zed` CLI must expose `--existing` and `--add`.
 - **Herdr 0.8.0 or newer:** the plugin API must expose `workspace.focused` events, workspace actions, and plugin-action keybindings.
-- **Zed terminal threads:** `zerdr thread` needs a Zed version whose agent panel hosts terminal threads and runs `agent.terminal_init_command`.
+- **Zed terminal threads:** `zerdr thread` needs a Zed version whose agent panel hosts terminal threads.
 - **Local Git checkouts:** each Herdr workspace maps to one canonical checkout root.
 - **Local macOS or Linux terminal:** runtime commands reject SSH, WSL, containers, and dev containers.
 
@@ -105,7 +107,7 @@ The one-shot plugin action reuses an applicable live wrapper route. Without a wr
 ## Notes
 
 - **Keybindings:** `zerdr setup` adds global Zed tasks and prints optional Herdr and Zed keybindings. It does not edit your Herdr config or Zed keymap.
-- **Terminal thread ownership:** setup writes `agent.terminal_init_command` only when it is absent or still holds the value setup last wrote. Your own value is reported and kept, and `zerdr doctor` shows which case applies. Your `settings.json` is backed up under zerdr's state directory before either change.
+- **Terminal thread automation:** setup never writes `agent.terminal_init_command`; automation is opt-in and yours to configure. An init command that an older zerdr installed is migrated away by the next `zerdr setup` or `zerdr uninstall` (with a backup under zerdr's state directory), and `zerdr doctor` reports the setting informationally.
 - **One thread per agent:** two terminal threads never share an agent. Attaching an agent that already has a thread fails and names the pane.
 - **Wrapper ownership:** Each Herdr session can have one live zerdr wrapper. Stop that session's wrapper before changing its routing mode. Wrappers for different named sessions can coexist.
 - **Session lifetime:** Exiting a zerdr client stops synchronization for that wrapper, but the default or named Herdr session remains available to `herdr` and future zerdr clients.

@@ -1,5 +1,11 @@
 [
   {
+    "context": "Terminal",
+    "bindings": {
+      "ctrl-alt-t": ["terminal::SendText", "zerdr thread\n"]
+    }
+  },
+  {
     "context": "Workspace",
     "bindings": {
       "ctrl-alt-p": ["task::Spawn", { "task_name": "zerdr: Pick Workspace", "reveal_target": "center" }],

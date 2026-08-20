@@ -11,6 +11,7 @@ use zerdr::state::{LeaseSet, LifecycleGuard, Paths, RouteFocus, RouteStore, Rout
 use jsonc_parser::ParseOptions;
 use jsonc_parser::cst::CstRootNode;
 use predicates::prelude::*;
+use sha2::Digest;
 use support::{TestEnv, compatible_plugins_json};
 
 const OWNED_LABELS: [&str; 5] = [
@@ -1366,190 +1367,82 @@ fn doctor_fails_when_zed_lacks_add_capability() {
 }
 
 #[test]
-fn setup_installs_the_terminal_init_command_and_uninstall_removes_it() {
+fn setup_leaves_zed_settings_alone_and_prints_the_thread_hint() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
-
-    env.command().arg("setup").assert().success();
-
-    let settings = fs::read_to_string(&paths.zed_settings_file).unwrap();
-    let parsed = parse_settings(&settings);
     let expected = format!(
         "{} thread",
         assert_cmd::cargo::cargo_bin!("zerdr").display()
     );
-    assert_eq!(parsed["agent"]["terminal_init_command"], expected.as_str());
-
-    env.command().arg("uninstall").assert().success();
-
-    let after = fs::read_to_string(&paths.zed_settings_file).unwrap();
-    let parsed = parse_settings(&after);
-    assert!(
-        parsed["agent"].get("terminal_init_command").is_none(),
-        "{after}"
-    );
-}
-
-#[test]
-fn setup_preserves_a_foreign_terminal_init_command_and_says_so() {
-    let env = TestEnv::new();
-    let paths = Paths::for_test(env.root.path());
-    fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
-    let original = r#"{
-  // keep my own agent bootstrap
-  "agent": { "terminal_init_command": "claude" },
-  "theme": "One Dark"
-}
-"#;
-    fs::write(&paths.zed_settings_file, original).unwrap();
 
     env.command()
         .arg("setup")
         .assert()
         .success()
-        .stdout(predicate::str::contains("terminal_init_command"));
+        .stdout(predicate::str::contains("zerdr thread"))
+        .stdout(predicate::str::contains("terminal_init_command"))
+        .stdout(predicate::str::contains(expected.as_str()));
 
-    assert_eq!(
-        fs::read_to_string(&paths.zed_settings_file).unwrap(),
-        original
-    );
-
-    env.command().arg("uninstall").assert().success();
-    assert_eq!(
-        fs::read_to_string(&paths.zed_settings_file).unwrap(),
-        original
-    );
-}
-
-#[test]
-fn setup_adds_the_init_command_without_disturbing_existing_settings() {
-    let env = TestEnv::new();
-    let paths = Paths::for_test(env.root.path());
-    fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
-    fs::write(
-        &paths.zed_settings_file,
-        r#"{
-  // my editor preferences
-  "theme": "One Dark",
-  "agent": { "default_model": { "provider": "zed.dev" } }
-}
-"#,
-    )
-    .unwrap();
-
-    env.command().arg("setup").assert().success();
-
-    let settings = fs::read_to_string(&paths.zed_settings_file).unwrap();
-    assert!(settings.contains("// my editor preferences"), "{settings}");
-    assert!(settings.contains("One Dark"), "{settings}");
-    assert!(settings.contains("default_model"), "{settings}");
-    assert!(settings.contains("terminal_init_command"), "{settings}");
-}
-
-#[test]
-fn setup_refreshes_an_owned_init_command_after_the_executable_moves() {
-    let env = TestEnv::new();
-    let paths = Paths::for_test(env.root.path());
-    let moved = env.root.path().join("bin/zerdr-moved");
-    fs::copy(assert_cmd::cargo::cargo_bin!("zerdr"), &moved).unwrap();
-
-    env.command().arg("setup").assert().success();
-    env.command_for(&moved)
-        .env("ZERDR_SETUP_EXECUTABLE", &moved)
-        .arg("setup")
-        .assert()
-        .success();
-
-    let settings = fs::read_to_string(&paths.zed_settings_file).unwrap();
     assert!(
-        settings.contains(&format!("{} thread", moved.display())),
-        "{settings}"
+        !paths.zed_settings_file.exists(),
+        "setup must not create the Zed settings file"
     );
-    assert!(
-        !settings.contains(&format!(
-            "{} thread",
-            assert_cmd::cargo::cargo_bin!("zerdr").display()
-        )),
-        "{settings}"
-    );
-}
-
-#[test]
-fn doctor_reports_the_terminal_init_command_state() {
-    let expectations = [
-        (None, "Zed terminal_init_command is not installed"),
-        (
-            Some("claude"),
-            "Zed terminal_init_command is not owned by zerdr",
-        ),
-    ];
-    for (existing, expected) in expectations {
-        let env = TestEnv::new();
-        let paths = Paths::for_test(env.root.path());
-        if let Some(existing) = existing {
-            fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
-            fs::write(
-                &paths.zed_settings_file,
-                format!(r#"{{"agent":{{"terminal_init_command":"{existing}"}}}}"#),
-            )
-            .unwrap();
-        }
-        env.command().arg("setup").assert().success();
-        if existing.is_none() {
-            fs::remove_file(&paths.zed_settings_file).unwrap();
-        }
-
-        env.command()
-            .arg("doctor")
-            .assert()
-            .failure()
-            .stdout(predicate::str::contains(expected));
-    }
-
-    let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
-    env.command()
-        .arg("doctor")
-        .assert()
-        .stdout(predicate::str::contains(
-            "Zed terminal_init_command is installed",
-        ));
-}
-
-#[test]
-fn install_state_without_the_init_command_fingerprint_still_loads() {
-    let env = TestEnv::new();
-    let paths = Paths::for_test(env.root.path());
-    env.command().arg("setup").assert().success();
-    let mut install: serde_json::Value =
+    let install: serde_json::Value =
         serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
-    install
-        .as_object_mut()
-        .unwrap()
-        .remove("terminal_init_command_fingerprint")
-        .expect("setup records the fingerprint");
-    fs::write(
-        &paths.install_state_file,
-        serde_json::to_vec(&install).unwrap(),
-    )
-    .unwrap();
-
-    env.command()
-        .arg("doctor")
-        .assert()
-        .code(predicate::in_iter([0, 1]));
+    assert!(
+        install.get("terminal_init_command_fingerprint").is_none(),
+        "{install}"
+    );
 }
 
 #[test]
-fn mutating_zed_settings_backs_up_the_original_first() {
+fn setup_leaves_unrelated_zed_settings_byte_identical() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
     fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
-    let original = "{\n  \"theme\": \"One Dark\"\n}\n";
+    let original = "{\n  // my editor preferences\n  \"theme\": \"One Dark\"\n}\n";
     fs::write(&paths.zed_settings_file, original).unwrap();
 
     env.command().arg("setup").assert().success();
 
+    assert_eq!(
+        fs::read_to_string(&paths.zed_settings_file).unwrap(),
+        original
+    );
+}
+
+/// Installs made before init-command management was dropped left the setting and its
+/// ownership fingerprint behind; setup migrates them away, with a backup.
+#[test]
+fn setup_removes_a_previously_owned_init_command() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    env.command().arg("setup").assert().success();
+    let command = format!(
+        "{} thread",
+        assert_cmd::cargo::cargo_bin!("zerdr").display()
+    );
+    seed_owned_install(&paths, &command);
+    fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
+    let original = format!(
+        "{{\n  \"theme\": \"One Dark\",\n  \"agent\": {{ \"terminal_init_command\": {} }}\n}}\n",
+        serde_json::to_string(&command).unwrap()
+    );
+    fs::write(&paths.zed_settings_file, &original).unwrap();
+
+    env.command().arg("setup").assert().success();
+
+    let after = fs::read_to_string(&paths.zed_settings_file).unwrap();
+    assert!(
+        parse_settings(&after)["agent"]
+            .get("terminal_init_command")
+            .is_none(),
+        "{after}"
+    );
+    assert!(after.contains("One Dark"), "{after}");
+    let install: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
+    assert!(install.get("terminal_init_command_fingerprint").is_none());
     let backups = paths.state_dir.join("backups");
     let saved = fs::read_dir(&backups)
         .unwrap()
@@ -1557,12 +1450,117 @@ fn mutating_zed_settings_backs_up_the_original_first() {
         .filter(|entry| entry.file_name().to_string_lossy().starts_with("settings-"))
         .map(|entry| fs::read_to_string(entry.path()).unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(saved, vec![original.to_owned()]);
+    assert_eq!(saved, vec![original]);
 }
 
-/// Zed configuration is commonly a symlink into a dotfiles checkout. Setup must write
-/// through to the real file so the symlink survives and the dotfiles copy stays the
-/// source of truth.
+#[test]
+fn setup_and_uninstall_leave_a_foreign_init_command_untouched() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
+    let original = "{\n  // keep my own agent bootstrap\n  \"agent\": { \"terminal_init_command\": \"claude\" },\n  \"theme\": \"One Dark\"\n}\n";
+    fs::write(&paths.zed_settings_file, original).unwrap();
+
+    env.command().arg("setup").assert().success();
+    assert_eq!(
+        fs::read_to_string(&paths.zed_settings_file).unwrap(),
+        original
+    );
+
+    env.command().arg("uninstall").assert().success();
+    assert_eq!(
+        fs::read_to_string(&paths.zed_settings_file).unwrap(),
+        original
+    );
+}
+
+/// Uninstall still cleans up an init command that an older zerdr installed and recorded.
+#[test]
+fn uninstall_removes_a_previously_owned_init_command() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    env.command().arg("setup").assert().success();
+    let command = format!(
+        "{} thread",
+        assert_cmd::cargo::cargo_bin!("zerdr").display()
+    );
+    seed_owned_install(&paths, &command);
+    fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
+    fs::write(
+        &paths.zed_settings_file,
+        format!(
+            "{{\n  \"agent\": {{ \"terminal_init_command\": {} }}\n}}\n",
+            serde_json::to_string(&command).unwrap()
+        ),
+    )
+    .unwrap();
+
+    env.command().arg("uninstall").assert().success();
+
+    let after = fs::read_to_string(&paths.zed_settings_file).unwrap();
+    assert!(
+        parse_settings(&after)["agent"]
+            .get("terminal_init_command")
+            .is_none(),
+        "{after}"
+    );
+}
+
+/// The init command is optional automation now, so doctor informs and never fails on it.
+#[test]
+fn doctor_reports_the_terminal_init_command_informationally() {
+    let expected = format!(
+        "{} thread",
+        assert_cmd::cargo::cargo_bin!("zerdr").display()
+    );
+    let cases = [
+        (None, "Zed terminal_init_command is not set"),
+        (
+            Some("claude"),
+            "Zed terminal_init_command is set to a custom value",
+        ),
+        (
+            Some(expected.as_str()),
+            "Zed terminal_init_command automates zerdr thread",
+        ),
+    ];
+    for (existing, report) in cases {
+        let env = TestEnv::new();
+        let paths = Paths::for_test(env.root.path());
+        if let Some(existing) = existing {
+            fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
+            fs::write(
+                &paths.zed_settings_file,
+                format!(
+                    "{{\"agent\":{{\"terminal_init_command\":{}}}}}",
+                    serde_json::to_string(existing).unwrap()
+                ),
+            )
+            .unwrap();
+        }
+        env.command().arg("setup").assert().success();
+
+        env.command()
+            .arg("doctor")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(report));
+    }
+}
+
+#[test]
+fn install_state_with_a_legacy_fingerprint_still_loads() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    env.command().arg("setup").assert().success();
+    seed_owned_install(&paths, "stale value");
+
+    env.command().arg("doctor").assert().success();
+}
+
+/// Zed configuration is commonly a symlink into a dotfiles checkout. Setup must operate
+/// on the real file so the symlink survives and the dotfiles copy stays the source of
+/// truth — for the owned tasks it installs and for the init command it migrates away.
 #[test]
 fn setup_writes_through_symlinked_zed_configuration() {
     let env = TestEnv::new();
@@ -1572,10 +1570,20 @@ fn setup_writes_through_symlinked_zed_configuration() {
     fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
     let real_settings = dotfiles.join("settings.json");
     let real_tasks = dotfiles.join("tasks.json");
-    fs::write(&real_settings, "{\n  \"theme\": \"One Dark\"\n}\n").unwrap();
+    let command = format!(
+        "{} thread",
+        assert_cmd::cargo::cargo_bin!("zerdr").display()
+    );
+    let seeded_settings = format!(
+        "{{\n  \"theme\": \"One Dark\",\n  \"agent\": {{ \"terminal_init_command\": {} }}\n}}\n",
+        serde_json::to_string(&command).unwrap()
+    );
+    fs::write(&real_settings, &seeded_settings).unwrap();
     fs::write(&real_tasks, "[]\n").unwrap();
     symlink(&real_settings, &paths.zed_settings_file).unwrap();
     symlink(&real_tasks, &paths.zed_tasks_file).unwrap();
+    env.command().arg("setup").assert().success();
+    seed_owned_install(&paths, &command);
 
     env.command().arg("setup").assert().success();
 
@@ -1586,14 +1594,12 @@ fn setup_writes_through_symlinked_zed_configuration() {
             link.display()
         );
     }
-    let expected = format!(
-        "{} thread",
-        assert_cmd::cargo::cargo_bin!("zerdr").display()
-    );
     let settings = fs::read_to_string(&real_settings).unwrap();
-    assert_eq!(
-        parse_settings(&settings)["agent"]["terminal_init_command"],
-        expected.as_str()
+    assert!(
+        parse_settings(&settings)["agent"]
+            .get("terminal_init_command")
+            .is_none(),
+        "{settings}"
     );
     assert!(settings.contains("One Dark"), "{settings}");
     assert!(
@@ -1602,23 +1608,6 @@ fn setup_writes_through_symlinked_zed_configuration() {
             .contains("zerdr: Herdr"),
         "owned tasks must land in the real file too"
     );
-
-    env.command().arg("uninstall").assert().success();
-
-    assert!(
-        fs::symlink_metadata(&paths.zed_settings_file)
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    let after = fs::read_to_string(&real_settings).unwrap();
-    assert!(
-        parse_settings(&after)["agent"]
-            .get("terminal_init_command")
-            .is_none(),
-        "{after}"
-    );
-    assert!(after.contains("One Dark"), "{after}");
 }
 
 /// A symlink with no target is a broken configuration, not something to write through.
@@ -1638,6 +1627,22 @@ fn setup_refuses_a_broken_zed_configuration_symlink() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("broken symlink"));
+}
+
+fn seed_owned_install(paths: &Paths, command: &str) {
+    let mut install: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
+    let bytes = serde_json::to_vec(&serde_json::Value::String(command.to_owned())).unwrap();
+    let fingerprint = hex::encode(sha2::Sha256::digest(&bytes));
+    install.as_object_mut().unwrap().insert(
+        "terminal_init_command_fingerprint".into(),
+        fingerprint.into(),
+    );
+    fs::write(
+        &paths.install_state_file,
+        serde_json::to_vec(&install).unwrap(),
+    )
+    .unwrap();
 }
 
 fn parse_settings(text: &str) -> serde_json::Value {
