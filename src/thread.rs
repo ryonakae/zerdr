@@ -10,7 +10,6 @@ use crate::state::{
     BindingStore, OperationGuard, Paths, ThreadLeaseGuard, ThreadLeaseSet, canonical_git_root,
 };
 
-const DEFAULT_KIND: &str = "pi";
 const DEFAULT_POLL_MS: u64 = 2_000;
 const SETTLED_STATES: [&str; 3] = ["idle", "done", "blocked"];
 
@@ -40,13 +39,13 @@ pub fn run(
         socket: &socket,
     };
 
-    let (agent, _lease) = match target {
+    let (agent, _lease, terminal) = match target {
         Some(target) => {
             let agent = herdr
                 .agent_get_for(session_name, target)?
                 .ok_or_else(|| Error::User(format!("no Herdr agent matches {target:?}")))?;
             let lease = leases.acquire(session_name, &socket, &agent.pane_id)?;
-            (agent, lease)
+            (agent, lease, None)
         }
         None => resolve_or_create(&session, &paths, kind, create)?,
     };
@@ -69,7 +68,12 @@ pub fn run(
         .find(|workspace| workspace.id == agent.workspace_id)
         .map(|workspace| workspace.label.clone());
 
-    let mut child = ManagedChild::new(herdr.spawn_agent_attach_for(session_name, &agent.pane_id)?);
+    // A fresh pane holds only a shell, which `agent attach` refuses, so it is reached
+    // through its terminal instead.
+    let mut child = ManagedChild::new(match terminal.as_deref() {
+        Some(terminal_id) => herdr.spawn_terminal_attach_for(session_name, terminal_id)?,
+        None => herdr.spawn_agent_attach_for(session_name, &agent.pane_id)?,
+    });
     let _signals = SignalForwarder::new(child.id())?;
     let monitor = Monitor::start(
         herdr.clone(),
@@ -90,15 +94,15 @@ pub fn run(
     }
 }
 
-/// Resolve the agent for a bare invocation, creating a tab or workspace when needed.
+/// Resolve the pane for a bare invocation, creating a tab or workspace when needed.
 /// The whole sequence runs under one lock per session socket so two threads racing on an
-/// empty workspace cannot both start an agent.
+/// empty workspace cannot claim the same pane.
 fn resolve_or_create(
     session: &Session<'_>,
     paths: &Paths,
     kind: Option<&str>,
     create: bool,
-) -> Result<(AgentInfo, ThreadLeaseGuard)> {
+) -> Result<(AgentInfo, ThreadLeaseGuard, Option<String>)> {
     let cwd = std::env::current_dir()
         .map_err(|error| Error::User(format!("failed to read the current directory: {error}")))?;
     let root = canonical_git_root(&cwd).map_err(|error| {
@@ -150,7 +154,7 @@ fn resolve_or_create(
         let lease = session
             .leases
             .acquire(session.name, session.socket, &agent.pane_id)?;
-        return Ok((agent.clone(), lease));
+        return Ok((agent.clone(), lease, None));
     }
 
     let pane_id = session
@@ -159,17 +163,33 @@ fn resolve_or_create(
     start_and_lease(session, &workspace_id, &pane_id, kind, &agents)
 }
 
+/// A fresh pane starts as a plain shell, matching a new Herdr tab; an agent is started
+/// in it only when a kind was explicitly requested via `--kind` or `ZERDR_THREAD_KIND`.
 fn start_and_lease(
     session: &Session<'_>,
     workspace_id: &str,
     pane_id: &str,
     kind: Option<&str>,
     live_agents: &[AgentInfo],
-) -> Result<(AgentInfo, ThreadLeaseGuard)> {
-    let kind = kind
+) -> Result<(AgentInfo, ThreadLeaseGuard, Option<String>)> {
+    let Some(kind) = kind
         .map(ToOwned::to_owned)
         .or_else(|| std::env::var("ZERDR_THREAD_KIND").ok())
-        .unwrap_or_else(|| DEFAULT_KIND.to_owned());
+    else {
+        let terminal_id = session.herdr.pane_terminal_for(session.name, pane_id)?;
+        let lease = session
+            .leases
+            .acquire(session.name, session.socket, pane_id)?;
+        let shell = AgentInfo {
+            kind: String::new(),
+            name: None,
+            status: "unknown".to_owned(),
+            pane_id: pane_id.to_owned(),
+            workspace_id: workspace_id.to_owned(),
+            title: None,
+        };
+        return Ok((shell, lease, Some(terminal_id)));
+    };
     let name = generate_agent_name(live_agents);
     session
         .herdr
@@ -192,7 +212,7 @@ fn start_and_lease(
             workspace_id: workspace_id.to_owned(),
             title: None,
         });
-    Ok((agent, lease))
+    Ok((agent, lease, None))
 }
 
 /// Explicit bindings win, then Herdr's own checkout metadata, then where the

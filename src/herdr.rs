@@ -159,13 +159,37 @@ impl Herdr {
     }
 
     pub fn spawn_agent_attach_for(&self, session_name: &str, target: &str) -> Result<Child> {
+        self.spawn_attach(session_name, "agent", target)
+    }
+
+    pub fn spawn_terminal_attach_for(
+        &self,
+        session_name: &str,
+        terminal_id: &str,
+    ) -> Result<Child> {
+        self.spawn_attach(session_name, "terminal", terminal_id)
+    }
+
+    fn spawn_attach(&self, session_name: &str, surface: &str, target: &str) -> Result<Child> {
         Command::new(&self.program)
-            .args(["--session", session_name, "agent", "attach", target])
+            .args(["--session", session_name, surface, "attach", target])
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .spawn()
-            .map_err(|error| Error::User(format!("failed to attach to Herdr agent: {error}")))
+            .map_err(|error| Error::User(format!("failed to attach to Herdr {surface}: {error}")))
+    }
+
+    pub fn pane_terminal_for(&self, session_name: &str, pane_id: &str) -> Result<String> {
+        let value = self.session_json_output_for(session_name, ["pane", "get", pane_id])?;
+        value
+            .pointer("/result/pane/terminal_id")
+            .or_else(|| value.pointer("/pane/terminal_id"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| {
+                Error::User(format!("Herdr pane {pane_id} did not report a terminal id"))
+            })
     }
 
     pub fn session_socket(&self) -> Result<PathBuf> {

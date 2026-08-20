@@ -84,7 +84,7 @@ pub enum Command {
         /// Target a named persistent Herdr session.
         #[arg(long)]
         session: Option<String>,
-        /// Agent kind to start when the workspace has no free agent.
+        /// Start an agent of this kind in a fresh pane instead of a plain shell.
         #[arg(long, conflicts_with = "target")]
         kind: Option<String>,
         /// Create the Herdr workspace when none matches this Git checkout.

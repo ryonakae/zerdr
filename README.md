@@ -43,7 +43,7 @@ The action opens the current workspace in Zed once and leaves Zed in front. `zer
 
 ## Terminal threads
 
-Open a terminal thread in Zed's agent panel and run `zerdr thread` inside it. zerdr finds the Herdr workspace for the project you have open — by explicit binding, by Herdr's recorded checkout, or by where the workspace's panes sit, remembering that last match as a binding — and attaches the thread to a free agent there; if every agent is already attached to another thread, it starts a new one in a new Herdr tab. Either way you end up talking to an agent.
+Open a terminal thread in Zed's agent panel and run `zerdr thread` inside it. zerdr finds the Herdr workspace for the project you have open — by explicit binding, by Herdr's recorded checkout, or by where the workspace's panes sit, remembering that last match as a binding — and attaches the thread to a free agent there. If every agent is already attached to another thread, it opens a fresh Herdr tab holding a plain shell, the same starting point as creating a tab in Herdr; launch whatever you like there and the sidebar title and notifications follow as soon as Herdr recognizes the agent. Pass `--kind pi` (or set `ZERDR_THREAD_KIND`) to have the fresh tab start an agent immediately instead.
 
 While attached, zerdr mirrors the agent's name and Herdr terminal title into the threads sidebar and rings the terminal bell when the agent stops working, which is what makes Zed notify you. Enable Zed's notifications to see it:
 
@@ -73,7 +73,7 @@ Threads only attach to workspaces Herdr already manages. In a checkout without o
 | `zerdr [--session NAME] sync` | Reapply the focused Herdr workspace route to Zed. |
 | `zerdr [--session NAME] bind [PATH]` | Bind the selected workspace to a Git checkout; sync it when a wrapper is live. |
 | `zerdr [--session NAME] unbind` | Remove the selected workspace binding. |
-| `zerdr [--session NAME] thread [TARGET]` | Attach a Zed terminal thread to a Herdr agent; `TARGET` is a pane id or agent name. Add `--kind KIND` to choose what to start, or `--create` to allow creating the workspace. |
+| `zerdr [--session NAME] thread [TARGET]` | Attach a Zed terminal thread to a Herdr agent or a fresh shell tab; `TARGET` is a pane id or agent name. Add `--kind KIND` to start an agent in the fresh tab, or `--create` to allow creating the workspace. |
 | `zerdr setup` | Install or update the Herdr plugin and five global Zed tasks. |
 | `zerdr uninstall [--purge]` | Remove integration files; `--purge` removes zerdr state too. |
 | `zerdr [--session NAME] doctor` | Check required commands, installed files, bindings, routes, and leases for the selected session. |

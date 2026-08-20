@@ -119,6 +119,30 @@ if [ "$1" = "--session" ] && [ "$3" = "agent" ] && [ "$4" = "get" ]; then
   printf '%s\n' "$ZERDR_TEST_AGENT_GET_JSON"
   exit 0
 fi
+if [ "$1" = "--session" ] && [ "$3" = "pane" ] && [ "$4" = "get" ]; then
+  found=''
+  if [ -n "$ZERDR_TEST_AGENTS_DIR" ]; then
+    for entry in "$ZERDR_TEST_AGENTS_DIR"/*.json; do
+      [ -f "$entry" ] || continue
+      body=$(tr -d '\n' < "$entry")
+      case "$body" in
+        *"\"pane_id\":\"$5\""*) found="$body";;
+      esac
+    done
+  fi
+  if [ -n "$found" ]; then
+    printf '{"result":{"type":"pane_info","pane":%s}\n' "$found" | sed 's/}$/,"terminal_id":"term-'"$5"'"}}/'
+  else
+    printf '{"result":{"type":"pane_info","pane":{"pane_id":"%s","terminal_id":"term-%s"}}}\n' "$5" "$5"
+  fi
+  exit 0
+fi
+if [ "$1" = "--session" ] && [ "$3" = "terminal" ] && [ "$4" = "attach" ]; then
+  if [ -n "$ZERDR_TEST_ATTACH_RELEASE_FILE" ]; then
+    while [ ! -e "$ZERDR_TEST_ATTACH_RELEASE_FILE" ]; do sleep 0.01; done
+  fi
+  exit "${ZERDR_TEST_ATTACH_EXIT:-0}"
+fi
 if [ "$1" = "--session" ] && [ "$3" = "agent" ] && [ "$4" = "attach" ]; then
   if [ -n "$ZERDR_TEST_ATTACH_RELEASE_FILE" ]; then
     while [ ! -e "$ZERDR_TEST_ATTACH_RELEASE_FILE" ]; do sleep 0.01; done
