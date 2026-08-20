@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::process::Command;
@@ -8,7 +9,8 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 use zerdr::state::{
-    BindingStore, LeaseSet, LifecycleGuard, Paths, RouteFocus, RouteStore, RouteStrategy, SyncGuard,
+    BindingStore, LeaseSet, LifecycleGuard, Paths, RouteFocus, RouteStore, RouteStrategy,
+    SyncGuard, ThreadLeaseSet,
 };
 
 fn git_repo() -> (TempDir, std::path::PathBuf) {
@@ -469,4 +471,75 @@ fn another_socket_does_not_authorize_the_event_socket() {
 
     let _guard = leases.acquire(&first_socket, 101).unwrap();
     assert!(!leases.has_live(&second_socket).unwrap());
+}
+
+#[test]
+fn thread_leases_are_per_pane_and_reject_a_live_duplicate() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let socket = state.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
+
+    let first = leases.acquire("default", &socket, "w1:p1").unwrap();
+    assert_eq!(
+        leases.leased_panes("default", &socket).unwrap(),
+        BTreeSet::from(["w1:p1".to_owned()])
+    );
+
+    assert!(leases.acquire("default", &socket, "w1:p1").is_err());
+    let _second = leases.acquire("default", &socket, "w1:p2").unwrap();
+    assert_eq!(
+        leases.leased_panes("default", &socket).unwrap(),
+        BTreeSet::from(["w1:p1".to_owned(), "w1:p2".to_owned()])
+    );
+
+    drop(first);
+    assert_eq!(
+        leases.leased_panes("default", &socket).unwrap(),
+        BTreeSet::from(["w1:p2".to_owned()])
+    );
+    assert!(leases.acquire("default", &socket, "w1:p1").is_ok());
+}
+
+#[test]
+fn thread_leases_treat_an_unlocked_record_as_stale() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let socket = state.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
+
+    // Reproduce what a killed thread leaves behind: a valid record whose lock is free.
+    let guard = leases.acquire("default", &socket, "w1:p1").unwrap();
+    let path = guard.path().to_path_buf();
+    let record = fs::read(&path).unwrap();
+    drop(guard);
+    fs::write(&path, &record).unwrap();
+
+    assert_eq!(
+        leases.leased_panes("default", &socket).unwrap(),
+        BTreeSet::new()
+    );
+    assert!(leases.acquire("default", &socket, "w1:p1").is_ok());
+}
+
+#[test]
+fn thread_leases_are_scoped_by_session_and_socket() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let first_socket = state.path().join("first.sock");
+    let second_socket = state.path().join("second.sock");
+    fs::write(&first_socket, "").unwrap();
+    fs::write(&second_socket, "").unwrap();
+    let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
+
+    let _held = leases.acquire("default", &first_socket, "w1:p1").unwrap();
+
+    let _other_session = leases.acquire("work", &first_socket, "w1:p1").unwrap();
+    let _other_socket = leases.acquire("default", &second_socket, "w1:p1").unwrap();
+    assert_eq!(
+        leases.leased_panes("default", &second_socket).unwrap(),
+        BTreeSet::from(["w1:p1".to_owned()])
+    );
 }

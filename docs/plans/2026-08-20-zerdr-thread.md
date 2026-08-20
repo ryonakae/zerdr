@@ -129,7 +129,7 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 ## Progress
 
 - [x] Task 1: Herdr CLI helpers + fake herdr extensions
-- [ ] Task 2: Thread lease store in `state.rs`
+- [x] Task 2: Thread lease store in `state.rs`
 - [ ] Task 3: `zerdr thread` subcommand (resolution, auto-start, attach, monitor)
 - [ ] Task 4: Setup/uninstall/doctor integration for `terminal_init_command`
 - [ ] Task 5: Documentation and manual validation
@@ -198,6 +198,11 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 **Validation:**
 - Run: `cargo test --test state_and_bindings`
 - Expected: all pass.
+
+**Implementation record:**
+- Landed as `ThreadLeaseSet` / `ThreadLeaseGuard` / `ThreadLeaseRecord` plus `Paths.thread_leases_dir` (`<state>/thread-leases`). One file per pane, named by the pane-id hash inside a scope directory hashed from socket path + `\0` + session name, so the same pane id in another session or socket is a separate lease.
+- `acquire` opens the pane's file and takes a non-blocking exclusive lock: `WouldBlock` becomes a user error naming the pane, and a record whose lock is free is simply overwritten. `leased_panes` reports only locked records and deletes the unlocked ones it finds.
+- `ThreadLeaseGuard::path` is public so the stale-lease test can reproduce a killed thread by rewriting the record after the guard released it (`mem::forget` does not work: the lock stays held in-process).
 
 ### Task 3: `zerdr thread` subcommand
 
@@ -345,4 +350,6 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 - `herdr agent attach --takeover` semantics are undocumented; v1 never passes it. Manual double-attach of one pane by explicit TARGET is allowed and unguarded (user intent).
 - `workspace focus` on thread start triggers the `workspace.focused` plugin event; with follow-mode running this may activate Zed (focus steal). D6 limits this to genuinely unfocused workspaces; verify in Task 5 manual (6) and, if disruptive, gate R10 behind a flag after asking the user.
 - Zed's exact execution model for `terminal_init_command` (command in shell vs. replacement) is unverified; affects only failure-mode UX (see Assumptions).
+- `zerdr uninstall --purge` removes the whole state directory, which now includes live thread leases, so a purge during attached threads could let a later thread double-attach a pane. Adding a purge guard would change that command's public failure modes, so it is deliberately left out of this plan; raise it with the user if it matters in practice.
+- `internal_routes_from_different_sessions_do_not_interleave_zed_operations` (sync_flow) failed once during a heavily loaded run mid-implementation and did not reproduce across three subsequent full-suite runs. Cause not established; watch it rather than assume it is fixed.
 - Open questions: none blocking; all public contracts above are decided.

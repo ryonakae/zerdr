@@ -27,6 +27,7 @@ pub struct Paths {
     pub state_dir: PathBuf,
     pub bindings_file: PathBuf,
     pub leases_dir: PathBuf,
+    pub thread_leases_dir: PathBuf,
     pub routes_dir: PathBuf,
     pub sync_locks_dir: PathBuf,
     pub lifecycle_lock_file: PathBuf,
@@ -80,6 +81,7 @@ impl Paths {
         Self {
             bindings_file: state_dir.join("bindings.json"),
             leases_dir: state_dir.join("leases"),
+            thread_leases_dir: state_dir.join("thread-leases"),
             routes_dir: state_dir.join("routes"),
             sync_locks_dir: state_dir.join("sync-locks"),
             lifecycle_lock_file,
@@ -936,6 +938,170 @@ pub struct LeaseGuard {
 }
 
 impl Drop for LeaseGuard {
+    fn drop(&mut self) {
+        if let Some(file) = self.file.take() {
+            let _ = fs::remove_file(&self.path);
+            let _ = FileExt::unlock(&file);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadLeaseRecord {
+    pub schema_version: u32,
+    pub session_name: String,
+    pub socket_path: PathBuf,
+    pub pane_id: String,
+    pub thread_pid: u32,
+    pub created_unix_ms: u128,
+}
+
+/// Per-pane leases that stop two bare `zerdr thread` invocations from attaching to the
+/// same Herdr agent. Unlike [`LeaseSet`] a scope holds many live leases at once, so the
+/// lease identity includes the pane and each pane maps to exactly one file.
+#[derive(Debug, Clone)]
+pub struct ThreadLeaseSet {
+    root: PathBuf,
+}
+
+impl ThreadLeaseSet {
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    pub fn acquire(
+        &self,
+        session_name: &str,
+        socket_path: &Path,
+        pane_id: &str,
+    ) -> Result<ThreadLeaseGuard> {
+        if session_name.is_empty() {
+            return Err(Error::User("Herdr session name cannot be empty".to_owned()));
+        }
+        if pane_id.is_empty() {
+            return Err(Error::User("Herdr pane id cannot be empty".to_owned()));
+        }
+        let socket_path = canonical_socket(socket_path)?;
+        let directory = self.scope_directory(session_name, &socket_path);
+        fs::create_dir_all(&directory).map_err(|error| Error::io(&directory, error))?;
+        let path = directory.join(format!("{}.json", path_hash(Path::new(pane_id))));
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|error| Error::io(&path, error))?;
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                return Err(Error::User(format!(
+                    "Herdr pane {pane_id} already has a live zerdr thread"
+                )));
+            }
+            Err(error) => return Err(Error::io(&path, error)),
+        }
+        let record = ThreadLeaseRecord {
+            schema_version: SCHEMA_VERSION,
+            session_name: session_name.to_owned(),
+            socket_path,
+            pane_id: pane_id.to_owned(),
+            thread_pid: std::process::id(),
+            created_unix_ms: now_millis(),
+        };
+        let mut bytes = serde_json::to_vec_pretty(&record).map_err(|source| Error::Json {
+            what: path.display().to_string(),
+            source,
+        })?;
+        bytes.push(b'\n');
+        file.set_len(0).map_err(|error| Error::io(&path, error))?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| Error::io(&path, error))?;
+        file.write_all(&bytes)
+            .map_err(|error| Error::io(&path, error))?;
+        file.sync_all().map_err(|error| Error::io(&path, error))?;
+        Ok(ThreadLeaseGuard {
+            file: Some(file),
+            path,
+        })
+    }
+
+    /// Pane ids whose lease is currently held. A record whose lock is free belongs to a
+    /// process that is gone, so it is removed rather than reported.
+    pub fn leased_panes(
+        &self,
+        session_name: &str,
+        socket_path: &Path,
+    ) -> Result<std::collections::BTreeSet<String>> {
+        let socket_path = canonical_socket(socket_path)?;
+        let directory = self.scope_directory(session_name, &socket_path);
+        let mut leased = std::collections::BTreeSet::new();
+        if !directory.exists() {
+            return Ok(leased);
+        }
+        for entry in fs::read_dir(&directory).map_err(|error| Error::io(&directory, error))? {
+            let path = entry.map_err(|error| Error::io(&directory, error))?.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let mut file = match OpenOptions::new().read(true).write(true).open(&path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::io(&path, error)),
+            };
+            match FileExt::try_lock_exclusive(&file) {
+                Ok(()) => {
+                    let _ = FileExt::unlock(&file);
+                    let _ = fs::remove_file(&path);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    file.seek(SeekFrom::Start(0))
+                        .map_err(|error| Error::io(&path, error))?;
+                    let mut bytes = Vec::new();
+                    file.read_to_end(&mut bytes)
+                        .map_err(|error| Error::io(&path, error))?;
+                    let record: ThreadLeaseRecord =
+                        serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+                            what: format!("locked thread lease {}", path.display()),
+                            source,
+                        })?;
+                    if record.schema_version != SCHEMA_VERSION
+                        || record.session_name != session_name
+                        || record.pane_id.is_empty()
+                    {
+                        return Err(Error::User(format!(
+                            "locked thread lease has an incompatible schema or session: {}",
+                            path.display()
+                        )));
+                    }
+                    leased.insert(record.pane_id);
+                }
+                Err(error) => return Err(Error::io(&path, error)),
+            }
+        }
+        Ok(leased)
+    }
+
+    fn scope_directory(&self, session_name: &str, socket_path: &Path) -> PathBuf {
+        let mut scope = socket_path.as_os_str().to_os_string();
+        scope.push("\u{0}");
+        scope.push(session_name);
+        self.root.join(path_hash(Path::new(&scope)))
+    }
+}
+
+pub struct ThreadLeaseGuard {
+    file: Option<File>,
+    path: PathBuf,
+}
+
+impl ThreadLeaseGuard {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ThreadLeaseGuard {
     fn drop(&mut self) {
         if let Some(file) = self.file.take() {
             let _ = fs::remove_file(&self.path);
