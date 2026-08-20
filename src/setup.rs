@@ -194,7 +194,9 @@ pub fn setup() -> Result<()> {
     let executable = stable_executable()?;
     let generated = generated_tasks(&executable)?;
     let old_install = load_install_state(&paths.install_state_file)?;
-    let original = read_optional_file(&paths.zed_tasks_file)?;
+    let tasks_file = resolve_config_file(&paths.zed_tasks_file)?;
+    let settings_file = resolve_config_file(&paths.zed_settings_file)?;
+    let original = read_optional_file(&tasks_file)?;
     let original_text = original
         .as_deref()
         .map(std::str::from_utf8)
@@ -203,7 +205,7 @@ pub fn setup() -> Result<()> {
         .unwrap_or("[]\n");
     let merged = merge_tasks(original_text, &generated, old_install.as_ref())?;
     let init_command = terminal_init_command(&executable);
-    let original_settings = read_optional_file(&paths.zed_settings_file)?;
+    let original_settings = read_optional_file(&settings_file)?;
     let original_settings_text = original_settings
         .as_deref()
         .map(std::str::from_utf8)
@@ -236,11 +238,7 @@ pub fn setup() -> Result<()> {
     }
 
     if merged.as_bytes() != original_text.as_bytes()
-        && let Err(error) = write_checked(
-            &paths.zed_tasks_file,
-            original.as_deref(),
-            merged.as_bytes(),
-        )
+        && let Err(error) = write_checked(&tasks_file, original.as_deref(), merged.as_bytes())
     {
         rollback_plugin(&herdr, &paths, previous_manifest.as_deref());
         return Err(error);
@@ -248,13 +246,13 @@ pub fn setup() -> Result<()> {
     if merged_settings.as_bytes() != original_settings_text.as_bytes() {
         let write = backup_before_mutation(&paths, "settings", &original_settings).and_then(|()| {
             write_checked(
-                &paths.zed_settings_file,
+                &settings_file,
                 original_settings.as_deref(),
                 merged_settings.as_bytes(),
             )
         });
         if let Err(error) = write {
-            let _ = restore_optional(&paths.zed_tasks_file, original.as_deref());
+            let _ = restore_optional(&tasks_file, original.as_deref());
             rollback_plugin(&herdr, &paths, previous_manifest.as_deref());
             return Err(error);
         }
@@ -268,8 +266,8 @@ pub fn setup() -> Result<()> {
             write_json(&paths.install_state_file, &install)
         };
     if let Err(error) = install_write {
-        let _ = restore_optional(&paths.zed_settings_file, original_settings.as_deref());
-        let _ = restore_optional(&paths.zed_tasks_file, original.as_deref());
+        let _ = restore_optional(&settings_file, original_settings.as_deref());
+        let _ = restore_optional(&tasks_file, original.as_deref());
         rollback_plugin(&herdr, &paths, previous_manifest.as_deref());
         return Err(error);
     }
@@ -305,7 +303,9 @@ pub fn uninstall(purge: bool) -> Result<()> {
     }
 
     let install = load_install_state(&paths.install_state_file)?;
-    let original = read_optional_file(&paths.zed_tasks_file)?;
+    let tasks_file = resolve_config_file(&paths.zed_tasks_file)?;
+    let settings_file = resolve_config_file(&paths.zed_settings_file)?;
+    let original = read_optional_file(&tasks_file)?;
     let original_text = original
         .as_deref()
         .map(std::str::from_utf8)
@@ -322,17 +322,13 @@ pub fn uninstall(purge: bool) -> Result<()> {
     herdr.plugin_uninstall()?;
     if updated.as_bytes() != original_text.as_bytes() {
         backup_before_mutation(&paths, "tasks", &original)?;
-        if let Err(error) = write_checked(
-            &paths.zed_tasks_file,
-            original.as_deref(),
-            updated.as_bytes(),
-        ) {
+        if let Err(error) = write_checked(&tasks_file, original.as_deref(), updated.as_bytes()) {
             let _ = herdr.plugin_link(&paths.plugin_dir);
             return Err(error);
         }
     }
     if let Some(install) = install.as_ref() {
-        let original_settings = read_optional_file(&paths.zed_settings_file)?;
+        let original_settings = read_optional_file(&settings_file)?;
         if let Some(bytes) = original_settings.as_deref() {
             let text = std::str::from_utf8(bytes)
                 .map_err(|error| Error::User(format!("Zed settings file is not UTF-8: {error}")))?;
@@ -340,7 +336,7 @@ pub fn uninstall(purge: bool) -> Result<()> {
             if updated.as_bytes() != bytes {
                 backup_before_mutation(&paths, "settings", &original_settings)?;
                 write_checked(
-                    &paths.zed_settings_file,
+                    &settings_file,
                     original_settings.as_deref(),
                     updated.as_bytes(),
                 )?;
@@ -659,15 +655,26 @@ pub(crate) fn load_install_state(path: &Path) -> Result<Option<InstallState>> {
     Ok(Some(state))
 }
 
-fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>> {
+/// Zed configuration is often a symlink into a dotfiles checkout, so resolve one level of
+/// indirection and operate on the real file. Writing to the link path itself would replace
+/// the link with a regular file and quietly disconnect it from dotfiles.
+fn resolve_config_file(path: &Path) -> Result<PathBuf> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::User(format!(
-            "refusing to replace symlinked Zed configuration file {}",
-            path.display()
-        ))),
-        Ok(_) => fs::read(path)
-            .map(Some)
-            .map_err(|error| Error::io(path, error)),
+        Ok(metadata) if metadata.file_type().is_symlink() => path.canonicalize().map_err(|error| {
+            Error::User(format!(
+                "Zed configuration file {} is a broken symlink: {error}",
+                path.display()
+            ))
+        }),
+        Ok(_) => Ok(path.to_path_buf()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Err(error) => Err(Error::io(path, error)),
+    }
+}
+
+fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(Error::io(path, error)),
     }

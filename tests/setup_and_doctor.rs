@@ -1,6 +1,7 @@
 mod support;
 
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::process::{Command as ProcessCommand, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -1557,6 +1558,86 @@ fn mutating_zed_settings_backs_up_the_original_first() {
         .map(|entry| fs::read_to_string(entry.path()).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(saved, vec![original.to_owned()]);
+}
+
+/// Zed configuration is commonly a symlink into a dotfiles checkout. Setup must write
+/// through to the real file so the symlink survives and the dotfiles copy stays the
+/// source of truth.
+#[test]
+fn setup_writes_through_symlinked_zed_configuration() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    let dotfiles = env.root.path().join("dotfiles");
+    fs::create_dir_all(&dotfiles).unwrap();
+    fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
+    let real_settings = dotfiles.join("settings.json");
+    let real_tasks = dotfiles.join("tasks.json");
+    fs::write(&real_settings, "{\n  \"theme\": \"One Dark\"\n}\n").unwrap();
+    fs::write(&real_tasks, "[]\n").unwrap();
+    symlink(&real_settings, &paths.zed_settings_file).unwrap();
+    symlink(&real_tasks, &paths.zed_tasks_file).unwrap();
+
+    env.command().arg("setup").assert().success();
+
+    for link in [&paths.zed_settings_file, &paths.zed_tasks_file] {
+        assert!(
+            fs::symlink_metadata(link).unwrap().file_type().is_symlink(),
+            "{} stopped being a symlink",
+            link.display()
+        );
+    }
+    let expected = format!(
+        "{} thread",
+        assert_cmd::cargo::cargo_bin!("zerdr").display()
+    );
+    let settings = fs::read_to_string(&real_settings).unwrap();
+    assert_eq!(
+        parse_settings(&settings)["agent"]["terminal_init_command"],
+        expected.as_str()
+    );
+    assert!(settings.contains("One Dark"), "{settings}");
+    assert!(
+        fs::read_to_string(&real_tasks)
+            .unwrap()
+            .contains("zerdr: Herdr"),
+        "owned tasks must land in the real file too"
+    );
+
+    env.command().arg("uninstall").assert().success();
+
+    assert!(
+        fs::symlink_metadata(&paths.zed_settings_file)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let after = fs::read_to_string(&real_settings).unwrap();
+    assert!(
+        parse_settings(&after)["agent"]
+            .get("terminal_init_command")
+            .is_none(),
+        "{after}"
+    );
+    assert!(after.contains("One Dark"), "{after}");
+}
+
+/// A symlink with no target is a broken configuration, not something to write through.
+#[test]
+fn setup_refuses_a_broken_zed_configuration_symlink() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
+    symlink(
+        env.root.path().join("missing/settings.json"),
+        &paths.zed_settings_file,
+    )
+    .unwrap();
+
+    env.command()
+        .arg("setup")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("broken symlink"));
 }
 
 fn parse_settings(text: &str) -> serde_json::Value {
