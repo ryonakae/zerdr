@@ -471,7 +471,7 @@ Implementation-time minor file changes or internal differences must be reflected
 - [x] Requirement Coverage has no unmapped requirement or decision.
 - [x] The plan and actual changed-file set agree, including the recorded foreground-validation experiments.
 - [x] No release, tag, or Homebrew tap mutation occurred.
-- [ ] After every item above succeeds, move this plan without renaming to `docs/plans/archived/2026-08-19-herdr-one-shot-zed-action.md`.
+- [x] After every item above succeeds, move this plan without renaming to `docs/plans/archived/2026-08-19-herdr-one-shot-zed-action.md`.
 
 ## Risks and Open Questions
 
