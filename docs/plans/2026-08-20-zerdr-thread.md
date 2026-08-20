@@ -132,7 +132,7 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 - [x] Task 2: Thread lease store in `state.rs`
 - [x] Task 3: `zerdr thread` subcommand (resolution, auto-start, attach, monitor)
 - [x] Task 4: Setup/uninstall/doctor integration for `terminal_init_command`
-- [ ] Task 5: Documentation and manual validation
+- [~] Task 5: Documentation done; manual validation in real Zed + Herdr still outstanding (see Final Validation)
 
 ## Tasks
 
@@ -353,7 +353,7 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 | D3 | Task 3 | OSC/BEL asserted on captured stdout |
 | D4 | Task 2 | `ThreadLeaseSet` isolated from `LeaseSet` (existing lease tests unaffected) |
 | D5 | Task 4 | old `InstallState` JSON without the new field still loads |
-| D6 | Task 3 | already-focused → no focus call |
+| D6 | Task 3 | already-focused → no focus call; unreadable workspace list → focus left alone |
 | D7 | Task 1–3 | file placement per File Structure (review) |
 
 ## Final Validation
