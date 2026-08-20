@@ -1,9 +1,9 @@
 [package]
 name = "zerdr"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.93.1"
-description = "Keep a dedicated Herdr session aligned with the current Zed window"
+description = "Keep Herdr sessions aligned with their Git checkouts in Zed"
 license = "MIT"
 repository = "https://github.com/ryonakae/zerdr"
 homepage = "https://github.com/ryonakae/zerdr"
