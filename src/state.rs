@@ -13,7 +13,8 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
 
-pub const SESSION_NAME: &str = "zerdr";
+pub const DEFAULT_SESSION_NAME: &str = "default";
+const LEGACY_SESSION_NAME: &str = "zerdr";
 const SCHEMA_VERSION: u32 = 1;
 const BINDING_SCHEMA_VERSION: u32 = 2;
 const ROUTE_SCHEMA_VERSION: u32 = 2;
@@ -29,6 +30,7 @@ pub struct Paths {
     pub routes_dir: PathBuf,
     pub sync_locks_dir: PathBuf,
     pub lifecycle_lock_file: PathBuf,
+    pub zed_lock_file: PathBuf,
     pub install_state_file: PathBuf,
     pub plugin_dir: PathBuf,
     pub zed_tasks_file: PathBuf,
@@ -72,16 +74,16 @@ impl Paths {
         let config_dir = config_dir.as_ref().to_path_buf();
         let data_dir = data_dir.as_ref().to_path_buf();
         let state_dir = state_dir.as_ref().to_path_buf();
-        let lifecycle_lock_file = state_dir
-            .parent()
-            .unwrap_or(&state_dir)
-            .join(".dev.ryonakae.zerdr.lifecycle.lock");
+        let lock_root = state_dir.parent().unwrap_or(&state_dir);
+        let lifecycle_lock_file = lock_root.join(".dev.ryonakae.zerdr.lifecycle.lock");
+        let zed_lock_file = lock_root.join(".dev.ryonakae.zerdr.zed.lock");
         Self {
             bindings_file: state_dir.join("bindings.json"),
             leases_dir: state_dir.join("leases"),
             routes_dir: state_dir.join("routes"),
             sync_locks_dir: state_dir.join("sync-locks"),
             lifecycle_lock_file,
+            zed_lock_file,
             install_state_file: state_dir.join("install.json"),
             plugin_dir: data_dir.join("plugin-v1"),
             zed_tasks_file,
@@ -253,15 +255,17 @@ impl BindingStore {
                         what: self.path.display().to_string(),
                         source,
                     })?;
-                if legacy.schema_version != SCHEMA_VERSION || legacy.session_name != SESSION_NAME {
+                if legacy.schema_version != SCHEMA_VERSION
+                    || legacy.session_name != LEGACY_SESSION_NAME
+                {
                     return Err(Error::User(format!(
-                        "legacy binding state belongs to session {:?}, expected {SESSION_NAME:?}",
+                        "legacy binding state belongs to session {:?}, expected {LEGACY_SESSION_NAME:?}",
                         legacy.session_name
                     )));
                 }
                 Ok(BindingState {
                     schema_version: BINDING_SCHEMA_VERSION,
-                    sessions: BTreeMap::from([(SESSION_NAME.to_owned(), legacy.bindings)]),
+                    sessions: BTreeMap::from([(LEGACY_SESSION_NAME.to_owned(), legacy.bindings)]),
                 })
             }
             version if version == u64::from(BINDING_SCHEMA_VERSION) => {
@@ -445,7 +449,18 @@ impl RouteStore {
     }
 
     pub fn initialize(&self, socket_path: &Path, anchor: &Path, wrapper_pid: u32) -> Result<()> {
-        self.initialize_strategy(
+        self.initialize_for(DEFAULT_SESSION_NAME, socket_path, anchor, wrapper_pid)
+    }
+
+    pub fn initialize_for(
+        &self,
+        session_name: &str,
+        socket_path: &Path,
+        anchor: &Path,
+        wrapper_pid: u32,
+    ) -> Result<()> {
+        self.initialize_strategy_for(
+            session_name,
             socket_path,
             RouteStrategy::Internal {
                 anchor_root: anchor.to_path_buf(),
@@ -460,6 +475,19 @@ impl RouteStore {
         routing: RouteStrategy,
         wrapper_pid: u32,
     ) -> Result<()> {
+        self.initialize_strategy_for(DEFAULT_SESSION_NAME, socket_path, routing, wrapper_pid)
+    }
+
+    pub fn initialize_strategy_for(
+        &self,
+        session_name: &str,
+        socket_path: &Path,
+        routing: RouteStrategy,
+        wrapper_pid: u32,
+    ) -> Result<()> {
+        if session_name.is_empty() {
+            return Err(Error::User("Herdr session name cannot be empty".to_owned()));
+        }
         let socket_path = canonical_socket(socket_path)?;
         let routing = match routing {
             RouteStrategy::Internal { anchor_root } => RouteStrategy::Internal {
@@ -469,7 +497,7 @@ impl RouteStore {
         };
         let state = RouteState {
             schema_version: ROUTE_SCHEMA_VERSION,
-            session_name: SESSION_NAME.to_owned(),
+            session_name: session_name.to_owned(),
             socket_path: socket_path.clone(),
             wrapper_pid,
             routing,
@@ -483,6 +511,18 @@ impl RouteStore {
     }
 
     pub fn load(&self, socket_path: &Path) -> Result<RouteState> {
+        self.load_with_session(socket_path, None)
+    }
+
+    pub fn load_for(&self, session_name: &str, socket_path: &Path) -> Result<RouteState> {
+        self.load_with_session(socket_path, Some(session_name))
+    }
+
+    fn load_with_session(
+        &self,
+        socket_path: &Path,
+        expected_session: Option<&str>,
+    ) -> Result<RouteState> {
         let socket_path = canonical_socket(socket_path)?;
         let path = self.path_for_canonical_socket(&socket_path);
         let bytes = fs::read(&path).map_err(|error| Error::io(&path, error))?;
@@ -519,13 +559,26 @@ impl RouteStore {
                 )));
             }
         };
-        validate_route(&state, &socket_path)?;
+        validate_route(&state, expected_session, &socket_path)?;
         Ok(state)
     }
 
     pub fn promote(&self, socket_path: &Path, anchor: &Path) -> Result<()> {
+        self.promote_with_session(socket_path, None, anchor)
+    }
+
+    pub fn promote_for(&self, session_name: &str, socket_path: &Path, anchor: &Path) -> Result<()> {
+        self.promote_with_session(socket_path, Some(session_name), anchor)
+    }
+
+    fn promote_with_session(
+        &self,
+        socket_path: &Path,
+        expected_session: Option<&str>,
+        anchor: &Path,
+    ) -> Result<()> {
         let socket_path = canonical_socket(socket_path)?;
-        let mut state = self.load(&socket_path)?;
+        let mut state = self.load_with_session(&socket_path, expected_session)?;
         let RouteStrategy::Internal { anchor_root } = &mut state.routing else {
             return Err(Error::User(
                 "external routes do not have a promotable anchor".to_owned(),
@@ -575,9 +628,14 @@ impl RouteStore {
     }
 }
 
-fn validate_route(state: &RouteState, expected_socket: &Path) -> Result<()> {
+fn validate_route(
+    state: &RouteState,
+    expected_session: Option<&str>,
+    expected_socket: &Path,
+) -> Result<()> {
     if !matches!(state.schema_version, SCHEMA_VERSION | ROUTE_SCHEMA_VERSION)
-        || state.session_name != SESSION_NAME
+        || state.session_name.is_empty()
+        || expected_session.is_some_and(|expected| state.session_name != expected)
     {
         return Err(Error::User(format!(
             "route has an incompatible schema or session for {}",
@@ -633,6 +691,7 @@ pub struct LeaseInspection {
 pub struct LeaseSweep {
     pub live_count: usize,
     pub live_scope_hashes: Vec<String>,
+    pub live_session_names: Vec<String>,
     pub stale_removed: usize,
 }
 
@@ -647,6 +706,18 @@ impl LeaseSet {
     }
 
     pub fn acquire(&self, socket_path: &Path, client_pid: u32) -> Result<LeaseGuard> {
+        self.acquire_for(DEFAULT_SESSION_NAME, socket_path, client_pid)
+    }
+
+    pub fn acquire_for(
+        &self,
+        session_name: &str,
+        socket_path: &Path,
+        client_pid: u32,
+    ) -> Result<LeaseGuard> {
+        if session_name.is_empty() {
+            return Err(Error::User("Herdr session name cannot be empty".to_owned()));
+        }
         let socket_path = canonical_socket(socket_path)?;
         let directory = self.socket_directory(&socket_path);
         fs::create_dir_all(&directory).map_err(|error| Error::io(&directory, error))?;
@@ -662,7 +733,7 @@ impl LeaseSet {
         FileExt::lock_exclusive(&file).map_err(|error| Error::io(&temporary, error))?;
         let record = LeaseRecord {
             schema_version: SCHEMA_VERSION,
-            session_name: SESSION_NAME.to_owned(),
+            session_name: session_name.to_owned(),
             socket_path,
             wrapper_pid: std::process::id(),
             client_pid,
@@ -688,6 +759,18 @@ impl LeaseSet {
     }
 
     pub fn inspect(&self, socket_path: &Path) -> Result<LeaseInspection> {
+        self.inspect_with_session(socket_path, None)
+    }
+
+    pub fn inspect_for(&self, session_name: &str, socket_path: &Path) -> Result<LeaseInspection> {
+        self.inspect_with_session(socket_path, Some(session_name))
+    }
+
+    fn inspect_with_session(
+        &self,
+        socket_path: &Path,
+        expected_session: Option<&str>,
+    ) -> Result<LeaseInspection> {
         let socket_path = canonical_socket(socket_path)?;
         let directory = self.socket_directory(&socket_path);
         if !directory.exists() {
@@ -727,7 +810,7 @@ impl LeaseSet {
                             what: format!("locked lease {}", path.display()),
                             source,
                         })?;
-                    validate_lease(&record, &socket_path)?;
+                    validate_lease(&record, expected_session, &socket_path)?;
                     live_wrapper_pids.push(record.wrapper_pid);
                 }
                 Err(error) => return Err(Error::io(&path, error)),
@@ -749,12 +832,14 @@ impl LeaseSet {
             return Ok(LeaseSweep {
                 live_count: 0,
                 live_scope_hashes: Vec::new(),
+                live_session_names: Vec::new(),
                 stale_removed: 0,
             });
         }
         let mut sweep = LeaseSweep {
             live_count: 0,
             live_scope_hashes: Vec::new(),
+            live_session_names: Vec::new(),
             stale_removed: 0,
         };
         for entry in fs::read_dir(&self.root).map_err(|error| Error::io(&self.root, error))? {
@@ -768,7 +853,7 @@ impl LeaseSet {
                 if path.extension().and_then(|value| value.to_str()) != Some("json") {
                     continue;
                 }
-                let file = match OpenOptions::new().read(true).write(true).open(&path) {
+                let mut file = match OpenOptions::new().read(true).write(true).open(&path) {
                     Ok(file) => file,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                     Err(error) => return Err(Error::io(&path, error)),
@@ -781,7 +866,27 @@ impl LeaseSet {
                         }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        file.seek(SeekFrom::Start(0))
+                            .map_err(|error| Error::io(&path, error))?;
+                        let mut bytes = Vec::new();
+                        file.read_to_end(&mut bytes)
+                            .map_err(|error| Error::io(&path, error))?;
+                        let record: LeaseRecord =
+                            serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+                                what: format!("locked lease {}", path.display()),
+                                source,
+                            })?;
+                        if record.schema_version != SCHEMA_VERSION || record.session_name.is_empty()
+                        {
+                            return Err(Error::User(format!(
+                                "locked lease has an incompatible schema or session: {}",
+                                path.display()
+                            )));
+                        }
                         sweep.live_count += 1;
+                        if !sweep.live_session_names.contains(&record.session_name) {
+                            sweep.live_session_names.push(record.session_name);
+                        }
                         scope_live = true;
                     }
                     Err(error) => return Err(Error::io(&path, error)),
@@ -800,8 +905,15 @@ impl LeaseSet {
     }
 }
 
-fn validate_lease(record: &LeaseRecord, expected_socket: &Path) -> Result<()> {
-    if record.schema_version != SCHEMA_VERSION || record.session_name != SESSION_NAME {
+fn validate_lease(
+    record: &LeaseRecord,
+    expected_session: Option<&str>,
+    expected_socket: &Path,
+) -> Result<()> {
+    if record.schema_version != SCHEMA_VERSION
+        || record.session_name.is_empty()
+        || expected_session.is_some_and(|expected| record.session_name != expected)
+    {
         return Err(Error::User(format!(
             "locked lease has an incompatible schema or session for {}",
             expected_socket.display()
@@ -858,6 +970,47 @@ impl Drop for LifecycleGuard {
     fn drop(&mut self) {
         let _ = FileExt::unlock(&self.file);
     }
+}
+
+pub struct OperationGuard {
+    file: File,
+}
+
+impl OperationGuard {
+    pub fn acquire(path: &Path) -> Result<Self> {
+        let file = open_lock_file(path)?;
+        FileExt::lock_exclusive(&file).map_err(|error| Error::io(path, error))?;
+        Ok(Self { file })
+    }
+
+    pub(crate) fn try_acquire(path: &Path) -> Result<Option<Self>> {
+        let file = open_lock_file(path)?;
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => Ok(Some(Self { file })),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(Error::io(path, error)),
+        }
+    }
+}
+
+impl Drop for OperationGuard {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
+fn open_lock_file(path: &Path) -> Result<File> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::User(format!("path has no parent: {}", path.display())))?;
+    fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
+    OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| Error::io(path, error))
 }
 
 pub struct SyncGuard {

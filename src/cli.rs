@@ -6,13 +6,15 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(
     name = "zerdr",
     version,
-    about = "Keep a Herdr session aligned with Zed",
-    args_conflicts_with_subcommands = true
+    about = "Keep a Herdr session aligned with Zed"
 )]
 pub struct Cli {
+    /// Use or create a named persistent Herdr session.
+    #[arg(long)]
+    pub session: Option<String>,
     /// Select terminal routing behavior.
-    #[arg(long, value_enum, default_value_t = LaunchMode::Auto)]
-    pub mode: LaunchMode,
+    #[arg(long, value_enum)]
+    pub mode: Option<LaunchMode>,
     /// Git project already open in the target Zed window.
     #[arg(long)]
     pub anchor: Option<PathBuf>,
@@ -39,23 +41,39 @@ pub enum FocusPolicy {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Fuzzily select a Herdr workspace.
-    Pick,
+    Pick {
+        /// Target a named persistent Herdr session.
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// Focus the next Herdr workspace.
-    Next,
+    Next {
+        /// Target a named persistent Herdr session.
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// Focus the previous Herdr workspace.
-    Previous,
+    Previous {
+        /// Target a named persistent Herdr session.
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// Synchronize Zed to the focused Herdr workspace.
-    Sync,
+    Sync {
+        /// Target a named persistent Herdr session.
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// Bind the selected workspace to a Git checkout.
     Bind {
-        /// Target the focused workspace in this Herdr session.
+        /// Target a named persistent Herdr session.
         #[arg(long)]
         session: Option<String>,
         path: Option<PathBuf>,
     },
     /// Remove the selected workspace binding.
     Unbind {
-        /// Target the focused workspace in this Herdr session.
+        /// Target a named persistent Herdr session.
         #[arg(long)]
         session: Option<String>,
     },
@@ -68,7 +86,11 @@ pub enum Command {
         purge: bool,
     },
     /// Diagnose zerdr, Herdr, and Zed integration.
-    Doctor,
+    Doctor {
+        /// Target a named persistent Herdr session.
+        #[arg(long)]
+        session: Option<String>,
+    },
     #[command(hide = true)]
     SyncFromHerdr,
     #[command(hide = true)]

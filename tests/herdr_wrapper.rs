@@ -34,6 +34,67 @@ fn launcher_requires_a_compatible_plugin_before_spawning_herdr() {
 }
 
 #[test]
+fn bare_launcher_attaches_the_default_herdr_session() {
+    let env = TestEnv::new();
+    env.prepare_launcher();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let sessions = serde_json::json!({
+        "sessions": [{"name":"default","running":true,"socket_path":socket}]
+    });
+
+    env.command()
+        .args(["--mode", "external"])
+        .env("ZERDR_TEST_PLATFORM", "linux")
+        .env("ZERDR_TEST_HERDR_SLEEP", "0.1")
+        .env("ZERDR_READY_TIMEOUT_MS", "100")
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .env(
+            "ZERDR_TEST_WORKSPACES_JSON",
+            r#"{"result":{"workspaces":[]}}"#,
+        )
+        .assert()
+        .success();
+
+    let log = env.read_log();
+    assert!(log.lines().any(|line| line == "herdr\t"), "{log}");
+    assert!(!log.contains("herdr\t--session zerdr\n"), "{log}");
+}
+
+#[test]
+fn named_launcher_attaches_the_matching_herdr_session() {
+    let env = TestEnv::new();
+    env.prepare_launcher();
+    let socket = env.root.path().join("work.sock");
+    fs::write(&socket, "").unwrap();
+    let sessions = serde_json::json!({
+        "sessions": [{"name":"work","running":true,"socket_path":socket}]
+    });
+
+    env.command()
+        .args(["--session", "work", "--mode", "external"])
+        .env("ZERDR_TEST_PLATFORM", "linux")
+        .env("ZERDR_TEST_HERDR_SLEEP", "0.1")
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .env(
+            "ZERDR_TEST_WORKSPACES_JSON",
+            r#"{"result":{"workspaces":[]}}"#,
+        )
+        .assert()
+        .success();
+
+    let log = env.read_log();
+    assert!(log.contains("herdr\t--session work\n"), "{log}");
+    assert_eq!(
+        RouteStore::new(Paths::for_test(env.root.path()).routes_dir)
+            .load_for("work", &socket)
+            .unwrap()
+            .session_name,
+        "work"
+    );
+}
+
+#[test]
 fn launcher_accepts_an_event_only_pre_action_installation() {
     let env = TestEnv::new();
     env.prepare_launcher();
@@ -68,7 +129,7 @@ command = [{executable:?}, "sync-from-herdr"]
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
     let sessions = serde_json::json!({
-        "sessions":[{"name":"zerdr","running":true,"socket_path":socket}]
+        "sessions":[{"name":"default","running":true,"socket_path":socket}]
     });
 
     env.command()
@@ -84,7 +145,7 @@ command = [{executable:?}, "sync-from-herdr"]
         .assert()
         .success();
 
-    assert!(env.read_log().contains("herdr\t--session zerdr"));
+    assert!(env.read_log().lines().any(|line| line == "herdr\t"));
 }
 
 #[test]
@@ -214,7 +275,7 @@ fn auto_mode_selects_internal_in_zed_and_external_elsewhere() {
     );
     let repo = repo.canonicalize().unwrap();
     let internal_sessions = serde_json::json!({
-        "sessions": [{"name":"zerdr","running":true,"socket_path":internal_socket}]
+        "sessions": [{"name":"default","running":true,"socket_path":internal_socket}]
     });
     internal
         .command()
@@ -242,7 +303,7 @@ fn auto_mode_selects_internal_in_zed_and_external_elsewhere() {
     let external_socket = external.root.path().join("herdr.sock");
     fs::write(&external_socket, "").unwrap();
     let external_sessions = serde_json::json!({
-        "sessions": [{"name":"zerdr","running":true,"socket_path":external_socket}]
+        "sessions": [{"name":"default","running":true,"socket_path":external_socket}]
     });
     external
         .command()
@@ -284,10 +345,10 @@ fn external_wrapper_syncs_the_initial_workspace_without_requiring_the_zed_task()
     );
     let repo = repo.canonicalize().unwrap();
     BindingStore::new(paths.bindings_file.clone())
-        .bind("zerdr", "w1", &repo)
+        .bind("default", "w1", &repo)
         .unwrap();
     let sessions = serde_json::json!({
-        "sessions": [{"name":"zerdr","running":true,"socket_path":socket}]
+        "sessions": [{"name":"default","running":true,"socket_path":socket}]
     });
     let workspaces = serde_json::json!({"result":{"workspaces":[{
         "workspace_id":"w1","label":"repo","focused":true,
@@ -307,7 +368,7 @@ fn external_wrapper_syncs_the_initial_workspace_without_requiring_the_zed_task()
         .success();
 
     let log = env.read_log();
-    assert!(log.contains("herdr\t--session zerdr"), "{log}");
+    assert!(log.lines().any(|line| line == "herdr\t"), "{log}");
     assert!(log.contains("workspace list"), "{log}");
     assert_eq!(log.matches("zed\t--existing").count(), 1, "{log}");
     assert!(
@@ -349,11 +410,11 @@ fn wrapper_holds_a_lease_runs_startup_sync_and_preserves_session() {
     );
     let repo = repo.canonicalize().unwrap();
     BindingStore::new(Paths::for_test(env.root.path()).bindings_file)
-        .bind("zerdr", "w1", &repo)
+        .bind("default", "w1", &repo)
         .unwrap();
     let sessions = serde_json::json!({
         "ok": true,
-        "result": {"sessions": [{"name": "zerdr", "socket_path": socket}]}
+        "result": {"sessions": [{"name": "default", "socket_path": socket}]}
     });
     let workspaces = serde_json::json!({
         "ok": true,
@@ -375,7 +436,7 @@ fn wrapper_holds_a_lease_runs_startup_sync_and_preserves_session() {
         .success();
 
     let log = env.read_log();
-    assert!(log.contains("herdr\t--session zerdr\n"), "{log}");
+    assert!(log.lines().any(|line| line == "herdr\t"), "{log}");
     assert!(log.contains("herdr\tsession list --json"), "{log}");
     assert_eq!(log.matches("zed\t--existing").count(), 1, "{log}");
     assert!(!log.contains("stop"), "{log}");
@@ -414,7 +475,7 @@ fn concurrent_wrappers_admit_one_owner_and_reap_the_loser() {
     let first_anchor = first_anchor.canonicalize().unwrap();
     let second_anchor = second_anchor.canonicalize().unwrap();
     let sessions = serde_json::json!({
-        "sessions": [{"name":"zerdr","running":true,"socket_path":socket}]
+        "sessions": [{"name":"default","running":true,"socket_path":socket}]
     });
     let workspaces = serde_json::json!({"result":{"workspaces":[]}});
     let release = env.root.path().join("release-session-discovery");
@@ -480,6 +541,79 @@ fn concurrent_wrappers_admit_one_owner_and_reap_the_loser() {
 }
 
 #[test]
+fn wrappers_for_different_named_sessions_can_coexist() {
+    let env = TestEnv::new();
+    env.prepare_launcher();
+    let paths = Paths::for_test(env.root.path());
+    let first_socket = env.root.path().join("first.sock");
+    let second_socket = env.root.path().join("second.sock");
+    fs::write(&first_socket, "").unwrap();
+    fs::write(&second_socket, "").unwrap();
+    let first_anchor = env.root.path().join("first-anchor");
+    let second_anchor = env.root.path().join("second-anchor");
+    for anchor in [&first_anchor, &second_anchor] {
+        fs::create_dir_all(anchor).unwrap();
+        assert!(
+            ProcessCommand::new("git")
+                .args(["init", "--quiet"])
+                .current_dir(anchor)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let first_anchor = first_anchor.canonicalize().unwrap();
+    let second_anchor = second_anchor.canonicalize().unwrap();
+    let sessions = serde_json::json!({"sessions":[
+        {"name":"first","running":true,"socket_path":first_socket},
+        {"name":"second","running":true,"socket_path":second_socket}
+    ]});
+    let spawn_wrapper = |session: &str, anchor: &std::path::Path| {
+        let mut command = env.std_command();
+        command
+            .args(["--session", session, "--mode", "internal", "--anchor"])
+            .arg(anchor)
+            .env("ZED_TERM", "true")
+            .env("TERM_PROGRAM", "zed")
+            .env("ZERDR_TEST_HERDR_SLEEP", "10")
+            .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+            .env(
+                "ZERDR_TEST_WORKSPACES_JSON",
+                r#"{"result":{"workspaces":[]}}"#,
+            )
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command.spawn().unwrap()
+    };
+
+    let mut first = spawn_wrapper("first", &first_anchor);
+    let mut second = spawn_wrapper("second", &second_anchor);
+    wait_for_lease_count(&paths, 2);
+
+    let routes = RouteStore::new(paths.routes_dir.clone());
+    assert_eq!(
+        routes
+            .load_for("first", &first_socket)
+            .unwrap()
+            .internal_anchor(),
+        Some(first_anchor.as_path())
+    );
+    assert_eq!(
+        routes
+            .load_for("second", &second_socket)
+            .unwrap()
+            .internal_anchor(),
+        Some(second_anchor.as_path())
+    );
+
+    kill(Pid::from_raw(first.id() as i32), Signal::SIGTERM).unwrap();
+    kill(Pid::from_raw(second.id() as i32), Signal::SIGTERM).unwrap();
+    let _ = first.wait().unwrap();
+    let _ = second.wait().unwrap();
+    wait_for_lease_count(&paths, 0);
+}
+
+#[test]
 fn external_startup_sync_failure_notifies_without_terminating_the_client() {
     let env = TestEnv::new();
     env.prepare_launcher();
@@ -498,10 +632,10 @@ fn external_startup_sync_failure_notifies_without_terminating_the_client() {
     );
     let target = target.canonicalize().unwrap();
     BindingStore::new(paths.bindings_file)
-        .bind("zerdr", "w1", &target)
+        .bind("default", "w1", &target)
         .unwrap();
     let sessions = serde_json::json!({
-        "sessions": [{"name":"zerdr","running":true,"socket_path":socket}]
+        "sessions": [{"name":"default","running":true,"socket_path":socket}]
     });
     let workspaces = serde_json::json!({"result":{"workspaces":[{
         "workspace_id":"w1","label":"target","focused":true,
@@ -547,10 +681,10 @@ fn startup_sync_failure_notifies_but_keeps_the_client_until_its_normal_exit() {
     let anchor = anchor.canonicalize().unwrap();
     let target = target.canonicalize().unwrap();
     BindingStore::new(paths.bindings_file)
-        .bind("zerdr", "w1", &target)
+        .bind("default", "w1", &target)
         .unwrap();
     let sessions = serde_json::json!({
-        "sessions": [{"name":"zerdr","running":true,"socket_path":socket}]
+        "sessions": [{"name":"default","running":true,"socket_path":socket}]
     });
     let workspaces = serde_json::json!({"result":{"workspaces":[{
         "workspace_id":"w1","label":"target","number":1,"focused":true,
@@ -612,7 +746,7 @@ fn post_readiness_initialization_failure_terminates_the_client() {
     );
     let pid_file = env.root.path().join("failed-child.pid");
     let sessions = serde_json::json!({
-        "sessions": [{"name":"zerdr","running":true,"socket_path":socket}]
+        "sessions": [{"name":"default","running":true,"socket_path":socket}]
     });
 
     env.command()
@@ -684,7 +818,7 @@ fn wrapper_propagates_the_herdr_client_exit_status() {
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
     let sessions = serde_json::json!({
-        "sessions": [{"name":"zerdr","running":true,"socket_path":socket}]
+        "sessions": [{"name":"default","running":true,"socket_path":socket}]
     });
     let workspaces = serde_json::json!({"result":{"workspaces":[]}});
     let anchor = env.root.path().join("anchor");

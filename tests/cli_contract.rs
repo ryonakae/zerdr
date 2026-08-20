@@ -11,6 +11,7 @@ fn help_lists_public_commands_and_hides_event_entry_point() {
         .assert()
         .success()
         .stdout(predicate::str::contains("  herdr").not())
+        .stdout(predicate::str::contains("--session <SESSION>"))
         .stdout(predicate::str::contains("--mode <MODE>"))
         .stdout(predicate::str::contains("--anchor <ANCHOR>"))
         .stdout(predicate::str::contains("--focus <FOCUS>"))
@@ -28,21 +29,47 @@ fn help_lists_public_commands_and_hides_event_entry_point() {
 }
 
 #[test]
-fn bind_and_unbind_help_expose_only_the_session_targeting_option() {
-    for command in ["bind", "unbind"] {
+fn every_manual_command_exposes_the_session_targeting_option() {
+    for command in ["pick", "next", "previous", "sync", "bind", "unbind"] {
         cargo_bin_cmd!("zerdr")
             .args([command, "--help"])
             .assert()
             .success()
             .stdout(predicate::str::contains("--session <SESSION>"));
     }
+}
 
-    for command in ["pick", "next", "previous", "sync"] {
+#[test]
+fn setup_and_uninstall_reject_session_targeting() {
+    for command in ["setup", "uninstall"] {
         cargo_bin_cmd!("zerdr")
             .args([command, "--help"])
             .assert()
             .success()
             .stdout(predicate::str::contains("--session").not());
+
+        for args in [
+            vec![command, "--session", "work"],
+            vec!["--session", "work", command],
+        ] {
+            let env = TestEnv::new();
+            env.command().args(args).assert().failure();
+            assert_eq!(env.read_log(), "");
+        }
+    }
+}
+
+#[test]
+fn hidden_plugin_commands_reject_session_targeting() {
+    for command in ["sync-from-herdr", "open-from-herdr"] {
+        for args in [
+            vec![command, "--session", "work"],
+            vec!["--session", "work", command],
+        ] {
+            let env = TestEnv::new();
+            env.command().args(args).assert().failure();
+            assert_eq!(env.read_log(), "");
+        }
     }
 }
 

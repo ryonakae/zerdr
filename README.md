@@ -20,14 +20,14 @@ cargo install --git https://github.com/ryonakae/zerdr --locked
 
 ## Quickstart
 
-Install the Herdr focus hook, Open Zed action, and Zed tasks, then start the dedicated Herdr session:
+Install the Herdr focus hook, Open Zed action, and Zed tasks, then open the default Herdr session with Zed routing enabled:
 
 ```bash
 zerdr setup
 zerdr
 ```
 
-Run `zerdr` from the terminal you want to use with Herdr. zerdr routes the focused workspace's checkout to Zed.
+Bare `zerdr` opens or attaches the same default persistent session as bare `herdr`. Use `zerdr --session NAME` to open or attach the same named session as `herdr --session NAME`. Run zerdr from the terminal you want to use with Herdr; it routes the focused workspace's checkout to Zed.
 
 To keep normal Herdr workspace switching independent from Zed, do not start the bare wrapper. Add a configurable Herdr keybinding instead:
 
@@ -45,20 +45,20 @@ The action opens the current workspace in Zed once and leaves Zed in front. `zer
 
 | Command | Description |
 |---|---|
-| `zerdr` | Open or attach the `zerdr` Herdr session and choose a routing mode from the terminal environment. |
-| `zerdr pick` | Choose a Herdr workspace with a fuzzy picker. |
-| `zerdr next` | Focus the next workspace in Herdr display order. |
-| `zerdr previous` | Focus the previous workspace in Herdr display order. |
-| `zerdr sync` | Reapply the focused Herdr workspace route to Zed. |
-| `zerdr bind [--session NAME] [PATH]` | Bind the selected workspace to a Git checkout; sync it when a wrapper is live. |
-| `zerdr unbind [--session NAME]` | Remove the selected workspace binding. |
+| `zerdr [--session NAME]` | Open or attach the default or named Herdr session and choose a routing mode from the terminal environment. |
+| `zerdr [--session NAME] pick` | Choose a Herdr workspace with a fuzzy picker. |
+| `zerdr [--session NAME] next` | Focus the next workspace in Herdr display order. |
+| `zerdr [--session NAME] previous` | Focus the previous workspace in Herdr display order. |
+| `zerdr [--session NAME] sync` | Reapply the focused Herdr workspace route to Zed. |
+| `zerdr [--session NAME] bind [PATH]` | Bind the selected workspace to a Git checkout; sync it when a wrapper is live. |
+| `zerdr [--session NAME] unbind` | Remove the selected workspace binding. |
 | `zerdr setup` | Install or update the Herdr plugin and five global Zed tasks. |
 | `zerdr uninstall [--purge]` | Remove integration files; `--purge` removes zerdr state too. |
-| `zerdr doctor` | Check required commands, installed files, bindings, routes, and leases. |
+| `zerdr [--session NAME] doctor` | Check required commands, installed files, bindings, routes, and leases for the selected session. |
 
-Bare `zerdr` accepts `--mode auto|internal|external`, `--anchor PATH`, and `--focus terminal|zed`. Launch options cannot accompany a subcommand.
+Bare `zerdr` accepts `--session NAME`, `--mode auto|internal|external`, `--anchor PATH`, and `--focus terminal|zed`. Omitting `--session` selects Herdr's default session. Launch options other than `--session` cannot accompany a subcommand.
 
-`pick`, `next`, `previous`, and `sync` require a live `zerdr` wrapper and use its routing mode. `bind` and `unbind` use the current Herdr pane when available, otherwise the `zerdr` session; pass `--session NAME` to target another session. Without a live wrapper, binding changes do not route Zed.
+`pick`, `next`, `previous`, and `sync` require a live zerdr wrapper for the selected session and use its routing mode. Manual commands use the current Herdr pane when available, otherwise the default session; pass `--session NAME` to target another session. Without a live wrapper for that session, binding changes do not route Zed.
 
 ## Routing modes
 
@@ -84,9 +84,9 @@ The one-shot plugin action reuses an applicable live wrapper route. Without a wr
 ## Notes
 
 - **Keybindings:** `zerdr setup` adds global Zed tasks and prints optional Herdr and Zed keybindings. It does not edit your Herdr config or Zed keymap.
-- **Wrapper ownership:** One live `zerdr` wrapper owns routing for both modes. Stop it before changing modes.
-- **Session lifetime:** zerdr keeps the Herdr session named `zerdr` after the wrapper exits, but synchronization stops with the wrapper lease.
-- **Missing checkouts:** A missing checkout keeps its binding. Restore the checkout, run `zerdr bind [--session NAME] PATH`, or remove it with `zerdr unbind [--session NAME]`.
+- **Wrapper ownership:** Each Herdr session can have one live zerdr wrapper. Stop that session's wrapper before changing its routing mode. Wrappers for different named sessions can coexist.
+- **Session lifetime:** Exiting a zerdr client stops synchronization for that wrapper, but the default or named Herdr session remains available to `herdr` and future zerdr clients.
+- **Missing checkouts:** A missing checkout keeps its binding. Restore the checkout, run `zerdr [--session NAME] bind PATH`, or remove it with `zerdr [--session NAME] unbind`.
 - **Uninstall:** `zerdr uninstall` keeps bindings and route state. Stop the live wrapper before running `zerdr uninstall --purge`.
 
 ## License

@@ -6,10 +6,12 @@ use thiserror::Error;
 pub enum Error {
     #[error("{0}")]
     User(String),
-    #[error("the zerdr Herdr session is not running; start bare `zerdr` first")]
+    #[error("the default Herdr session is not running; start bare `zerdr` first")]
     SessionUnavailable,
-    #[error("no live zerdr client for this Herdr session; run bare `zerdr` first")]
-    NoLiveLease,
+    #[error(
+        "no live zerdr client for Herdr session {session_name:?}; run `zerdr --session {session_name}` first"
+    )]
+    NoLiveLease { session_name: String },
     #[error("failed to access {path}: {source}")]
     Io {
         path: PathBuf,

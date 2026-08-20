@@ -36,7 +36,7 @@ pub fn doctor_remote(markers: &[String]) -> Result<()> {
     report.finish()
 }
 
-pub fn doctor() -> Result<()> {
+pub fn doctor(session_name: &str) -> Result<()> {
     let paths = Paths::discover()?;
     let mut report = Report::default();
     report.pass(format!("state directory: {}", paths.state_dir.display()));
@@ -171,8 +171,8 @@ pub fn doctor() -> Result<()> {
             Err(error) => report.fail(format!("could not remove stale route state: {error}")),
         }
     }
-    match herdr.session_socket() {
-        Ok(socket) => match leases.inspect(&socket) {
+    match herdr.session_socket_if_running(session_name) {
+        Ok(Some(socket)) => match leases.inspect_for(session_name, &socket) {
             Ok(inspection) => {
                 if inspection.stale_removed > 0 {
                     report.warn(format!(
@@ -181,20 +181,12 @@ pub fn doctor() -> Result<()> {
                         socket.display()
                     ));
                 }
-                if let Some(sweep) = lease_sweep.as_ref()
-                    && sweep.live_count != inspection.live_wrapper_pids.len()
-                {
-                    report.fail(format!(
-                        "found {} live lease(s) outside the current zerdr session socket",
-                        sweep.live_count - inspection.live_wrapper_pids.len()
-                    ));
-                }
                 match inspection.live_wrapper_pids.as_slice() {
                     [] => report.pass("no live follow wrapper; one-shot mode does not require one"),
-                    [wrapper_pid] => match routes.load(&socket) {
+                    [wrapper_pid] => match routes.load_for(session_name, &socket) {
                         Ok(route) if route.wrapper_pid == *wrapper_pid => {
                             report.pass(format!(
-                                "zerdr session has one live wrapper: {}",
+                                "Herdr session {session_name:?} has one live wrapper: {}",
                                 socket.display()
                             ));
                             match &route.routing {
@@ -230,28 +222,39 @@ pub fn doctor() -> Result<()> {
                             }
                         }
                         Ok(route) => report.fail(format!(
-                            "route belongs to wrapper {}, but live wrapper is {}; restart bare `zerdr`",
+                            "route belongs to wrapper {}, but live wrapper is {}; restart `zerdr --session {session_name}`",
                             route.wrapper_pid, wrapper_pid
                         )),
                         Err(error) => report.fail(format!(
-                            "live wrapper route state is invalid: {error}; restart bare `zerdr`"
+                            "live wrapper route state is invalid: {error}; restart `zerdr --session {session_name}`"
                         )),
                     },
                     wrapper_pids => report.fail(format!(
-                        "zerdr session has {} live wrappers ({wrapper_pids:?}); keep only one bare `zerdr` wrapper",
+                        "Herdr session {session_name:?} has {} live wrappers ({wrapper_pids:?}); keep only one wrapper for that session",
                         wrapper_pids.len()
                     )),
                 }
             }
             Err(error) => report.fail(format!("lease state is invalid: {error}")),
         },
-        Err(_) if lease_sweep.as_ref().is_some_and(|sweep| sweep.live_count > 0) => report.fail(
-            "zerdr has live lease state but the Herdr session socket is unavailable; stop the stale wrapper or remove its state",
-        ),
-        Err(Error::SessionUnavailable) => {
-            report.pass("no live follow wrapper; one-shot mode does not require one")
+        Ok(None)
+            if lease_sweep.as_ref().is_some_and(|sweep| {
+                sweep
+                    .live_session_names
+                    .iter()
+                    .any(|name| name == session_name)
+            }) =>
+        {
+            report.fail(format!(
+                "Herdr session {session_name:?} has live lease state but its socket is unavailable"
+            ));
         }
-        Err(error) => report.fail(format!("could not inspect the zerdr Herdr session: {error}")),
+        Ok(None) => report.pass(format!(
+            "Herdr session {session_name:?} is not running; one-shot mode does not require it"
+        )),
+        Err(error) => report.fail(format!(
+            "could not inspect Herdr session {session_name:?}: {error}"
+        )),
     }
 
     if report.failures == 0 {

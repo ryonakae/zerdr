@@ -211,7 +211,7 @@ fn route_state_tracks_the_canonical_dynamic_anchor() {
     routes.initialize(&socket, &first, 41).unwrap();
     let initial = routes.load(&socket).unwrap();
     assert_eq!(initial.schema_version, 2);
-    assert_eq!(initial.session_name, "zerdr");
+    assert_eq!(initial.session_name, "default");
     assert_eq!(initial.socket_path, socket.canonicalize().unwrap());
     assert_eq!(initial.internal_anchor(), Some(first.as_path()));
     assert_eq!(initial.wrapper_pid, 41);
@@ -222,7 +222,7 @@ fn route_state_tracks_the_canonical_dynamic_anchor() {
         route_json,
         serde_json::json!({
             "schema_version": 2,
-            "session_name": "zerdr",
+            "session_name": "default",
             "socket_path": socket.canonicalize().unwrap(),
             "wrapper_pid": 41,
             "routing": {
@@ -270,7 +270,7 @@ fn external_route_has_no_anchor_and_cannot_be_promoted() {
         serde_json::from_slice::<serde_json::Value>(&original).unwrap(),
         serde_json::json!({
             "schema_version": 2,
-            "session_name": "zerdr",
+            "session_name": "default",
             "socket_path": socket.canonicalize().unwrap(),
             "wrapper_pid": 73,
             "routing": {

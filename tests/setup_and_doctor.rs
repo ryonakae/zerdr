@@ -387,6 +387,99 @@ fn failed_plugin_link_restores_the_action_manifest_tasks_and_ownership_state() {
 }
 
 #[test]
+fn purge_does_not_break_a_live_one_shot_zed_lock() {
+    let env = TestEnv::new();
+    env.command().arg("setup").assert().success();
+    fs::write(&env.log, "").unwrap();
+    let paths = Paths::for_test(env.root.path());
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let target = env.root.path().join("target");
+    fs::create_dir_all(&target).unwrap();
+    assert!(
+        ProcessCommand::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&target)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let target = target.canonicalize().unwrap();
+    let sessions = serde_json::json!({
+        "sessions":[{"name":"default","running":true,"socket_path":socket}]
+    });
+    let first_blocked = env.root.path().join("first-zed-blocked");
+    let release_first = env.root.path().join("release-first-zed");
+    let second_blocked = env.root.path().join("second-zed-lock-blocked");
+    let second_called = env.root.path().join("second-zed-called");
+    let action = || {
+        let context = serde_json::json!({
+            "workspace_id":"w1",
+            "worktree":{"checkout_path":target.clone()}
+        });
+        let mut command = env.std_command();
+        command
+            .arg("open-from-herdr")
+            .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+            .env("HERDR_SOCKET_PATH", &socket)
+            .env("HERDR_PLUGIN_CONTEXT_JSON", context.to_string())
+            .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string());
+        command
+    };
+
+    let mut first = action();
+    first
+        .env("ZERDR_TEST_ZED_BLOCK_MARKER", &first_blocked)
+        .env("ZERDR_TEST_ZED_BLOCK_CONTINUE", &release_first);
+    let mut first = first.spawn().unwrap();
+    for _ in 0..300 {
+        if first_blocked.exists() {
+            break;
+        }
+        if let Some(status) = first.try_wait().unwrap() {
+            panic!("first one-shot action exited before blocking: {status}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(first_blocked.exists());
+
+    env.command()
+        .args(["uninstall", "--purge"])
+        .assert()
+        .success();
+    assert!(paths.zed_lock_file.exists());
+
+    let mut second = action();
+    second
+        .env("ZERDR_TEST_ZED_LOCK_BLOCKED_MARKER", &second_blocked)
+        .env("ZERDR_TEST_ZED_CALL_MARKER", &second_called);
+    let mut second = second.spawn().unwrap();
+    for _ in 0..300 {
+        if second_blocked.exists() || second_called.exists() {
+            break;
+        }
+        if let Some(status) = second.try_wait().unwrap() {
+            panic!("second one-shot action exited before contending: {status}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let interleaved = second_called.exists();
+    assert!(
+        second_blocked.exists(),
+        "second one-shot action did not observe the held Zed lock"
+    );
+
+    fs::write(&release_first, "go").unwrap();
+    assert!(first.wait().unwrap().success());
+    assert!(second.wait().unwrap().success());
+    assert!(
+        !interleaved,
+        "purge allowed a second one-shot action to bypass the Zed lock"
+    );
+    assert!(second_called.exists());
+}
+
+#[test]
 fn purge_refuses_to_change_installation_while_a_live_lease_exists() {
     let env = TestEnv::new();
     env.command().arg("setup").assert().success();
@@ -434,7 +527,7 @@ fn doctor_waits_for_admission_and_preserves_the_new_live_route() {
     let routes = RouteStore::new(paths.routes_dir.clone());
     routes.initialize(&socket, &stale_anchor, 1).unwrap();
     let sessions = serde_json::json!({
-        "sessions":[{"name":"zerdr","running":true,"socket_path":socket}]
+        "sessions":[{"name":"default","running":true,"socket_path":socket}]
     });
     let workspaces = serde_json::json!({"result":{"workspaces":[]}});
     let plugins = compatible_plugins_json();
@@ -774,7 +867,7 @@ fn doctor_treats_absent_session_or_wrapper_as_healthy_plugin_only_state() {
             fs::write(&socket, "").unwrap();
             serde_json::json!({
                 "sessions":[{
-                    "name":"zerdr",
+                    "name":"default",
                     "running":true,
                     "socket_path":socket
                 }]
@@ -860,7 +953,7 @@ fn doctor_rejects_corrupt_session_discovery_without_live_authority() {
         .assert()
         .failure()
         .stdout(predicates::str::contains(
-            "FAIL could not inspect the zerdr Herdr session",
+            "FAIL could not inspect Herdr session \"default\"",
         ));
 }
 
@@ -889,7 +982,7 @@ fn doctor_validates_the_live_wrapper_route_and_anchor() {
         .acquire(&socket, 99)
         .unwrap();
     let sessions = serde_json::json!({
-        "sessions":[{"name":"zerdr","running":true,"socket_path":socket}]
+        "sessions":[{"name":"default","running":true,"socket_path":socket}]
     });
     let plugins = compatible_plugins_json();
 
@@ -903,6 +996,82 @@ fn doctor_validates_the_live_wrapper_route_and_anchor() {
             "route anchor is valid: {}",
             anchor.display()
         )));
+}
+
+#[test]
+fn doctor_targets_an_explicit_named_session() {
+    let env = TestEnv::new();
+    env.command().arg("setup").assert().success();
+    let paths = Paths::for_test(env.root.path());
+    let socket = env.root.path().join("work.sock");
+    fs::write(&socket, "").unwrap();
+    let anchor = env.root.path().join("anchor");
+    fs::create_dir_all(&anchor).unwrap();
+    assert!(
+        ProcessCommand::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&anchor)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let anchor = anchor.canonicalize().unwrap();
+    RouteStore::new(paths.routes_dir.clone())
+        .initialize_for("work", &socket, &anchor, std::process::id())
+        .unwrap();
+    let _lease = LeaseSet::new(paths.leases_dir)
+        .acquire_for("work", &socket, 99)
+        .unwrap();
+    let sessions = serde_json::json!({
+        "sessions":[{"name":"work","running":true,"socket_path":socket}]
+    });
+
+    env.command()
+        .args(["doctor", "--session", "work"])
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "Herdr session \"work\" has one live wrapper",
+        ));
+}
+
+#[test]
+fn doctor_does_not_treat_another_sessions_wrapper_as_an_error() {
+    let env = TestEnv::new();
+    env.command().arg("setup").assert().success();
+    let paths = Paths::for_test(env.root.path());
+    let socket = env.root.path().join("work.sock");
+    fs::write(&socket, "").unwrap();
+    let anchor = env.root.path().join("anchor");
+    fs::create_dir_all(&anchor).unwrap();
+    assert!(
+        ProcessCommand::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&anchor)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let anchor = anchor.canonicalize().unwrap();
+    RouteStore::new(paths.routes_dir.clone())
+        .initialize_for("work", &socket, &anchor, std::process::id())
+        .unwrap();
+    let _lease = LeaseSet::new(paths.leases_dir)
+        .acquire_for("work", &socket, 99)
+        .unwrap();
+    let sessions = serde_json::json!({
+        "sessions":[{"name":"work","running":true,"socket_path":socket}]
+    });
+
+    env.command()
+        .arg("doctor")
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "Herdr session \"default\" is not running",
+        ));
 }
 
 #[test]
@@ -925,7 +1094,7 @@ fn doctor_reports_external_route_focus_and_platform_capability() {
         .acquire(&socket, 99)
         .unwrap();
     let sessions = serde_json::json!({
-        "sessions":[{"name":"zerdr","running":true,"socket_path":socket}]
+        "sessions":[{"name":"default","running":true,"socket_path":socket}]
     });
 
     env.command()
@@ -973,7 +1142,7 @@ fn doctor_rejects_live_lease_state_when_session_discovery_fails() {
         .assert()
         .failure()
         .stdout(predicates::str::contains(
-            "FAIL zerdr has live lease state but the Herdr session socket is unavailable",
+            "FAIL Herdr session \"default\" has live lease state",
         ));
 }
 
@@ -1009,7 +1178,7 @@ fn doctor_removes_a_stale_route_while_preserving_another_live_scope() {
         .acquire(&live_socket, 99)
         .unwrap();
     let sessions = serde_json::json!({
-        "sessions":[{"name":"zerdr","running":true,"socket_path":live_socket}]
+        "sessions":[{"name":"default","running":true,"socket_path":live_socket}]
     });
     let plugins = compatible_plugins_json();
 
@@ -1049,7 +1218,7 @@ fn doctor_rejects_multiple_live_wrappers() {
     let _first = leases.acquire(&socket, 99).unwrap();
     let _second = leases.acquire(&socket, 100).unwrap();
     let sessions = serde_json::json!({
-        "sessions":[{"name":"zerdr","running":true,"socket_path":socket}]
+        "sessions":[{"name":"default","running":true,"socket_path":socket}]
     });
     let plugins = compatible_plugins_json();
 
@@ -1060,7 +1229,7 @@ fn doctor_rejects_multiple_live_wrappers() {
         .assert()
         .failure()
         .stdout(predicates::str::contains(
-            "FAIL zerdr session has 2 live wrappers",
+            "FAIL Herdr session \"default\" has 2 live wrappers",
         ));
 }
 
@@ -1075,7 +1244,7 @@ fn doctor_rejects_a_live_wrapper_without_route_state() {
         .acquire(&socket, 99)
         .unwrap();
     let sessions = serde_json::json!({
-        "sessions":[{"name":"zerdr","running":true,"socket_path":socket}]
+        "sessions":[{"name":"default","running":true,"socket_path":socket}]
     });
     let plugins = compatible_plugins_json();
 

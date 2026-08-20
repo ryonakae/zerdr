@@ -53,6 +53,16 @@ if [ "$1" = "--session" ] && [ "$3" = "notification" ] && [ "$4" = "show" ]; the
   fi
   exit 0
 fi
+if { [ "$#" = "0" ] || { [ "$1" = "--session" ] && [ "$#" = "2" ]; }; }; then
+  if [ -n "$ZERDR_TEST_CHILD_PID_FILE" ]; then
+    printf '%s\n' "$$" > "$ZERDR_TEST_CHILD_PID_FILE"
+  fi
+  if [ "${ZERDR_TEST_HERDR_EXIT:-0}" = "0" ]; then
+    exec sleep "${ZERDR_TEST_HERDR_SLEEP:-0}"
+  fi
+  sleep "${ZERDR_TEST_HERDR_SLEEP:-0}"
+  exit "$ZERDR_TEST_HERDR_EXIT"
+fi
 case "$*" in
   "--version")
     printf '%s\n' 'herdr 0.8.0 protocol 19'
@@ -74,32 +84,6 @@ case "$*" in
     fi
     printf '%s\n' "$ZERDR_TEST_SESSIONS_JSON"
     ;;
-  "--session zerdr workspace list")
-    printf '%s\n' "$ZERDR_TEST_WORKSPACES_JSON"
-    ;;
-  "--session zerdr workspace focus "*)
-    printf '%s\n' '{"ok":true,"result":{}}'
-    ;;
-  "--session zerdr api snapshot")
-    printf '%s\n' "$ZERDR_TEST_SNAPSHOT_JSON"
-    ;;
-  "--session zerdr notification show "*)
-    if [ "${ZERDR_TEST_NOTIFICATION_RESULT:-shown}" = "shown" ]; then
-      printf '%s\n' '{"ok":true,"result":{"shown":true}}'
-    else
-      printf '%s\n' '{"ok":true,"result":{"shown":false,"reason":"no_foreground_client"}}'
-    fi
-    ;;
-  "--session zerdr")
-    if [ -n "$ZERDR_TEST_CHILD_PID_FILE" ]; then
-      printf '%s\n' "$$" > "$ZERDR_TEST_CHILD_PID_FILE"
-    fi
-    if [ "${ZERDR_TEST_HERDR_EXIT:-0}" = "0" ]; then
-      exec sleep "${ZERDR_TEST_HERDR_SLEEP:-0}"
-    fi
-    sleep "${ZERDR_TEST_HERDR_SLEEP:-0}"
-    exit "$ZERDR_TEST_HERDR_EXIT"
-    ;;
   "plugin link "*)
     if [ "${ZERDR_TEST_PLUGIN_LINK_FAIL:-0}" = "1" ]; then
       printf '%s\n' 'fake plugin link failure' >&2
@@ -114,6 +98,13 @@ esac
 "##;
         let zed = r##"#!/bin/sh
 printf 'zed\t%s\n' "$*" >> "$ZERDR_TEST_LOG"
+if [ -n "$ZERDR_TEST_ZED_CALL_MARKER" ]; then
+  : > "$ZERDR_TEST_ZED_CALL_MARKER"
+fi
+if [ -n "$ZERDR_TEST_ZED_BLOCK_MARKER" ]; then
+  : > "$ZERDR_TEST_ZED_BLOCK_MARKER"
+  while [ ! -e "$ZERDR_TEST_ZED_BLOCK_CONTINUE" ]; do sleep 0.01; done
+fi
 if [ "$*" = "--help" ]; then
   printf '%s\n' 'The Zed CLI binary'
   if [ "${ZERDR_TEST_ZED_EXISTING:-1}" = "1" ]; then

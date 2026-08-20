@@ -12,8 +12,10 @@ use signal_hook::iterator::{Handle as SignalHandle, Signals};
 
 use crate::error::{Error, Result};
 use crate::state::{
-    LeaseSet, LifecycleGuard, Paths, RouteStore, RouteStrategy, SESSION_NAME, SyncGuard,
+    DEFAULT_SESSION_NAME, LeaseSet, LifecycleGuard, Paths, RouteStore, RouteStrategy, SyncGuard,
 };
+
+const PLUGIN_ID: &str = "zerdr";
 use crate::sync::Synchronizer;
 
 #[derive(Debug, Clone)]
@@ -40,13 +42,17 @@ impl Herdr {
     }
 
     pub fn session_socket(&self) -> Result<PathBuf> {
-        self.find_session_socket(SESSION_NAME)?
+        self.find_session_socket(DEFAULT_SESSION_NAME)?
             .ok_or(Error::SessionUnavailable)
     }
 
     pub fn session_socket_for(&self, session_name: &str) -> Result<PathBuf> {
-        self.find_session_socket(session_name)?
+        self.session_socket_if_running(session_name)?
             .ok_or_else(|| Error::User(format!("Herdr session {session_name:?} is not running")))
+    }
+
+    pub fn session_socket_if_running(&self, session_name: &str) -> Result<Option<PathBuf>> {
+        self.find_session_socket(session_name)
     }
 
     pub fn session_name_for_socket(&self, socket_path: &std::path::Path) -> Result<String> {
@@ -81,10 +87,6 @@ impl Herdr {
         )))
     }
 
-    pub fn workspaces(&self) -> Result<Vec<Workspace>> {
-        self.workspaces_for(SESSION_NAME)
-    }
-
     pub fn workspaces_for(&self, session_name: &str) -> Result<Vec<Workspace>> {
         let value = self.session_json_output_for(session_name, ["workspace", "list"])?;
         let values = find_array(&value, "workspaces").ok_or_else(|| {
@@ -93,17 +95,16 @@ impl Herdr {
         values.iter().map(parse_workspace).collect()
     }
 
-    pub fn focus_workspace(&self, workspace_id: &str) -> Result<()> {
-        self.session_output([
-            OsStr::new("workspace"),
-            OsStr::new("focus"),
-            OsStr::new(workspace_id),
-        ])?;
+    pub fn focus_workspace_for(&self, session_name: &str, workspace_id: &str) -> Result<()> {
+        self.session_output_for(
+            session_name,
+            [
+                OsStr::new("workspace"),
+                OsStr::new("focus"),
+                OsStr::new(workspace_id),
+            ],
+        )?;
         Ok(())
-    }
-
-    pub fn notify_error(&self, message: &str) -> Result<bool> {
-        self.notify_error_for(SESSION_NAME, message)
     }
 
     pub fn notify_error_for(&self, session_name: &str, message: &str) -> Result<bool> {
@@ -150,12 +151,12 @@ impl Herdr {
     }
 
     pub fn plugin_uninstall(&self) -> Result<()> {
-        self.output(["plugin", "uninstall", SESSION_NAME])?;
+        self.output(["plugin", "uninstall", PLUGIN_ID])?;
         Ok(())
     }
 
     pub fn plugin_list(&self) -> Result<Value> {
-        self.json_output(["plugin", "list", "--plugin", SESSION_NAME, "--json"])
+        self.json_output(["plugin", "list", "--plugin", PLUGIN_ID, "--json"])
     }
 
     pub fn version(&self) -> Result<String> {
@@ -163,9 +164,12 @@ impl Herdr {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     }
 
-    pub fn spawn_client(&self) -> Result<Child> {
-        Command::new(&self.program)
-            .args(["--session", SESSION_NAME])
+    pub fn spawn_client(&self, session_name: &str) -> Result<Child> {
+        let mut command = Command::new(&self.program);
+        if session_name != DEFAULT_SESSION_NAME {
+            command.args(["--session", session_name]);
+        }
+        command
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -177,14 +181,18 @@ impl Herdr {
         &self.program
     }
 
-    pub fn workspace_cwd(&self, workspace: &Workspace) -> Result<Option<PathBuf>> {
+    pub fn workspace_cwd(
+        &self,
+        session_name: &str,
+        workspace: &Workspace,
+    ) -> Result<Option<PathBuf>> {
         if let Some(cwd) = workspace.cwd.as_ref() {
             return Ok(Some(cwd.clone()));
         }
         let Some(tab_id) = workspace.active_tab_id.as_deref() else {
             return Ok(None);
         };
-        let value = self.session_json_output(["api", "snapshot"])?;
+        let value = self.session_json_output_for(session_name, ["api", "snapshot"])?;
         let snapshot = value
             .pointer("/result/snapshot")
             .or_else(|| value.get("result"))
@@ -248,14 +256,6 @@ impl Herdr {
         Ok(None)
     }
 
-    fn session_json_output<I, S>(&self, args: I) -> Result<Value>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        self.session_json_output_for(SESSION_NAME, args)
-    }
-
     fn session_json_output_for<I, S>(&self, session_name: &str, args: I) -> Result<Value>
     where
         I: IntoIterator<Item = S>,
@@ -264,14 +264,6 @@ impl Herdr {
         let mut complete = vec![OsString::from("--session"), OsString::from(session_name)];
         complete.extend(args.into_iter().map(|value| value.as_ref().to_os_string()));
         self.json_output(complete)
-    }
-
-    fn session_output<I, S>(&self, args: I) -> Result<Output>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        self.session_output_for(SESSION_NAME, args)
     }
 
     fn session_output_for<I, S>(&self, session_name: &str, args: I) -> Result<Output>
@@ -321,11 +313,11 @@ impl Herdr {
     }
 }
 
-pub fn run_wrapper(routing: RouteStrategy) -> Result<()> {
+pub fn run_wrapper(session_name: &str, routing: RouteStrategy) -> Result<()> {
     let herdr = Herdr::from_env();
     let paths = Paths::discover()?;
     crate::setup::validate_launcher_installation(&paths, &herdr)?;
-    let mut child = ManagedChild::new(herdr.spawn_client()?);
+    let mut child = ManagedChild::new(herdr.spawn_client(session_name)?);
     let _signals = SignalForwarder::new(child.id())?;
     let timeout_ms = std::env::var("ZERDR_READY_TIMEOUT_MS")
         .ok()
@@ -343,13 +335,13 @@ pub fn run_wrapper(routing: RouteStrategy) -> Result<()> {
                 Err(Error::ChildExit(status.code().unwrap_or(1)))
             };
         }
-        if let Ok(socket) = herdr.session_socket() {
+        if let Ok(socket) = herdr.session_socket_for(session_name) {
             break socket;
         }
         if Instant::now() >= deadline {
             child.terminate();
             return Err(Error::User(format!(
-                "timed out waiting for the {SESSION_NAME} Herdr session socket"
+                "timed out waiting for the {session_name} Herdr session socket"
             )));
         }
         thread::sleep(Duration::from_millis(25));
@@ -368,23 +360,24 @@ pub fn run_wrapper(routing: RouteStrategy) -> Result<()> {
     }
     let admission = SyncGuard::acquire(&paths.sync_locks_dir, &socket)?;
     let leases = LeaseSet::new(paths.leases_dir.clone());
-    if leases.has_live(&socket)? {
+    if leases.inspect_for(session_name, &socket)?.live {
         return Err(Error::User(format!(
-            "the {SESSION_NAME} Herdr session already has a live wrapper"
+            "the {session_name} Herdr session already has a live wrapper"
         )));
     }
-    RouteStore::new(paths.routes_dir.clone()).initialize_strategy(
+    RouteStore::new(paths.routes_dir.clone()).initialize_strategy_for(
+        session_name,
         &socket,
         routing.clone(),
         std::process::id(),
     )?;
-    let _lease = leases.acquire(&socket, child.id())?;
+    let _lease = leases.acquire_for(session_name, &socket, child.id())?;
     drop(admission);
     drop(lifecycle);
     let synchronizer = Synchronizer::from_env()?;
-    if let Err(error) = synchronizer.sync_socket(&socket) {
+    if let Err(error) = synchronizer.sync_session_socket(session_name, &socket) {
         let message = format!("startup synchronization failed: {error}");
-        let _ = herdr.notify_error(&message);
+        let _ = herdr.notify_error_for(session_name, &message);
         eprintln!("zerdr: {message}");
     }
 
