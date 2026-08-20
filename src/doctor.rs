@@ -10,8 +10,8 @@ use serde_json::Value;
 use crate::error::{Error, Result};
 use crate::herdr::Herdr;
 use crate::setup::{
-    InstallState, fingerprint, generated_tasks, load_install_state, owned_labels,
-    plugin_has_complete_action,
+    InstallState, fingerprint, generated_tasks, installed_init_command, load_install_state,
+    owned_labels, plugin_has_complete_action, terminal_init_command,
 };
 use crate::state::{
     BindingStore, LeaseSet, LifecycleGuard, Paths, RouteFocus, RouteStore, RouteStrategy,
@@ -113,6 +113,7 @@ pub fn doctor(session_name: &str) -> Result<()> {
             Ok(()) => report.pass("all five owned Zed task payloads are valid"),
             Err(error) => report.fail(error.to_string()),
         }
+        report_init_command(&paths, install, &mut report);
     }
 
     match BindingStore::new(paths.bindings_file.clone()).load() {
@@ -295,6 +296,7 @@ fn inspect_static_installation(paths: &Paths, report: &mut Report) {
             Ok(()) => report.pass("all five owned Zed task payloads are valid"),
             Err(error) => report.fail(error.to_string()),
         }
+        report_init_command(paths, install, report);
     }
 }
 
@@ -341,6 +343,39 @@ fn inspect_manifest(paths: &Paths, install: &InstallState) -> Result<()> {
             "generated Herdr manifest lacks the exact event or Open Zed action command; run `zerdr setup` ({})",
             path.display()
         )))
+    }
+}
+
+/// Zed only runs `zerdr thread` for new terminal threads when its own settings point at
+/// the installed executable, and setup refuses to overwrite a value it does not own.
+fn report_init_command(paths: &Paths, install: &InstallState, report: &mut Report) {
+    let expected = terminal_init_command(&install.executable);
+    let text = match fs::read_to_string(&paths.zed_settings_file) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            report.fail(format!(
+                "Zed terminal_init_command is not installed: {} is missing; run `zerdr setup`",
+                paths.zed_settings_file.display()
+            ));
+            return;
+        }
+        Err(error) => {
+            report.fail(format!(
+                "could not read the Zed settings file: {}",
+                Error::io(&paths.zed_settings_file, error)
+            ));
+            return;
+        }
+    };
+    match installed_init_command(&text) {
+        Ok(Some(current)) if current == expected => {
+            report.pass(format!("Zed terminal_init_command is installed: {current}"));
+        }
+        Ok(Some(current)) => report.fail(format!(
+            "Zed terminal_init_command is not owned by zerdr: {current:?}; set it to {expected:?} to attach terminal threads to Herdr"
+        )),
+        Ok(None) => report.fail("Zed terminal_init_command is not installed; run `zerdr setup`"),
+        Err(error) => report.fail(format!("could not inspect the Zed settings file: {error}")),
     }
 }
 

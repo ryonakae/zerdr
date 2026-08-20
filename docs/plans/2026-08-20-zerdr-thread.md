@@ -131,7 +131,7 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 - [x] Task 1: Herdr CLI helpers + fake herdr extensions
 - [x] Task 2: Thread lease store in `state.rs`
 - [x] Task 3: `zerdr thread` subcommand (resolution, auto-start, attach, monitor)
-- [ ] Task 4: Setup/uninstall/doctor integration for `terminal_init_command`
+- [x] Task 4: Setup/uninstall/doctor integration for `terminal_init_command`
 - [ ] Task 5: Documentation and manual validation
 
 ## Tasks
@@ -288,6 +288,11 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 **Validation:**
 - Run: `cargo test --test setup_and_doctor`
 - Expected: all pass.
+
+**Implementation record:**
+- `Paths` gained `zed_settings_file` next to `zed_tasks_file`, overridable with `ZERDR_ZED_SETTINGS_FILE`; `default_zed_tasks_file` became `default_zed_config_file(name)` so both files resolve the same way.
+- `setup.rs` gained `terminal_init_command`, `installed_init_command`, `merge_init_command`, and `remove_owned_init_command`. Merging creates the `agent` object when absent, sets or replaces only `terminal_init_command`, and returns the foreign value it refused to touch so `setup` can print the notice. Removal is a no-op unless the current value still matches the recorded fingerprint.
+- Task-level self-review additions: `settings.json` is now backed up under `<state>/backups/settings-*.jsonc` before either mutation, matching how the tasks file is treated (it was being rewritten with no backup — the more serious gap since this file is entirely the user's). `backup_before_mutation` takes a label, and the symlink refusal message no longer claims every protected file is the tasks file. A regression test asserts the backup content.
 
 ### Task 5: Documentation and manual validation
 

@@ -28,6 +28,9 @@ pub(crate) struct InstallState {
     pub(crate) schema_version: u32,
     pub(crate) executable: PathBuf,
     pub(crate) task_fingerprints: BTreeMap<String, String>,
+    /// Absent in state files written before `zerdr thread` existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) terminal_init_command_fingerprint: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -199,6 +202,17 @@ pub fn setup() -> Result<()> {
         .map_err(|error| Error::User(format!("Zed tasks file is not UTF-8: {error}")))?
         .unwrap_or("[]\n");
     let merged = merge_tasks(original_text, &generated, old_install.as_ref())?;
+    let init_command = terminal_init_command(&executable);
+    let original_settings = read_optional_file(&paths.zed_settings_file)?;
+    let original_settings_text = original_settings
+        .as_deref()
+        .map(std::str::from_utf8)
+        .transpose()
+        .map_err(|error| Error::User(format!("Zed settings file is not UTF-8: {error}")))?
+        .unwrap_or("{}\n")
+        .to_owned();
+    let (merged_settings, foreign_init_command) =
+        merge_init_command(&original_settings_text, &init_command, old_install.as_ref())?;
     let install = InstallState {
         schema_version: INSTALL_SCHEMA_VERSION,
         executable: executable.clone(),
@@ -206,11 +220,14 @@ pub fn setup() -> Result<()> {
             .iter()
             .map(|task| (task_label(task).unwrap().to_owned(), fingerprint(task)))
             .collect(),
+        terminal_init_command_fingerprint: foreign_init_command
+            .is_none()
+            .then(|| fingerprint(&Value::String(init_command.clone()))),
     };
 
     let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
     let previous_manifest = read_optional_file(&manifest_path)?;
-    backup_before_mutation(&paths, &original)?;
+    backup_before_mutation(&paths, "tasks", &original)?;
     materialize_manifest(&paths, &executable)?;
     let herdr = Herdr::from_env();
     if let Err(error) = herdr.plugin_link(&paths.plugin_dir) {
@@ -228,6 +245,20 @@ pub fn setup() -> Result<()> {
         rollback_plugin(&herdr, &paths, previous_manifest.as_deref());
         return Err(error);
     }
+    if merged_settings.as_bytes() != original_settings_text.as_bytes() {
+        let write = backup_before_mutation(&paths, "settings", &original_settings).and_then(|()| {
+            write_checked(
+                &paths.zed_settings_file,
+                original_settings.as_deref(),
+                merged_settings.as_bytes(),
+            )
+        });
+        if let Err(error) = write {
+            let _ = restore_optional(&paths.zed_tasks_file, original.as_deref());
+            rollback_plugin(&herdr, &paths, previous_manifest.as_deref());
+            return Err(error);
+        }
+    }
     let install_write =
         if std::env::var("ZERDR_TEST_FAIL_INSTALL_STATE_WRITE").is_ok_and(|value| value == "1") {
             Err(Error::User(
@@ -237,12 +268,18 @@ pub fn setup() -> Result<()> {
             write_json(&paths.install_state_file, &install)
         };
     if let Err(error) = install_write {
+        let _ = restore_optional(&paths.zed_settings_file, original_settings.as_deref());
         let _ = restore_optional(&paths.zed_tasks_file, original.as_deref());
         rollback_plugin(&herdr, &paths, previous_manifest.as_deref());
         return Err(error);
     }
 
     println!("zerdr setup complete");
+    if let Some(foreign) = foreign_init_command {
+        println!(
+            "Preserved your Zed agent.terminal_init_command {foreign:?}; set it to {init_command:?} to attach terminal threads to Herdr"
+        );
+    }
     println!(
         "Add this Herdr keybinding manually if desired:\n{}",
         include_str!("../assets/herdr/keymap.example.toml")
@@ -284,7 +321,7 @@ pub fn uninstall(purge: bool) -> Result<()> {
     let herdr = Herdr::from_env();
     herdr.plugin_uninstall()?;
     if updated.as_bytes() != original_text.as_bytes() {
-        backup_before_mutation(&paths, &original)?;
+        backup_before_mutation(&paths, "tasks", &original)?;
         if let Err(error) = write_checked(
             &paths.zed_tasks_file,
             original.as_deref(),
@@ -292,6 +329,22 @@ pub fn uninstall(purge: bool) -> Result<()> {
         ) {
             let _ = herdr.plugin_link(&paths.plugin_dir);
             return Err(error);
+        }
+    }
+    if let Some(install) = install.as_ref() {
+        let original_settings = read_optional_file(&paths.zed_settings_file)?;
+        if let Some(bytes) = original_settings.as_deref() {
+            let text = std::str::from_utf8(bytes)
+                .map_err(|error| Error::User(format!("Zed settings file is not UTF-8: {error}")))?;
+            let updated = remove_owned_init_command(text, install)?;
+            if updated.as_bytes() != bytes {
+                backup_before_mutation(&paths, "settings", &original_settings)?;
+                write_checked(
+                    &paths.zed_settings_file,
+                    original_settings.as_deref(),
+                    updated.as_bytes(),
+                )?;
+            }
         }
     }
     if paths.plugin_dir.exists() {
@@ -410,6 +463,93 @@ fn parse_tasks(text: &str) -> Result<CstRootNode> {
         .map_err(|error| Error::User(format!("failed to parse Zed tasks JSONC: {error}")))
 }
 
+pub(crate) fn terminal_init_command(executable: &Path) -> String {
+    format!("{} thread", executable.display())
+}
+
+/// The `agent.terminal_init_command` currently in a Zed settings document, if any.
+pub(crate) fn installed_init_command(text: &str) -> Result<Option<String>> {
+    let value: Option<Value> =
+        jsonc_parser::parse_to_serde_value(text, &ParseOptions::default())
+            .map_err(|error| Error::User(format!("failed to parse Zed settings JSONC: {error}")))?;
+    Ok(value
+        .as_ref()
+        .and_then(|value| value.pointer("/agent/terminal_init_command"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned))
+}
+
+/// Add or refresh `agent.terminal_init_command`, leaving a value zerdr does not own
+/// untouched. Returns the new document text and the value that blocked the write.
+fn merge_init_command(
+    text: &str,
+    expected: &str,
+    previous: Option<&InstallState>,
+) -> Result<(String, Option<String>)> {
+    if let Some(current) = installed_init_command(text)? {
+        if current == expected {
+            return Ok((text.to_owned(), None));
+        }
+        let owned = previous
+            .and_then(|state| state.terminal_init_command_fingerprint.as_deref())
+            .is_some_and(|recorded| recorded == fingerprint(&Value::String(current.clone())));
+        if !owned {
+            return Ok((text.to_owned(), Some(current)));
+        }
+    }
+
+    let root = CstRootNode::parse(text, &ParseOptions::default())
+        .map_err(|error| Error::User(format!("failed to parse Zed settings JSONC: {error}")))?;
+    let object = root.object_value().ok_or_else(|| {
+        Error::User("Zed settings file must contain a top-level object".to_owned())
+    })?;
+    let agent = match object.object_value("agent") {
+        Some(agent) => agent,
+        None => object
+            .append("agent", CstInputValue::Object(Vec::new()))
+            .object_value()
+            .ok_or_else(|| Error::User("could not create the Zed agent settings".to_owned()))?,
+    };
+    match agent.get("terminal_init_command") {
+        Some(property) => {
+            property.set_value(CstInputValue::String(expected.to_owned()));
+        }
+        None => {
+            agent.append(
+                "terminal_init_command",
+                CstInputValue::String(expected.to_owned()),
+            );
+        }
+    }
+    object.ensure_multiline();
+    Ok((root.to_string(), None))
+}
+
+/// Drop `agent.terminal_init_command` when it still matches what setup recorded.
+fn remove_owned_init_command(text: &str, install: &InstallState) -> Result<String> {
+    let Some(current) = installed_init_command(text)? else {
+        return Ok(text.to_owned());
+    };
+    let Some(recorded) = install.terminal_init_command_fingerprint.as_deref() else {
+        return Ok(text.to_owned());
+    };
+    if recorded != fingerprint(&Value::String(current)) {
+        return Ok(text.to_owned());
+    }
+    let root = CstRootNode::parse(text, &ParseOptions::default())
+        .map_err(|error| Error::User(format!("failed to parse Zed settings JSONC: {error}")))?;
+    let Some(agent) = root
+        .object_value()
+        .and_then(|object| object.object_value("agent"))
+    else {
+        return Ok(text.to_owned());
+    };
+    if let Some(property) = agent.get("terminal_init_command") {
+        property.remove();
+    }
+    Ok(root.to_string())
+}
+
 pub(crate) fn generated_tasks(executable: &Path) -> Result<Vec<Value>> {
     let command = shell_quote(executable);
     let rendered = include_str!("../assets/zed/tasks.json.in").replace(
@@ -522,7 +662,7 @@ pub(crate) fn load_install_state(path: &Path) -> Result<Option<InstallState>> {
 fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::User(format!(
-            "refusing to replace symlinked Zed tasks file {}",
+            "refusing to replace symlinked Zed configuration file {}",
             path.display()
         ))),
         Ok(_) => fs::read(path)
@@ -533,13 +673,13 @@ fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>> {
     }
 }
 
-fn backup_before_mutation(paths: &Paths, original: &Option<Vec<u8>>) -> Result<()> {
+fn backup_before_mutation(paths: &Paths, label: &str, original: &Option<Vec<u8>>) -> Result<()> {
     let Some(original) = original else {
         return Ok(());
     };
     let backup_dir = paths.state_dir.join("backups");
     fs::create_dir_all(&backup_dir).map_err(|error| Error::io(&backup_dir, error))?;
-    let backup = backup_dir.join(format!("tasks-{}.jsonc", now_millis()));
+    let backup = backup_dir.join(format!("{label}-{}.jsonc", now_millis()));
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)

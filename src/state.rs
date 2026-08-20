@@ -35,6 +35,7 @@ pub struct Paths {
     pub install_state_file: PathBuf,
     pub plugin_dir: PathBuf,
     pub zed_tasks_file: PathBuf,
+    pub zed_settings_file: PathBuf,
 }
 
 impl Paths {
@@ -47,12 +48,16 @@ impl Paths {
         let state = project.state_dir().unwrap_or(project.data_local_dir());
         let zed_tasks_file = std::env::var_os("ZERDR_ZED_TASKS_FILE")
             .map(PathBuf::from)
-            .unwrap_or_else(default_zed_tasks_file);
+            .unwrap_or_else(|| default_zed_config_file("tasks.json"));
+        let zed_settings_file = std::env::var_os("ZERDR_ZED_SETTINGS_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| default_zed_config_file("settings.json"));
         Ok(Self::from_roots(
             project.config_dir(),
             project.data_dir(),
             state,
             zed_tasks_file,
+            zed_settings_file,
         ))
     }
 
@@ -63,6 +68,7 @@ impl Paths {
             root.join("data"),
             root.join("state"),
             root.join("zed/tasks.json"),
+            root.join("zed/settings.json"),
         )
     }
 
@@ -71,6 +77,7 @@ impl Paths {
         data_dir: impl AsRef<Path>,
         state_dir: impl AsRef<Path>,
         zed_tasks_file: PathBuf,
+        zed_settings_file: PathBuf,
     ) -> Self {
         let config_dir = config_dir.as_ref().to_path_buf();
         let data_dir = data_dir.as_ref().to_path_buf();
@@ -89,6 +96,7 @@ impl Paths {
             install_state_file: state_dir.join("install.json"),
             plugin_dir: data_dir.join("plugin-v1"),
             zed_tasks_file,
+            zed_settings_file,
             config_dir,
             data_dir,
             state_dir,
@@ -96,14 +104,14 @@ impl Paths {
     }
 }
 
-fn default_zed_tasks_file() -> PathBuf {
+fn default_zed_config_file(name: &str) -> PathBuf {
     if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
-        return PathBuf::from(path).join("zed/tasks.json");
+        return PathBuf::from(path).join("zed").join(name);
     }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    home.join(".config/zed/tasks.json")
+    home.join(".config/zed").join(name)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
