@@ -1090,6 +1090,15 @@ impl ThreadLeaseSet {
         Ok(leased)
     }
 
+    /// Lock guarding resolve-then-acquire for one session, so concurrent threads on
+    /// unrelated Herdr sessions never wait on each other.
+    pub fn resolve_lock_path(&self, session_name: &str, socket_path: &Path) -> Result<PathBuf> {
+        let socket_path = canonical_socket(socket_path)?;
+        Ok(self
+            .scope_directory(session_name, &socket_path)
+            .join("resolve.lock"))
+    }
+
     fn scope_directory(&self, session_name: &str, socket_path: &Path) -> PathBuf {
         let mut scope = socket_path.as_os_str().to_os_string();
         scope.push("\u{0}");

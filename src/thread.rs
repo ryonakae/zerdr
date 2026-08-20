@@ -1,7 +1,6 @@
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -52,8 +51,19 @@ pub fn run(
         None => resolve_or_create(&session, &paths, kind, create)?,
     };
 
-    let workspaces = herdr.workspaces_for(session_name).unwrap_or_default();
-    focus_workspace(&herdr, session_name, &agent.workspace_id, &workspaces);
+    // Without the workspace list there is no way to tell whether this workspace is
+    // already focused, and focusing it blindly would re-fire `workspace.focused` and pull
+    // Zed forward under follow mode. Skipping the focus is the harmless direction.
+    let workspaces = match herdr.workspaces_for(session_name) {
+        Ok(workspaces) => {
+            focus_workspace(&herdr, session_name, &agent.workspace_id, &workspaces);
+            workspaces
+        }
+        Err(error) => {
+            eprintln!("zerdr: could not read Herdr workspaces, leaving focus alone: {error}");
+            Vec::new()
+        }
+    };
     let label = workspaces
         .iter()
         .find(|workspace| workspace.id == agent.workspace_id)
@@ -97,7 +107,11 @@ fn resolve_or_create(
         ))
     })?;
 
-    let _serialize = OperationGuard::acquire(&paths.thread_leases_dir.join(".resolve.lock"))?;
+    let _serialize = OperationGuard::acquire(
+        &session
+            .leases
+            .resolve_lock_path(session.name, session.socket)?,
+    )?;
     let bindings = BindingStore::new(paths.bindings_file.clone());
     let workspaces = session.herdr.workspaces_for(session.name)?;
     let agents = session.herdr.agents_for(session.name)?;
@@ -242,7 +256,7 @@ fn focus_workspace(
 /// Mirrors the attached agent into the Zed threads sidebar: an OSC 0 title whenever the
 /// label changes, and a bell when the agent settles after working so Zed notifies.
 struct Monitor {
-    stop: Arc<AtomicBool>,
+    stop: Arc<(Mutex<bool>, Condvar)>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -254,7 +268,7 @@ impl Monitor {
         fallback_label: Option<String>,
         initial: AgentInfo,
     ) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new((Mutex::new(false), Condvar::new()));
         let interval = Duration::from_millis(
             std::env::var("ZERDR_THREAD_POLL_MS")
                 .ok()
@@ -266,11 +280,10 @@ impl Monitor {
             let mut last_label = None;
             let mut last_status = initial.status.clone();
             emit_title(&mut last_label, &initial, fallback_label.as_deref());
-            while !worker_stop.load(Ordering::Relaxed) {
-                thread::sleep(interval);
-                if worker_stop.load(Ordering::Relaxed) {
-                    return;
-                }
+            // Waiting on the condvar rather than sleeping keeps detaching immediate: the
+            // agent exits, `stop` wakes this thread, and zerdr does not linger for a
+            // whole poll interval before returning the terminal to Zed.
+            while !wait_for_stop(&worker_stop, interval) {
                 // A failed poll must never disturb the attached agent, so keep the last
                 // known state and try again on the next tick.
                 let Ok(Some(agent)) = herdr.agent_get_for(&session_name, &pane_id) else {
@@ -290,10 +303,29 @@ impl Monitor {
     }
 
     fn stop(mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+        let (stopped, waker) = &*self.stop;
+        if let Ok(mut stopped) = stopped.lock() {
+            *stopped = true;
+        }
+        waker.notify_all();
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
+    }
+}
+
+/// Waits up to `interval` for the stop signal. Returns whether the monitor should exit.
+fn wait_for_stop(stop: &(Mutex<bool>, Condvar), interval: Duration) -> bool {
+    let (stopped, waker) = stop;
+    let Ok(guard) = stopped.lock() else {
+        return true;
+    };
+    if *guard {
+        return true;
+    }
+    match waker.wait_timeout(guard, interval) {
+        Ok((guard, _)) => *guard,
+        Err(_) => true,
     }
 }
 

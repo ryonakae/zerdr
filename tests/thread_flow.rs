@@ -513,6 +513,77 @@ fn a_failing_poll_leaves_the_attached_agent_and_the_last_title_alone() {
     );
 }
 
+/// A detach must return the terminal to Zed immediately. The monitor waits on a condvar
+/// rather than sleeping, so a long poll interval cannot delay the exit.
+#[test]
+fn detaching_does_not_wait_for_the_next_poll() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "prompt detach");
+
+    let started = std::time::Instant::now();
+    fixture
+        .thread_command()
+        .arg("thread")
+        .env("ZERDR_THREAD_POLL_MS", "30000")
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .assert()
+        .success();
+
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "exit took {:?}, so the monitor blocked on its poll interval",
+        started.elapsed()
+    );
+}
+
+/// Focus is left alone when the workspace list is unavailable: guessing would re-fire
+/// `workspace.focused` and drag Zed forward under follow mode.
+#[test]
+fn an_unreadable_workspace_list_leaves_herdr_focus_untouched() {
+    let fixture = Fixture::new();
+    let agent = agent_response("idle", "focus untouched");
+
+    let output = fixture
+        .std_thread_command()
+        .args(["thread", "w1:p1"])
+        .env("ZERDR_TEST_WORKSPACES_JSON", "")
+        .env("ZERDR_TEST_AGENT_GET_JSON", agent)
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+
+    assert!(output.status.success(), "the attach must still happen");
+    let log = fixture.env.read_log();
+    assert!(log.contains("agent attach w1:p1"), "{log}");
+    assert!(!log.contains("workspace focus"), "{log}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("leaving focus alone"),
+        "{:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Threads in unrelated Herdr sessions must not serialize against each other.
+#[test]
+fn the_resolve_lock_is_scoped_to_one_session_and_socket() {
+    let fixture = Fixture::new();
+    let leases = zerdr::state::ThreadLeaseSet::new(fixture.paths().thread_leases_dir);
+    let other_socket = fixture.env.root.path().join("other.sock");
+    fs::write(&other_socket, "").unwrap();
+
+    let default_lock = leases
+        .resolve_lock_path("default", &fixture.socket)
+        .unwrap();
+    let named_lock = leases.resolve_lock_path("work", &fixture.socket).unwrap();
+    let other_socket_lock = leases.resolve_lock_path("default", &other_socket).unwrap();
+
+    assert_ne!(default_lock, named_lock);
+    assert_ne!(default_lock, other_socket_lock);
+    assert_ne!(named_lock, other_socket_lock);
+}
+
 #[test]
 fn the_attach_exit_status_is_propagated() {
     let fixture = Fixture::new();
