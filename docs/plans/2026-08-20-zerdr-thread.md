@@ -315,6 +315,11 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 **Complete when:**
 - Docs updated; manual checklist executed with all items confirmed by the user.
 
+**Implementation record:**
+- README gained a "Terminal threads" section (how a thread finds its agent, the Zed notification settings the bell depends on, resume and SSH behavior, and why workspace creation needs `--create`), a `zerdr thread` row in the command table, a Zed terminal-threads requirement, and notes on init-command ownership and one-thread-per-agent.
+- AGENTS.md gained `src/thread.rs` and `cargo test --test thread_flow`, records that setup now also owns `agent.terminal_init_command`, and extends the ownership convention to Zed settings with a backup requirement.
+- Manual validation is still outstanding: it needs the real Zed and Herdr, so it is the one Final Validation item the implementer cannot self-serve.
+
 **Validation:**
 - Manual, in Zed: (1) new Terminal Thread auto-runs `zerdr thread` and attaches to an existing agent with correct sidebar title; (2) second thread attaches to a different agent; (3) thread in a project with no agents starts `pi` in a new tab; (4) prompt the agent, unfocus, notification fires on completion; (5) switch project via picker and back — threads still attached; (6) Herdr workspace focus followed the Zed project on thread start.
 - Expected: all six observed.
