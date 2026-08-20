@@ -43,7 +43,7 @@ The action opens the current workspace in Zed once and leaves Zed in front. `zer
 
 ## Terminal threads
 
-Open a terminal thread in Zed's agent panel and run `zerdr thread` inside it. zerdr finds the Herdr workspace for the project you have open and attaches the thread to a free agent there; if every agent is already attached to another thread, it starts a new one in a new Herdr tab. Either way you end up talking to an agent.
+Open a terminal thread in Zed's agent panel and run `zerdr thread` inside it. zerdr finds the Herdr workspace for the project you have open — by explicit binding, by Herdr's recorded checkout, or by where the workspace's panes sit, remembering that last match as a binding — and attaches the thread to a free agent there; if every agent is already attached to another thread, it starts a new one in a new Herdr tab. Either way you end up talking to an agent.
 
 While attached, zerdr mirrors the agent's name and Herdr terminal title into the threads sidebar and rings the terminal bell when the agent stops working, which is what makes Zed notify you. Enable Zed's notifications to see it:
 

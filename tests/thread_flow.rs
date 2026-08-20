@@ -297,10 +297,80 @@ fn a_bare_thread_without_a_matching_workspace_explains_the_create_flag() {
         )
         .assert()
         .code(1)
+        .stderr(predicate::str::contains("zerdr bind"))
         .stderr(predicate::str::contains("zerdr thread --create"))
         .stderr(predicate::str::contains(fixture.repo.display().to_string()));
 
     assert!(!fixture.env.read_log().contains("workspace create"));
+}
+
+/// Herdr only records `worktree.checkout_path` when it detected the checkout at
+/// creation time, so most hand-made workspaces lack it. A workspace whose pane sits in
+/// the project directory must still match, and the match is remembered as a binding.
+#[test]
+fn a_workspace_without_checkout_metadata_matches_by_pane_cwd_and_is_bound() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-9", "w1:p1", "w1", "idle", "cwd match");
+    let workspaces = serde_json::json!({
+        "result": {"workspaces": [{
+            "workspace_id": "w1",
+            "label": "checkout",
+            "focused": true,
+            "cwd": fixture.repo
+        }]}
+    });
+
+    fixture
+        .thread_command()
+        .arg("thread")
+        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .assert()
+        .success();
+
+    let log = fixture.env.read_log();
+    assert!(log.contains("agent attach w1:p1"), "{log}");
+    assert!(!log.contains("workspace create"), "{log}");
+    let bound = BindingStore::new(fixture.paths().bindings_file)
+        .get("default", "w1")
+        .unwrap();
+    assert_eq!(bound, Some(fixture.repo.clone()));
+}
+
+/// An explicit binding to another checkout wins over where the panes happen to sit.
+#[test]
+fn a_workspace_bound_elsewhere_is_not_matched_by_cwd() {
+    let fixture = Fixture::new();
+    let other = fixture.env.root.path().join("other-checkout");
+    fs::create_dir_all(&other).unwrap();
+    assert!(
+        ProcessCommand::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&other)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let other = other.canonicalize().unwrap();
+    BindingStore::new(fixture.paths().bindings_file)
+        .bind("default", "w1", &other)
+        .unwrap();
+    let workspaces = serde_json::json!({
+        "result": {"workspaces": [{
+            "workspace_id": "w1",
+            "label": "checkout",
+            "focused": true,
+            "cwd": fixture.repo
+        }]}
+    });
+
+    fixture
+        .thread_command()
+        .arg("thread")
+        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("no Herdr workspace matches"));
 }
 
 #[test]

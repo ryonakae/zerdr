@@ -115,12 +115,12 @@ fn resolve_or_create(
     let bindings = BindingStore::new(paths.bindings_file.clone());
     let workspaces = session.herdr.workspaces_for(session.name)?;
     let agents = session.herdr.agents_for(session.name)?;
-    let workspace_id = match match_workspace(&bindings, session.name, &workspaces, &root)? {
+    let workspace_id = match match_workspace(session, &bindings, &workspaces, &root)? {
         Some(workspace_id) => workspace_id,
         None => {
             if !create {
                 return Err(Error::User(format!(
-                    "no Herdr workspace matches {}; run `zerdr thread --create` to make one",
+                    "no Herdr workspace matches {}; bind an existing workspace with `zerdr bind` or run `zerdr thread --create` to make one",
                     root.display()
                 )));
             }
@@ -195,30 +195,54 @@ fn start_and_lease(
     Ok((agent, lease))
 }
 
+/// Explicit bindings win, then Herdr's own checkout metadata, then where the
+/// workspace's panes actually sit. Herdr records `worktree.checkout_path` only when it
+/// detected the checkout at creation time, so most hand-made workspaces are matched by
+/// the cwd pass; a match found that way is recorded as a binding so the next resolution
+/// is direct.
 fn match_workspace(
+    session: &Session<'_>,
     bindings: &BindingStore,
-    session_name: &str,
     workspaces: &[Workspace],
     root: &Path,
 ) -> Result<Option<String>> {
     for workspace in workspaces {
         if bindings
-            .get(session_name, &workspace.id)?
+            .get(session.name, &workspace.id)?
             .is_some_and(|bound| bound == root)
         {
             return Ok(Some(workspace.id.clone()));
         }
     }
-    Ok(workspaces
-        .iter()
-        .find(|workspace| {
-            workspace
-                .checkout_path
-                .as_deref()
-                .and_then(|checkout| checkout.canonicalize().ok())
-                .is_some_and(|checkout| checkout == root)
-        })
-        .map(|workspace| workspace.id.clone()))
+    if let Some(workspace) = workspaces.iter().find(|workspace| {
+        workspace
+            .checkout_path
+            .as_deref()
+            .and_then(|checkout| checkout.canonicalize().ok())
+            .is_some_and(|checkout| checkout == root)
+    }) {
+        return Ok(Some(workspace.id.clone()));
+    }
+    for workspace in workspaces {
+        // A workspace already pinned elsewhere, or carrying checkout metadata that did
+        // not match above, must not be claimed just because a pane wandered into the
+        // project directory.
+        if workspace.checkout_path.is_some() || bindings.get(session.name, &workspace.id)?.is_some()
+        {
+            continue;
+        }
+        let Some(cwd) = session.herdr.workspace_cwd(session.name, workspace)? else {
+            continue;
+        };
+        let Ok(candidate) = canonical_git_root(&cwd) else {
+            continue;
+        };
+        if candidate == root {
+            bindings.bind_if_absent(session.name, &workspace.id, root)?;
+            return Ok(Some(workspace.id.clone()));
+        }
+    }
+    Ok(None)
 }
 
 /// Lowest `zed-<n>` that no live agent already answers to. Herdr requires live agent
