@@ -133,7 +133,7 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 - [x] Task 2: Thread lease store in `state.rs`
 - [x] Task 3: `zerdr thread` subcommand (resolution, auto-start, attach, monitor)
 - [x] Task 4: Setup/uninstall/doctor integration for `terminal_init_command`
-- [~] Task 5: Documentation done; manual validation in real Zed + Herdr still outstanding (see Final Validation)
+- [x] Task 5: Documentation and manual validation
 
 ## Tasks
 
@@ -325,7 +325,18 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 **Implementation record:**
 - README gained a "Terminal threads" section (how a thread finds its agent, the Zed notification settings the bell depends on, resume and SSH behavior, and why workspace creation needs `--create`), a `zerdr thread` row in the command table, a Zed terminal-threads requirement, and notes on init-command ownership and one-thread-per-agent.
 - AGENTS.md gained `src/thread.rs` and `cargo test --test thread_flow`, records that setup now also owns `agent.terminal_init_command`, and extends the ownership convention to Zed settings with a backup requirement.
-- Manual validation is still outstanding: it needs the real Zed and Herdr, so it is the one Final Validation item the implementer cannot self-serve.
+- Manual validation executed with the user on 2026-08-21 in real Zed + Herdr (herdr 0.8.2). All six items confirmed:
+  1. A new Terminal Thread auto-ran `zerdr thread` and attached to the existing `pi` in mog-app; the sidebar showed `pi · π - mog-app`.
+  2. A second thread got its own agent (see 3) and the sidebar showed two entries.
+  3. With no free agent, the thread created a new Herdr tab and started `pi` as `zed-1` in pane `wM:pC`; two live leases (`wM:p8`, `wM:pC`) were verified on disk.
+  4. A completion notification fired after unfocusing (with `play_sound_when_agent_done` enabled).
+  5. Both threads stayed attached across a project-picker switch and back.
+  6. Opening the thread moved Herdr's focused workspace to mog-app.
+- Findings from the manual run:
+  - First attempt failed with herdr's "already has an attached client": a Terminal Thread from the previous day's prototype experiments still held `wM:p8`. Restarting Zed cleared it. This exposed that thread leases cannot see attach clients zerdr did not create — recorded under Risks as a follow-up candidate.
+  - `herdr workspace focus` also brings the Herdr client (Ghostty) to the foreground. User decision 2026-08-21: accept this behavior; no zerdr-side focus restoration (the option existed via `src/focus.rs`).
+  - Two sidebar entries can be momentarily indistinguishable (`pi · π - mog-app` twice) until the new agent's title gains a session name; accepted as a consequence of mirroring Herdr titles verbatim.
+  - The symlinked-settings failure led to R16 (see Task 4's follow-up).
 
 **Validation:**
 - Manual, in Zed: (1) new Terminal Thread auto-runs `zerdr thread` and attaches to an existing agent with correct sidebar title; (2) second thread attaches to a different agent; (3) thread in a project with no agents starts `pi` in a new tab; (4) prompt the agent, unfocus, notification fires on completion; (5) switch project via picker and back — threads still attached; (6) Herdr workspace focus followed the Zed project on thread start.
@@ -373,6 +384,7 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 
 - OSC/BEL writes can theoretically interleave with attach TUI redraw bytes; the prototype showed no corruption, and single flushed writes minimize the window. If corruption appears, buffer injections to occur only when the child has been quiet for a beat.
 - `herdr agent attach --takeover` semantics are undocumented; v1 never passes it. Manual double-attach of one pane by explicit TARGET is allowed and unguarded (user intent).
+- Thread leases only track attaches zerdr created. A pane held by an external client (a manual `herdr agent attach`, an SSH-side attach, or a leftover thread from another Zed instance) is judged "free", and the bare flow then dies on herdr's raw "already has an attached client" error, observed once during manual validation. Follow-up candidate: on that specific attach failure, exclude the pane and re-resolve (falling through to starting a new agent). Not implemented — it changes public behavior and needs a user decision.
 - `workspace focus` on thread start triggers the `workspace.focused` plugin event; with follow-mode running this may activate Zed (focus steal). D6 limits this to genuinely unfocused workspaces; verify in Task 5 manual (6) and, if disruptive, gate R10 behind a flag after asking the user.
 - Zed's exact execution model for `terminal_init_command` (command in shell vs. replacement) is unverified; affects only failure-mode UX (see Assumptions).
 - `zerdr uninstall --purge` removes the whole state directory, which now includes live thread leases, so a purge during attached threads could let a later thread double-attach a pane. Adding a purge guard would change that command's public failure modes, so it is deliberately left out of this plan; raise it with the user if it matters in practice.
