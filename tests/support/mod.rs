@@ -13,14 +13,10 @@ pub struct TestEnv {
     pub log: PathBuf,
 }
 
-impl TestEnv {
-    pub fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
-        let bin = root.path().join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        let log = root.path().join("process.log");
-        let herdr = r##"#!/bin/sh
-printf 'herdr\t%s\n' "$*" >> "$ZERDR_TEST_LOG"
+/// Dispatch body shared by the `PATH` fake `herdr` and the baked fakes built by
+/// [`TestEnv::baked_herdr`]. Kept free of any per-invocation setup so the fake stays
+/// as cheap as the timing-sensitive wrapper tests expect.
+const FAKE_HERDR_BODY: &str = r##"printf 'herdr\t%s\n' "$*" >> "$ZERDR_TEST_LOG"
 if [ "$1" = "--session" ] && [ "$3" = "workspace" ] && [ "$4" = "list" ]; then
   if [ -n "$ZERDR_TEST_WORKSPACE_LIST_MARKER" ]; then
     : > "$ZERDR_TEST_WORKSPACE_LIST_MARKER"
@@ -51,6 +47,92 @@ if [ "$1" = "--session" ] && [ "$3" = "notification" ] && [ "$4" = "show" ]; the
   else
     printf '%s\n' '{"ok":true,"result":{"shown":false,"reason":"no_foreground_client"}}'
   fi
+  exit 0
+fi
+if [ "$1" = "--session" ] && [ "$3" = "agent" ] && [ "$4" = "list" ]; then
+  if [ -n "$ZERDR_TEST_AGENTS_DIR" ]; then
+    printf '{"result":{"type":"agent_list","agents":['
+    sep=''
+    for entry in "$ZERDR_TEST_AGENTS_DIR"/*.json; do
+      [ -f "$entry" ] || continue
+      printf '%s' "$sep"
+      tr -d '\n' < "$entry"
+      sep=','
+    done
+    printf ']}}\n'
+  elif [ -n "$ZERDR_TEST_AGENTS_JSON" ]; then
+    printf '%s\n' "$ZERDR_TEST_AGENTS_JSON"
+  else
+    printf '%s\n' '{"result":{"type":"agent_list","agents":[]}}'
+  fi
+  exit 0
+fi
+if [ "$1" = "--session" ] && [ "$3" = "agent" ] && [ "$4" = "get" ]; then
+  if [ -n "$ZERDR_TEST_AGENT_GET_SEQ" ]; then
+    counter="$ZERDR_TEST_AGENT_GET_SEQ/counter"
+    index=$(cat "$counter" 2>/dev/null || printf '0')
+    index=$((index + 1))
+    printf '%s' "$index" > "$counter"
+    highest=0
+    for entry in "$ZERDR_TEST_AGENT_GET_SEQ"/*.json; do
+      [ -f "$entry" ] || continue
+      candidate=$(basename "$entry" .json)
+      case "$candidate" in *[!0-9]*) continue;; esac
+      [ "$candidate" -gt "$highest" ] && highest="$candidate"
+    done
+    [ "$index" -gt "$highest" ] && index="$highest"
+    entry="$ZERDR_TEST_AGENT_GET_SEQ/$index.json"
+    if [ -f "$entry" ]; then
+      first=$(head -n 1 "$entry")
+      case "$first" in
+        EXIT:*)
+          printf '%s\n' '{"error":{"code":"pane_not_found"}}' >&2
+          exit "${first#EXIT:}"
+          ;;
+      esac
+      cat "$entry"
+    fi
+    exit 0
+  fi
+  if [ "${ZERDR_TEST_AGENT_GET_EXIT:-0}" != "0" ]; then
+    printf '%s\n' '{"error":{"code":"pane_not_found"}}' >&2
+    exit "$ZERDR_TEST_AGENT_GET_EXIT"
+  fi
+  printf '%s\n' "$ZERDR_TEST_AGENT_GET_JSON"
+  exit 0
+fi
+if [ "$1" = "--session" ] && [ "$3" = "agent" ] && [ "$4" = "attach" ]; then
+  if [ -n "$ZERDR_TEST_ATTACH_RELEASE_FILE" ]; then
+    while [ ! -e "$ZERDR_TEST_ATTACH_RELEASE_FILE" ]; do sleep 0.01; done
+  fi
+  exit "${ZERDR_TEST_ATTACH_EXIT:-0}"
+fi
+if [ "$1" = "--session" ] && [ "$3" = "agent" ] && [ "$4" = "start" ]; then
+  started_name="$5"
+  started_kind=''
+  started_pane=''
+  shift 5
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --kind) started_kind="$2"; shift 2;;
+      --pane) started_pane="$2"; shift 2;;
+      *) shift;;
+    esac
+  done
+  if [ -n "$ZERDR_TEST_AGENTS_DIR" ]; then
+    printf '{"agent":"%s","agent_status":"idle","pane_id":"%s","workspace_id":"%s","terminal_title_stripped":"%s"}\n' \
+      "$started_kind" "$started_pane" "${started_pane%%:*}" "$started_name" \
+      > "$ZERDR_TEST_AGENTS_DIR/$started_name.json"
+  fi
+  printf '%s\n' '{"ok":true,"result":{}}'
+  exit 0
+fi
+if [ "$1" = "--session" ] && [ "$3" = "tab" ] && [ "$4" = "create" ]; then
+  printf '%s\n' "$ZERDR_TEST_TAB_CREATE_JSON"
+  exit 0
+fi
+if [ "$1" = "--session" ] && [ "$3" = "workspace" ] && [ "$4" = "create" ]; then
+  printf '%s\n' "$ZERDR_TEST_WORKSPACE_CREATE_JSON"
   exit 0
 fi
 if { [ "$#" = "0" ] || { [ "$1" = "--session" ] && [ "$#" = "2" ]; }; }; then
@@ -96,6 +178,13 @@ case "$*" in
     ;;
 esac
 "##;
+
+impl TestEnv {
+    pub fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let log = root.path().join("process.log");
         let zed = r##"#!/bin/sh
 printf 'zed\t%s\n' "$*" >> "$ZERDR_TEST_LOG"
 if [ -n "$ZERDR_TEST_ZED_CALL_MARKER" ]; then
@@ -124,9 +213,26 @@ if [ "${ZERDR_TEST_ZED_FAIL:-0}" = "1" ]; then
   exit 17
 fi
 "##;
-        write_executable(&bin.join("herdr"), herdr);
+        write_executable(&bin.join("herdr"), &format!("#!/bin/sh\n{FAKE_HERDR_BODY}"));
         write_executable(&bin.join("zed"), zed);
         Self { root, bin, log }
+    }
+
+    /// Build a private fake `herdr` whose `ZERDR_TEST_*` configuration is baked into the
+    /// script, so library-level tests can drive the adapter directly without mutating this
+    /// process's environment or slowing down the shared fake on `PATH`.
+    pub fn baked_herdr(&self, name: &str, variables: &[(&str, String)]) -> zerdr::herdr::Herdr {
+        let mut script = format!(
+            "#!/bin/sh\nZERDR_TEST_LOG={}\nexport ZERDR_TEST_LOG\n",
+            shell_quote(&self.log)
+        );
+        for (key, value) in variables {
+            script.push_str(&format!("{key}={}\nexport {key}\n", shell_quote_str(value)));
+        }
+        script.push_str(FAKE_HERDR_BODY);
+        let path = self.bin.join(name);
+        write_executable(&path, &script);
+        zerdr::herdr::Herdr::with_program(path.into())
     }
 
     pub fn command(&self) -> Command {
@@ -213,6 +319,14 @@ pub fn compatible_plugins_json() -> serde_json::Value {
             }]
         }
     })
+}
+
+fn shell_quote(path: &Path) -> String {
+    shell_quote_str(&path.display().to_string())
+}
+
+fn shell_quote_str(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn write_executable(path: &Path, content: &str) {

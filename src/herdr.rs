@@ -30,6 +30,21 @@ pub struct Workspace {
 }
 
 #[derive(Debug, Clone)]
+pub struct AgentInfo {
+    pub kind: String,
+    pub status: String,
+    pub pane_id: String,
+    pub workspace_id: String,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreatedWorkspace {
+    pub workspace_id: String,
+    pub root_pane_id: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct Herdr {
     program: OsString,
 }
@@ -39,6 +54,116 @@ impl Herdr {
         Self {
             program: std::env::var_os("ZERDR_HERDR_BIN").unwrap_or_else(|| "herdr".into()),
         }
+    }
+
+    pub fn with_program(program: OsString) -> Self {
+        Self { program }
+    }
+
+    pub fn agents_for(&self, session_name: &str) -> Result<Vec<AgentInfo>> {
+        let value = self.session_json_output_for(session_name, ["agent", "list"])?;
+        let values = find_array(&value, "agents")
+            .ok_or_else(|| Error::User("Herdr agent list did not contain agents".to_owned()))?;
+        values.iter().map(parse_agent).collect()
+    }
+
+    pub fn agent_get_for(&self, session_name: &str, target: &str) -> Result<Option<AgentInfo>> {
+        let value = self.session_json_output_for(session_name, ["agent", "get", target])?;
+        let Some(agent) = value
+            .pointer("/result/agent")
+            .or_else(|| value.get("agent").filter(|agent| agent.is_object()))
+        else {
+            return Ok(None);
+        };
+        parse_agent(agent).map(Some)
+    }
+
+    pub fn agent_start_for(
+        &self,
+        session_name: &str,
+        name: &str,
+        kind: &str,
+        pane_id: &str,
+    ) -> Result<()> {
+        self.session_output_for(
+            session_name,
+            [
+                OsStr::new("agent"),
+                OsStr::new("start"),
+                OsStr::new(name),
+                OsStr::new("--kind"),
+                OsStr::new(kind),
+                OsStr::new("--pane"),
+                OsStr::new(pane_id),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn tab_create_for(
+        &self,
+        session_name: &str,
+        workspace_id: &str,
+        cwd: &std::path::Path,
+    ) -> Result<String> {
+        let value = self.session_json_output_for(
+            session_name,
+            [
+                OsStr::new("tab"),
+                OsStr::new("create"),
+                OsStr::new("--workspace"),
+                OsStr::new(workspace_id),
+                OsStr::new("--cwd"),
+                cwd.as_os_str(),
+                OsStr::new("--no-focus"),
+            ],
+        )?;
+        root_pane_id(&value)
+            .ok_or_else(|| Error::User("Herdr tab create did not return a root pane".to_owned()))
+    }
+
+    pub fn workspace_create_for(
+        &self,
+        session_name: &str,
+        cwd: &std::path::Path,
+        label: &str,
+    ) -> Result<CreatedWorkspace> {
+        let value = self.session_json_output_for(
+            session_name,
+            [
+                OsStr::new("workspace"),
+                OsStr::new("create"),
+                OsStr::new("--cwd"),
+                cwd.as_os_str(),
+                OsStr::new("--label"),
+                OsStr::new(label),
+                OsStr::new("--no-focus"),
+            ],
+        )?;
+        let workspace_id = value
+            .pointer("/result/workspace/workspace_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                Error::User("Herdr workspace create did not return a workspace".to_owned())
+            })?
+            .to_owned();
+        let root_pane_id = root_pane_id(&value).ok_or_else(|| {
+            Error::User("Herdr workspace create did not return a root pane".to_owned())
+        })?;
+        Ok(CreatedWorkspace {
+            workspace_id,
+            root_pane_id,
+        })
+    }
+
+    pub fn spawn_agent_attach_for(&self, session_name: &str, target: &str) -> Result<Child> {
+        Command::new(&self.program)
+            .args(["--session", session_name, "agent", "attach", target])
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|error| Error::User(format!("failed to attach to Herdr agent: {error}")))
     }
 
     pub fn session_socket(&self) -> Result<PathBuf> {
@@ -498,6 +623,32 @@ fn parse_workspace(value: &Value) -> Result<Workspace> {
         checkout_path,
         cwd,
     })
+}
+
+fn parse_agent(value: &Value) -> Result<AgentInfo> {
+    let pane_id = string_field(value, &["pane_id"])
+        .ok_or_else(|| Error::User("Herdr agent is missing pane_id".to_owned()))?;
+    let workspace_id = string_field(value, &["workspace_id"]).unwrap_or_else(|| {
+        pane_id
+            .split_once(':')
+            .map_or_else(|| pane_id.clone(), |(workspace, _)| workspace.to_owned())
+    });
+    Ok(AgentInfo {
+        kind: string_field(value, &["agent"]).unwrap_or_default(),
+        status: string_field(value, &["agent_status"]).unwrap_or_else(|| "unknown".to_owned()),
+        pane_id,
+        workspace_id,
+        title: string_field(value, &["terminal_title_stripped", "terminal_title"])
+            .filter(|title| !title.is_empty()),
+    })
+}
+
+fn root_pane_id(value: &Value) -> Option<String> {
+    value
+        .pointer("/result/root_pane/pane_id")
+        .or_else(|| value.pointer("/root_pane/pane_id"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
 }
 
 fn string_field(value: &Value, names: &[&str]) -> Option<String> {

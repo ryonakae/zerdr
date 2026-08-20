@@ -46,7 +46,7 @@ CI runs these checks on macOS and Ubuntu. Platform-specific behavior needs cover
 - `src/doctor.rs` checks capabilities, installation state, bindings, routes, and leases.
 - `src/focus.rs` contains macOS foreground restoration; `src/zed.rs` wraps the Zed CLI.
 - `assets/herdr/` and `assets/zed/` contain templates embedded by `setup`.
-- `tests/support/mod.rs` provides isolated fake `herdr` and `zed` executables.
+- `tests/support/mod.rs` provides isolated fake `herdr` and `zed` executables; `FAKE_HERDR_BODY` is shared by the `PATH` fake and the private fakes from `TestEnv::baked_herdr`.
 - `docs/plans/` records historical implementation plans. Treat current code and tests as the source of truth.
 
 ## Code and test conventions
@@ -64,6 +64,7 @@ CI runs these checks on macOS and Ubuntu. Platform-specific behavior needs cover
 
 - Do not run `zerdr setup`, `zerdr uninstall`, or local `zerdr doctor` against the developer's real environment during automated validation. They can modify Herdr plugins, global Zed tasks, or zerdr state.
 - Integration tests that invoke Herdr, Zed, or environment-facing commands must use `TestEnv`, which sets `ZERDR_TEST_ROOT` and points zerdr at fake binaries. Pure state tests may use `tempfile` directly.
+- Keep the shared fake `herdr` on `PATH` free of per-invocation setup. Wrapper tests budget roughly two seconds for a multi-process dance, so even one extra command that runs on every call makes them fail under parallel load. Bake per-test configuration into a private fake with `TestEnv::baked_herdr` instead.
 - `zerdr uninstall --purge` recursively removes zerdr state and data after checking live leases. Cover purge changes with isolated tests.
 - Do not create release tags, GitHub releases, or Homebrew tap commits as part of normal development. `.github/workflows/release.yml` owns publication.
 - Do not edit `target/`; Cargo generates it.

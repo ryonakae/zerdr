@@ -891,3 +891,136 @@ fn wait_for_lease_count(paths: &Paths, expected: usize) {
     }
     panic!("timed out waiting for {expected} lease files");
 }
+
+#[test]
+fn agent_list_parses_the_live_agent_payload_shape() {
+    let env = TestEnv::new();
+    let agents = serde_json::json!({
+        "id": "cli:agent:list",
+        "result": {
+            "type": "agent_list",
+            "agents": [
+                {
+                    "agent": "pi",
+                    "agent_status": "idle",
+                    "cwd": "/Users/example/Dev/mog-app",
+                    "focused": false,
+                    "pane_id": "wM:p8",
+                    "tab_id": "wM:t3",
+                    "workspace_id": "wM",
+                    "terminal_title": "\u{3c0} - mog-app",
+                    "terminal_title_stripped": "\u{3c0} - mog-app"
+                },
+                {
+                    "agent": "claude",
+                    "agent_status": "working",
+                    "pane_id": "w13:p1",
+                    "workspace_id": "w13",
+                    "terminal_title_stripped": "recipe fix"
+                }
+            ]
+        }
+    });
+    let herdr = fake_herdr(&env, "herdr-agents", &[("ZERDR_TEST_AGENTS_JSON", agents.to_string())]);
+
+    let parsed = herdr.agents_for("default").unwrap();
+
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].kind, "pi");
+    assert_eq!(parsed[0].status, "idle");
+    assert_eq!(parsed[0].pane_id, "wM:p8");
+    assert_eq!(parsed[0].workspace_id, "wM");
+    assert_eq!(parsed[0].title.as_deref(), Some("\u{3c0} - mog-app"));
+    assert_eq!(parsed[1].kind, "claude");
+    assert_eq!(parsed[1].status, "working");
+    assert_eq!(parsed[1].pane_id, "w13:p1");
+}
+
+#[test]
+fn agent_get_surfaces_a_failing_herdr_exit_as_a_process_error() {
+    let env = TestEnv::new();
+    let herdr = fake_herdr(&env, "herdr-get-fail", &[("ZERDR_TEST_AGENT_GET_EXIT", "1".to_owned())]);
+
+    let error = herdr.agent_get_for("default", "wM:p8").unwrap_err();
+
+    assert!(
+        matches!(error, zerdr::error::Error::Process { status: 1, .. }),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn agent_get_parses_a_single_agent_payload() {
+    let env = TestEnv::new();
+    let agent = serde_json::json!({
+        "result": {
+            "type": "agent_info",
+            "agent": {
+                "agent": "pi",
+                "agent_status": "blocked",
+                "pane_id": "w0:p1",
+                "workspace_id": "w0",
+                "terminal_title_stripped": "review the diff"
+            }
+        }
+    });
+    let herdr = fake_herdr(&env, "herdr-get", &[("ZERDR_TEST_AGENT_GET_JSON", agent.to_string())]);
+
+    let parsed = herdr.agent_get_for("default", "w0:p1").unwrap().unwrap();
+
+    assert_eq!(parsed.kind, "pi");
+    assert_eq!(parsed.status, "blocked");
+    assert_eq!(parsed.pane_id, "w0:p1");
+    assert_eq!(parsed.workspace_id, "w0");
+    assert_eq!(parsed.title.as_deref(), Some("review the diff"));
+}
+
+#[test]
+fn tab_and_workspace_creation_surface_the_root_pane() {
+    let env = TestEnv::new();
+    let tab = serde_json::json!({
+        "result": {"tab": {"tab_id": "wM:t9"}, "root_pane": {"pane_id": "wM:p9"}}
+    });
+    let workspace = serde_json::json!({
+        "result": {
+            "workspace": {"workspace_id": "w7", "label": "mog-app"},
+            "tab": {"tab_id": "w7:t1"},
+            "root_pane": {"pane_id": "w7:p1"}
+        }
+    });
+    let herdr = fake_herdr(
+        &env,
+        "herdr-create",
+        &[
+            ("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string()),
+            ("ZERDR_TEST_WORKSPACE_CREATE_JSON", workspace.to_string()),
+        ],
+    );
+
+    let created_tab = herdr
+        .tab_create_for("default", "wM", std::path::Path::new("/tmp"))
+        .unwrap();
+    assert_eq!(created_tab, "wM:p9");
+
+    let created_workspace = herdr
+        .workspace_create_for("default", std::path::Path::new("/tmp"), "mog-app")
+        .unwrap();
+    assert_eq!(created_workspace.workspace_id, "w7");
+    assert_eq!(created_workspace.root_pane_id, "w7:p1");
+
+    let log = env.read_log();
+    assert!(
+        log.contains("herdr\t--session default tab create --workspace wM --cwd /tmp --no-focus"),
+        "{log}"
+    );
+    assert!(
+        log.contains(
+            "herdr\t--session default workspace create --cwd /tmp --label mog-app --no-focus"
+        ),
+        "{log}"
+    );
+}
+
+fn fake_herdr(env: &TestEnv, name: &str, variables: &[(&str, String)]) -> zerdr::herdr::Herdr {
+    env.baked_herdr(name, variables)
+}
