@@ -6,7 +6,13 @@ Launch Herdr from a local terminal and route each workspace to its checkout in Z
 
 ## Install
 
-Install the current GitHub version with Rust 1.93.1:
+Once a release is available, install with Homebrew:
+
+```bash
+brew install ryonakae/tap/zerdr
+```
+
+Or install the current GitHub version from source with Rust 1.93.1:
 
 ```bash
 cargo install --git https://github.com/ryonakae/zerdr --locked

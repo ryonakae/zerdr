@@ -201,13 +201,15 @@ jobs:
 
   homebrew-smoke:
     needs: publish-homebrew-formula
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: Homebrew/actions/setup-homebrew@master
+      - uses: Homebrew/actions/setup-homebrew@8f3d1ec8a696b3b9d9a6c3696b6c73033cab69e4 # master as of 2026-08-14
       - name: Install published zerdr formula
         shell: bash
         run: |
