@@ -236,3 +236,45 @@ fn unknown_commands_fail_with_clap_usage() {
         .failure()
         .stderr(predicate::str::contains("unrecognized subcommand"));
 }
+
+#[test]
+fn thread_exposes_session_kind_and_create_options() {
+    cargo_bin_cmd!("zerdr")
+        .args(["thread", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--session <SESSION>"))
+        .stdout(predicate::str::contains("--kind <KIND>"))
+        .stdout(predicate::str::contains("--create"))
+        .stdout(predicate::str::contains("[TARGET]"));
+    cargo_bin_cmd!("zerdr")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("thread"));
+}
+
+#[test]
+fn thread_rejects_auto_start_options_alongside_an_explicit_target() {
+    for extra in [vec!["--kind", "pi"], vec!["--create"]] {
+        let env = TestEnv::new();
+        let mut args = vec!["thread", "wM:p8"];
+        args.extend(extra);
+        env.command()
+            .args(args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("cannot be used with"));
+        assert_eq!(env.read_log(), "");
+    }
+}
+
+#[test]
+fn thread_accepts_session_targeting_only_once() {
+    let env = TestEnv::new();
+    env.command()
+        .args(["--session", "work", "thread", "--session", "work"])
+        .assert()
+        .failure();
+    assert_eq!(env.read_log(), "");
+}

@@ -77,6 +77,20 @@ pub enum Command {
         #[arg(long)]
         session: Option<String>,
     },
+    /// Attach a Zed terminal thread to a Herdr agent.
+    Thread {
+        /// Herdr pane id or unique live agent name to attach to.
+        target: Option<String>,
+        /// Target a named persistent Herdr session.
+        #[arg(long)]
+        session: Option<String>,
+        /// Agent kind to start when the workspace has no free agent.
+        #[arg(long, conflicts_with = "target")]
+        kind: Option<String>,
+        /// Create the Herdr workspace when none matches this Git checkout.
+        #[arg(long, conflicts_with = "target")]
+        create: bool,
+    },
     /// Install the Herdr plugin and Zed tasks.
     Setup,
     /// Remove the Herdr plugin and Zed tasks.

@@ -1,0 +1,322 @@
+use std::io::Write;
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
+
+use crate::error::{Error, Result};
+use crate::herdr::{AgentInfo, Herdr, ManagedChild, SignalForwarder, Workspace};
+use crate::state::{
+    BindingStore, OperationGuard, Paths, ThreadLeaseGuard, ThreadLeaseSet, canonical_git_root,
+};
+
+const DEFAULT_KIND: &str = "pi";
+const DEFAULT_POLL_MS: u64 = 2_000;
+const SETTLED_STATES: [&str; 3] = ["idle", "done", "blocked"];
+
+/// The one Herdr session this thread talks to, resolved once up front.
+struct Session<'a> {
+    herdr: &'a Herdr,
+    leases: &'a ThreadLeaseSet,
+    name: &'a str,
+    socket: &'a Path,
+}
+
+pub fn run(
+    session_name: &str,
+    target: Option<&str>,
+    kind: Option<&str>,
+    create: bool,
+) -> Result<()> {
+    let herdr = Herdr::from_env();
+    let paths = Paths::discover()?;
+    let socket = herdr.session_socket_for(session_name)?;
+    let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
+
+    let session = Session {
+        herdr: &herdr,
+        leases: &leases,
+        name: session_name,
+        socket: &socket,
+    };
+
+    let (agent, _lease) = match target {
+        Some(target) => {
+            let agent = herdr
+                .agent_get_for(session_name, target)?
+                .ok_or_else(|| Error::User(format!("no Herdr agent matches {target:?}")))?;
+            let lease = leases.acquire(session_name, &socket, &agent.pane_id)?;
+            (agent, lease)
+        }
+        None => resolve_or_create(&session, &paths, kind, create)?,
+    };
+
+    let workspaces = herdr.workspaces_for(session_name).unwrap_or_default();
+    focus_workspace(&herdr, session_name, &agent.workspace_id, &workspaces);
+    let label = workspaces
+        .iter()
+        .find(|workspace| workspace.id == agent.workspace_id)
+        .map(|workspace| workspace.label.clone());
+
+    let mut child = ManagedChild::new(herdr.spawn_agent_attach_for(session_name, &agent.pane_id)?);
+    let _signals = SignalForwarder::new(child.id())?;
+    let monitor = Monitor::start(
+        herdr.clone(),
+        session_name.to_owned(),
+        agent.pane_id.clone(),
+        label,
+        agent,
+    );
+
+    let status = child
+        .wait()
+        .map_err(|error| Error::User(format!("failed to wait for the Herdr agent: {error}")))?;
+    monitor.stop();
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Error::ChildExit(status.code().unwrap_or(1)))
+    }
+}
+
+/// Resolve the agent for a bare invocation, creating a tab or workspace when needed.
+/// The whole sequence runs under one lock per session socket so two threads racing on an
+/// empty workspace cannot both start an agent.
+fn resolve_or_create(
+    session: &Session<'_>,
+    paths: &Paths,
+    kind: Option<&str>,
+    create: bool,
+) -> Result<(AgentInfo, ThreadLeaseGuard)> {
+    let cwd = std::env::current_dir()
+        .map_err(|error| Error::User(format!("failed to read the current directory: {error}")))?;
+    let root = canonical_git_root(&cwd).map_err(|error| {
+        Error::User(format!(
+            "{error}; run `zerdr thread` from a Git checkout or pass a Herdr pane id"
+        ))
+    })?;
+
+    let _serialize = OperationGuard::acquire(&paths.thread_leases_dir.join(".resolve.lock"))?;
+    let bindings = BindingStore::new(paths.bindings_file.clone());
+    let workspaces = session.herdr.workspaces_for(session.name)?;
+    let agents = session.herdr.agents_for(session.name)?;
+    let workspace_id = match match_workspace(&bindings, session.name, &workspaces, &root)? {
+        Some(workspace_id) => workspace_id,
+        None => {
+            if !create {
+                return Err(Error::User(format!(
+                    "no Herdr workspace matches {}; run `zerdr thread --create` to make one",
+                    root.display()
+                )));
+            }
+            let label = root.file_name().map_or_else(
+                || root.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            let created = session
+                .herdr
+                .workspace_create_for(session.name, &root, &label)?;
+            bindings.bind_if_absent(session.name, &created.workspace_id, &root)?;
+            return start_and_lease(
+                session,
+                &created.workspace_id,
+                &created.root_pane_id,
+                kind,
+                &agents,
+            );
+        }
+    };
+
+    let leased = session.leases.leased_panes(session.name, session.socket)?;
+    let free = agents
+        .iter()
+        .find(|agent| agent.workspace_id == workspace_id && !leased.contains(&agent.pane_id));
+    if let Some(agent) = free {
+        let lease = session
+            .leases
+            .acquire(session.name, session.socket, &agent.pane_id)?;
+        return Ok((agent.clone(), lease));
+    }
+
+    let pane_id = session
+        .herdr
+        .tab_create_for(session.name, &workspace_id, &root)?;
+    start_and_lease(session, &workspace_id, &pane_id, kind, &agents)
+}
+
+fn start_and_lease(
+    session: &Session<'_>,
+    workspace_id: &str,
+    pane_id: &str,
+    kind: Option<&str>,
+    live_agents: &[AgentInfo],
+) -> Result<(AgentInfo, ThreadLeaseGuard)> {
+    let kind = kind
+        .map(ToOwned::to_owned)
+        .or_else(|| std::env::var("ZERDR_THREAD_KIND").ok())
+        .unwrap_or_else(|| DEFAULT_KIND.to_owned());
+    let name = generate_agent_name(live_agents);
+    session
+        .herdr
+        .agent_start_for(session.name, &name, &kind, pane_id)?;
+    let lease = session
+        .leases
+        .acquire(session.name, session.socket, pane_id)?;
+    // The agent is running and its pane is known, so a lookup that has not caught up yet
+    // must not fail the attach. The monitor picks up the real title on its first poll.
+    let agent = session
+        .herdr
+        .agent_get_for(session.name, pane_id)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| AgentInfo {
+            kind,
+            name: Some(name.clone()),
+            status: "unknown".to_owned(),
+            pane_id: pane_id.to_owned(),
+            workspace_id: workspace_id.to_owned(),
+            title: None,
+        });
+    Ok((agent, lease))
+}
+
+fn match_workspace(
+    bindings: &BindingStore,
+    session_name: &str,
+    workspaces: &[Workspace],
+    root: &Path,
+) -> Result<Option<String>> {
+    for workspace in workspaces {
+        if bindings
+            .get(session_name, &workspace.id)?
+            .is_some_and(|bound| bound == root)
+        {
+            return Ok(Some(workspace.id.clone()));
+        }
+    }
+    Ok(workspaces
+        .iter()
+        .find(|workspace| {
+            workspace
+                .checkout_path
+                .as_deref()
+                .and_then(|checkout| checkout.canonicalize().ok())
+                .is_some_and(|checkout| checkout == root)
+        })
+        .map(|workspace| workspace.id.clone()))
+}
+
+/// Lowest `zed-<n>` that no live agent already answers to. Herdr requires live agent
+/// names to be unique and to match `[a-z][a-z0-9_-]{0,31}`.
+fn generate_agent_name(agents: &[AgentInfo]) -> String {
+    let taken = agents
+        .iter()
+        .filter_map(|agent| agent.name.as_deref())
+        .collect::<Vec<_>>();
+    (1..)
+        .map(|index| format!("zed-{index}"))
+        .find(|candidate| !taken.contains(&candidate.as_str()))
+        .expect("the candidate range is unbounded")
+}
+
+/// Focusing an already-focused workspace would re-fire Herdr's `workspace.focused` event
+/// and, with follow mode running, pull Zed forward on every thread start.
+fn focus_workspace(
+    herdr: &Herdr,
+    session_name: &str,
+    workspace_id: &str,
+    workspaces: &[Workspace],
+) {
+    if workspaces
+        .iter()
+        .any(|workspace| workspace.focused && workspace.id == workspace_id)
+    {
+        return;
+    }
+    if let Err(error) = herdr.focus_workspace_for(session_name, workspace_id) {
+        eprintln!("zerdr: could not focus Herdr workspace {workspace_id}: {error}");
+    }
+}
+
+/// Mirrors the attached agent into the Zed threads sidebar: an OSC 0 title whenever the
+/// label changes, and a bell when the agent settles after working so Zed notifies.
+struct Monitor {
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Monitor {
+    fn start(
+        herdr: Herdr,
+        session_name: String,
+        pane_id: String,
+        fallback_label: Option<String>,
+        initial: AgentInfo,
+    ) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let interval = Duration::from_millis(
+            std::env::var("ZERDR_THREAD_POLL_MS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(DEFAULT_POLL_MS),
+        );
+        let worker_stop = Arc::clone(&stop);
+        let handle = thread::spawn(move || {
+            let mut last_label = None;
+            let mut last_status = initial.status.clone();
+            emit_title(&mut last_label, &initial, fallback_label.as_deref());
+            while !worker_stop.load(Ordering::Relaxed) {
+                thread::sleep(interval);
+                if worker_stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                // A failed poll must never disturb the attached agent, so keep the last
+                // known state and try again on the next tick.
+                let Ok(Some(agent)) = herdr.agent_get_for(&session_name, &pane_id) else {
+                    continue;
+                };
+                emit_title(&mut last_label, &agent, fallback_label.as_deref());
+                if last_status == "working" && SETTLED_STATES.contains(&agent.status.as_str()) {
+                    emit(b"\x07");
+                }
+                last_status = agent.status;
+            }
+        });
+        Self {
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn stop(mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn emit_title(last: &mut Option<String>, agent: &AgentInfo, fallback: Option<&str>) {
+    let detail = agent
+        .title
+        .as_deref()
+        .or(fallback)
+        .unwrap_or(&agent.workspace_id);
+    let label = if agent.kind.is_empty() {
+        detail.to_owned()
+    } else {
+        format!("{} \u{b7} {detail}", agent.kind)
+    };
+    if last.as_deref() == Some(label.as_str()) {
+        return;
+    }
+    emit(format!("\x1b]0;{label}\x07").as_bytes());
+    *last = Some(label);
+}
+
+fn emit(bytes: &[u8]) {
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout.write_all(bytes);
+    let _ = stdout.flush();
+}

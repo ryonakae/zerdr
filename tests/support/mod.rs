@@ -98,6 +98,24 @@ if [ "$1" = "--session" ] && [ "$3" = "agent" ] && [ "$4" = "get" ]; then
     printf '%s\n' '{"error":{"code":"pane_not_found"}}' >&2
     exit "$ZERDR_TEST_AGENT_GET_EXIT"
   fi
+  if [ -n "$ZERDR_TEST_AGENT_GET_JSON" ]; then
+    printf '%s\n' "$ZERDR_TEST_AGENT_GET_JSON"
+    exit 0
+  fi
+  if [ -n "$ZERDR_TEST_AGENTS_DIR" ]; then
+    for entry in "$ZERDR_TEST_AGENTS_DIR"/*.json; do
+      [ -f "$entry" ] || continue
+      found=$(tr -d '\n' < "$entry")
+      case "$found" in
+        *"\"pane_id\":\"$5\""*|*"\"name\":\"$5\""*)
+          printf '{"result":{"type":"agent_info","agent":%s}}\n' "$found"
+          exit 0
+          ;;
+      esac
+    done
+    printf '%s\n' '{"result":{"type":"agent_info"}}'
+    exit 0
+  fi
   printf '%s\n' "$ZERDR_TEST_AGENT_GET_JSON"
   exit 0
 fi
@@ -120,15 +138,26 @@ if [ "$1" = "--session" ] && [ "$3" = "agent" ] && [ "$4" = "start" ]; then
     esac
   done
   if [ -n "$ZERDR_TEST_AGENTS_DIR" ]; then
-    printf '{"agent":"%s","agent_status":"idle","pane_id":"%s","workspace_id":"%s","terminal_title_stripped":"%s"}\n' \
-      "$started_kind" "$started_pane" "${started_pane%%:*}" "$started_name" \
+    printf '{"agent":"%s","name":"%s","agent_status":"idle","pane_id":"%s","workspace_id":"%s","terminal_title_stripped":"%s"}\n' \
+      "$started_kind" "$started_name" "$started_pane" "${started_pane%%:*}" "$started_name" \
       > "$ZERDR_TEST_AGENTS_DIR/$started_name.json"
   fi
   printf '%s\n' '{"ok":true,"result":{}}'
   exit 0
 fi
 if [ "$1" = "--session" ] && [ "$3" = "tab" ] && [ "$4" = "create" ]; then
-  printf '%s\n' "$ZERDR_TEST_TAB_CREATE_JSON"
+  if [ -n "$ZERDR_TEST_TAB_CREATE_JSON" ]; then
+    printf '%s\n' "$ZERDR_TEST_TAB_CREATE_JSON"
+    exit 0
+  fi
+  if [ -n "$ZERDR_TEST_PANE_COUNTER_FILE" ]; then
+    minted=$(cat "$ZERDR_TEST_PANE_COUNTER_FILE" 2>/dev/null || printf '0')
+    minted=$((minted + 1))
+    printf '%s' "$minted" > "$ZERDR_TEST_PANE_COUNTER_FILE"
+    printf '{"result":{"root_pane":{"pane_id":"%s:p%s"}}}\n' "$6" "$minted"
+    exit 0
+  fi
+  printf '%s\n' '{"ok":true,"result":{}}'
   exit 0
 fi
 if [ "$1" = "--session" ] && [ "$3" = "workspace" ] && [ "$4" = "create" ]; then

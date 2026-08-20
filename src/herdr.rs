@@ -32,6 +32,8 @@ pub struct Workspace {
 #[derive(Debug, Clone)]
 pub struct AgentInfo {
     pub kind: String,
+    /// Herdr's assigned agent name, absent for agents started outside `agent start`.
+    pub name: Option<String>,
     pub status: String,
     pub pane_id: String,
     pub workspace_id: String,
@@ -516,24 +518,24 @@ pub fn run_wrapper(session_name: &str, routing: RouteStrategy) -> Result<()> {
     }
 }
 
-struct ManagedChild {
+pub(crate) struct ManagedChild {
     child: Child,
     running: bool,
 }
 
 impl ManagedChild {
-    fn new(child: Child) -> Self {
+    pub(crate) fn new(child: Child) -> Self {
         Self {
             child,
             running: true,
         }
     }
 
-    fn id(&self) -> u32 {
+    pub(crate) fn id(&self) -> u32 {
         self.child.id()
     }
 
-    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+    pub(crate) fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         let status = self.child.try_wait()?;
         if status.is_some() {
             self.running = false;
@@ -541,13 +543,13 @@ impl ManagedChild {
         Ok(status)
     }
 
-    fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+    pub(crate) fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
         let status = self.child.wait()?;
         self.running = false;
         Ok(status)
     }
 
-    fn terminate(&mut self) {
+    pub(crate) fn terminate(&mut self) {
         if self.running {
             let _ = self.child.kill();
             let _ = self.child.wait();
@@ -562,13 +564,13 @@ impl Drop for ManagedChild {
     }
 }
 
-struct SignalForwarder {
+pub(crate) struct SignalForwarder {
     handle: SignalHandle,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl SignalForwarder {
-    fn new(child_pid: u32) -> Result<Self> {
+    pub(crate) fn new(child_pid: u32) -> Result<Self> {
         let mut signals = Signals::new([SIGINT, SIGTERM, SIGHUP])
             .map_err(|error| Error::User(format!("failed to register signal handlers: {error}")))?;
         let handle = signals.handle();
@@ -635,6 +637,7 @@ fn parse_agent(value: &Value) -> Result<AgentInfo> {
     });
     Ok(AgentInfo {
         kind: string_field(value, &["agent"]).unwrap_or_default(),
+        name: string_field(value, &["name"]).filter(|name| !name.is_empty()),
         status: string_field(value, &["agent_status"]).unwrap_or_else(|| "unknown".to_owned()),
         pane_id,
         workspace_id,

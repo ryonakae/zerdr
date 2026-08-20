@@ -8,6 +8,7 @@ pub mod runtime;
 pub mod setup;
 pub mod state;
 pub mod sync;
+pub mod thread;
 pub mod zed;
 
 use clap::Parser;
@@ -47,7 +48,8 @@ pub fn run() -> Result<()> {
         | Command::Sync { session }
         | Command::Bind { session, .. }
         | Command::Unbind { session }
-        | Command::Doctor { session } => session.as_deref(),
+        | Command::Doctor { session }
+        | Command::Thread { session, .. } => session.as_deref(),
         Command::Setup
         | Command::Uninstall { .. }
         | Command::SyncFromHerdr
@@ -67,6 +69,7 @@ pub fn run() -> Result<()> {
             | Command::Bind { .. }
             | Command::Unbind { .. }
             | Command::Doctor { .. }
+            | Command::Thread { .. }
     );
     if cli.session.is_some() && !accepts_session {
         return Err(Error::User(
@@ -94,6 +97,17 @@ pub fn run() -> Result<()> {
         Command::Unbind { .. } => run_manual(explicit_session, |synchronizer| {
             synchronizer.unbind(explicit_session)
         }),
+        Command::Thread {
+            target,
+            kind,
+            create,
+            ..
+        } => thread::run(
+            explicit_session.unwrap_or(DEFAULT_SESSION_NAME),
+            target.as_deref(),
+            kind.as_deref(),
+            *create,
+        ),
         Command::Setup => setup::setup(),
         Command::Uninstall { purge } => setup::uninstall(*purge),
         Command::Doctor { .. } => match remote {

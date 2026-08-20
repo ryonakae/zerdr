@@ -48,7 +48,7 @@ This plan productizes that prototype as a `zerdr thread` subcommand.
 - **R6:** While attached, a monitor polls `herdr agent get <pane_id>` every `ZERDR_THREAD_POLL_MS` ms (default 2000) and writes an OSC 0 title `\x1b]0;{agent} · {terminal_title_stripped}\x07` to zerdr's stdout whenever the computed label changes. Empty `terminal_title_stripped` falls back to the workspace label; a missing agent leaves the last title in place.
 - **R7:** The monitor writes BEL (`\x07`) to stdout exactly when `agent_status` transitions from `working` to one of `idle`, `done`, `blocked`.
 - **R8:** Monitor failures (herdr CLI error, JSON error, pane gone) never terminate the attach child; the monitor stops when the child exits. Polling errors are silent (no stderr spam).
-- **R9:** A per-pane thread lease (keyed by session name + socket + pane ID) prevents two bare invocations from picking the same pane. Liveness follows the existing `LeaseSet` mechanism: an advisory `flock` held open by the owning process, so a lease whose lock is no longer held is treated as free and cleaned up. The lease is released on normal exit and on signal-driven teardown (guard Drop). Resolution → creation → lease acquisition for bare invocations is serialized per session socket (an `OperationGuard`-style lock) so two racing bare invocations on a workspace with no agent panes cannot both create a tab and start an agent.
+- **R9:** A per-pane thread lease (keyed by session name + socket + pane ID) prevents two bare invocations from picking the same pane. Liveness follows the existing `LeaseSet` mechanism: an advisory `flock` held open by the owning process, so a lease whose lock is no longer held is treated as free and cleaned up. The lease is released on normal exit and on signal-driven teardown (guard Drop). Resolution → lease acquisition for bare invocations is serialized per session socket (an `OperationGuard`-style lock) so two racing invocations never contend for one pane: the second observes the first agent as taken and gets its own instead of failing to lease it. **Corrected during Task 3** — this requirement first said the serialization must stop both invocations from creating a tab and starting an agent, which contradicts D2 (a user decision): two Terminal Threads must yield two agents. Serialization makes check-then-lease atomic; it does not cap how many agents get created.
 - **R10:** On start, after resolving the pane, if the pane's workspace is not the focused workspace, zerdr runs `herdr workspace focus <workspace_id>`. Focus failure is non-fatal (single warning line to stderr, then continue).
 - **R11:** `zerdr setup` sets `agent.terminal_init_command` in Zed's `settings.json` (same config dir already used for `tasks.json`) to `"<canonical zerdr executable> thread"`, but only when the key is absent or its current value matches a zerdr-owned fingerprint recorded in `InstallState`. A foreign value is never overwritten; setup prints a notice instead. `zerdr uninstall` removes the key only when it matches the owned value. JSONC editing uses the existing `jsonc-parser` CST approach so user comments/formatting survive.
 - **R12:** `zerdr doctor` reports terminal_init_command status: `ok` (owned and current), `missing`, or `foreign` (present but not zerdr-owned), with remediation hints.
@@ -103,7 +103,7 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 ### Assumptions
 
 - Zed runs `terminal_init_command` inside the thread's shell, so a failing `zerdr thread` leaves a usable shell showing the error (observed indirectly; if Zed instead replaces the shell, only the error-message UX changes, not the contract).
-- `herdr agent attach` without `--takeover` supports concurrent clients on *different* panes (validated) and behaves acceptably if the user manually double-attaches one pane (leases prevent this only for bare invocations).
+- `herdr agent attach` without `--takeover` supports concurrent clients on *different* panes (validated). Attaching the same pane twice is prevented for every invocation, explicit target included, because R2 gives explicit targets a lease too; the second attempt fails naming the pane. (Corrected during Task 3: this originally said leases guard only bare invocations, which contradicted R2.)
 
 ## File Structure
 
@@ -130,7 +130,7 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 
 - [x] Task 1: Herdr CLI helpers + fake herdr extensions
 - [x] Task 2: Thread lease store in `state.rs`
-- [ ] Task 3: `zerdr thread` subcommand (resolution, auto-start, attach, monitor)
+- [x] Task 3: `zerdr thread` subcommand (resolution, auto-start, attach, monitor)
 - [ ] Task 4: Setup/uninstall/doctor integration for `terminal_init_command`
 - [ ] Task 5: Documentation and manual validation
 
@@ -233,7 +233,7 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 - No agent panes in workspace → log shows `tab create --workspace ... --no-focus` then `agent start zed-1 --kind pi --pane <root_pane>` then `agent attach`.
 - No matching workspace, bare → exit 1 with an error naming the root and `zerdr thread --create`; no `workspace create` in the log.
 - No matching workspace, `--create` → `workspace create --cwd <root> ... --no-focus`, binding file gains the entry, `agent start` in returned root pane.
-- Two concurrent bare invocations on a workspace with no agent panes (stateful fake) → the log contains exactly one `tab create` and one `agent start`; the second invocation attaches to the newly started agent's pane or waits on the serialization lock.
+- Two concurrent bare invocations on a workspace with no agent panes (stateful fake) → each starts its own agent (`zed-1` on the first minted pane, `zed-2` on the second) and attaches to a distinct pane; both exit successfully, so neither lost the race for a lease. (Revised from "exactly one tab create" — see the R9 correction.)
 - `--kind claude` → `agent start ... --kind claude`; `ZERDR_THREAD_KIND=claude` (no flag) → same; `zerdr thread wM:p8 --kind pi` and `zerdr thread wM:p8 --create` → clap usage error, exit 2.
 - Agent-get sequence: title A → title A (no dup) → title B; statuses working → working → idle. Captured stdout contains exactly two OSC title sequences and exactly one BEL.
 - Empty `terminal_title_stripped` in a response → title falls back to `{agent} · {workspace label}`.
@@ -249,6 +249,13 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 **Validation:**
 - Run: `cargo test --test thread_flow --test cli_contract`
 - Expected: all pass.
+
+**Implementation record:**
+- `src/thread.rs` holds `run`, `resolve_or_create`, `start_and_lease`, `match_workspace`, `generate_agent_name`, `focus_workspace`, and a `Monitor` that owns the polling thread. `ManagedChild` / `SignalForwarder` became `pub(crate)` in `herdr.rs` and are reused unchanged.
+- `AgentInfo` gained a `name` field: the herdr 0.8.2 `api schema` shows `AgentInfo.name`, which the live capture omitted only because those agents were started interactively. R4's name-collision check compares against that field rather than anything derived from the pane id.
+- `start_and_lease` tolerates a failing or empty `agent get` immediately after `agent start` and falls back to a synthesized `AgentInfo`; the agent is already running and its pane is known, and the monitor supplies the real title on its first poll.
+- Fake herdr additions for this task: `agent get` resolves a target against `ZERDR_TEST_AGENTS_DIR` by pane id or name when no explicit response is configured, and `tab create` mints sequential pane ids from `ZERDR_TEST_PANE_COUNTER_FILE` when `ZERDR_TEST_TAB_CREATE_JSON` is unset (the concurrency test needs distinct panes).
+- Task-level self-review cleanups before commit: a `Session` struct now carries herdr/leases/session name/socket (also keeping the argument count under clippy's limit); `workspace list` and `agent list` are each fetched once per invocation instead of two or three times (`focus_workspace` and the sidebar label share one list, `generate_agent_name` reuses the list the resolver already loaded); `create` is destructured from the subcommand instead of re-matched.
 
 ### Task 4: Setup/uninstall/doctor integration
 
@@ -319,7 +326,7 @@ Zed settings contract: `agent.terminal_init_command` (string) in the user `setti
 | R6 | Task 3 | OSC dedup sequence test; empty-title fallback test; missing-agent keeps-title test; Task 5 manual (1) |
 | R7 | Task 3 | single-BEL transition test; Task 5 manual (4) |
 | R8 | Task 3 | agent-get failure mid-sequence test (attach unaffected, silent, resumes) |
-| R9 | Task 2, 3 | lease acquire/collision/stale-lock tests; lease-released-after-exit test; empty-workspace race test |
+| R9 | Task 2, 3 | lease acquire/collision/stale-lock tests; lease-released-after-exit test; concurrent-threads test (distinct panes, both succeed) |
 | R10 | Task 3 | focused/unfocused workspace-focus tests; Task 5 manual (6) |
 | R11 | Task 4 | settings merge/foreign/uninstall tests |
 | R12 | Task 4 | doctor ok/missing/foreign tests |
