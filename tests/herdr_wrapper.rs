@@ -921,7 +921,11 @@ fn agent_list_parses_the_live_agent_payload_shape() {
             ]
         }
     });
-    let herdr = fake_herdr(&env, "herdr-agents", &[("ZERDR_TEST_AGENTS_JSON", agents.to_string())]);
+    let herdr = fake_herdr(
+        &env,
+        "herdr-agents",
+        &[("ZERDR_TEST_AGENTS_JSON", agents.to_string())],
+    );
 
     let parsed = herdr.agents_for("default").unwrap();
 
@@ -939,7 +943,11 @@ fn agent_list_parses_the_live_agent_payload_shape() {
 #[test]
 fn agent_get_surfaces_a_failing_herdr_exit_as_a_process_error() {
     let env = TestEnv::new();
-    let herdr = fake_herdr(&env, "herdr-get-fail", &[("ZERDR_TEST_AGENT_GET_EXIT", "1".to_owned())]);
+    let herdr = fake_herdr(
+        &env,
+        "herdr-get-fail",
+        &[("ZERDR_TEST_AGENT_GET_EXIT", "1".to_owned())],
+    );
 
     let error = herdr.agent_get_for("default", "wM:p8").unwrap_err();
 
@@ -964,7 +972,11 @@ fn agent_get_parses_a_single_agent_payload() {
             }
         }
     });
-    let herdr = fake_herdr(&env, "herdr-get", &[("ZERDR_TEST_AGENT_GET_JSON", agent.to_string())]);
+    let herdr = fake_herdr(
+        &env,
+        "herdr-get",
+        &[("ZERDR_TEST_AGENT_GET_JSON", agent.to_string())],
+    );
 
     let parsed = herdr.agent_get_for("default", "w0:p1").unwrap().unwrap();
 
