@@ -1,5 +1,7 @@
 # Automatic Internal and External Terminal Routing Implementation Plan
 
+> **Follow-up:** `docs/plans/2026-08-19-herdr-one-shot-zed-action.md` supersedes this plan only for ordinary-client one-shot actions, session-scoped bindings, and wrapper-optional `bind`/`unbind`. The wrapper routing, focus, lease, and safety contracts recorded here remain in force.
+
 > **For implementers:** Execute tasks in order unless dependencies allow otherwise. Mark a task complete only after its validation succeeds. Reflect minor implementation differences in the relevant task. Ask the user before changing requirements, Out of Scope, or public contracts.
 
 ## Problem Statement

@@ -14,7 +14,7 @@ cargo install --git https://github.com/ryonakae/zerdr --locked
 
 ## Quickstart
 
-Install the Herdr focus hook and Zed tasks, then start the dedicated Herdr session:
+Install the Herdr focus hook, Open Zed action, and Zed tasks, then start the dedicated Herdr session:
 
 ```bash
 zerdr setup
@@ -69,7 +69,7 @@ The one-shot plugin action reuses an applicable live wrapper route. Without a wr
 
 - **Rust 1.93.1:** required for the current source installation.
 - **Zed 1.15.0 or newer:** the `zed` CLI must expose `--existing` and `--add`.
-- **Herdr 0.8.0 or newer:** the plugin API must expose `workspace.focused` events.
+- **Herdr 0.8.0 or newer:** the plugin API must expose `workspace.focused` events, workspace actions, and plugin-action keybindings.
 - **Local Git checkouts:** each Herdr workspace maps to one canonical checkout root.
 - **Local macOS or Linux terminal:** runtime commands reject SSH, WSL, containers, and dev containers.
 
@@ -77,10 +77,10 @@ The one-shot plugin action reuses an applicable live wrapper route. Without a wr
 
 ## Notes
 
-- **Zed tasks:** `zerdr setup` adds global tasks and prints optional keybindings. It does not edit your Zed keymap.
+- **Keybindings:** `zerdr setup` adds global Zed tasks and prints optional Herdr and Zed keybindings. It does not edit your Herdr config or Zed keymap.
 - **Wrapper ownership:** One live `zerdr` wrapper owns routing for both modes. Stop it before changing modes.
 - **Session lifetime:** zerdr keeps the Herdr session named `zerdr` after the wrapper exits, but synchronization stops with the wrapper lease.
-- **Missing checkouts:** A missing checkout keeps its binding. Restore the checkout, run `zerdr bind PATH`, or remove the binding with `zerdr unbind`.
+- **Missing checkouts:** A missing checkout keeps its binding. Restore the checkout, run `zerdr bind [--session NAME] PATH`, or remove it with `zerdr unbind [--session NAME]`.
 - **Uninstall:** `zerdr uninstall` keeps bindings and route state. Stop the live wrapper before running `zerdr uninstall --purge`.
 
 ## License

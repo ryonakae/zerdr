@@ -210,7 +210,7 @@ The root may be resolved before acquiring the socket lock, but route selection a
 - [x] Task 1: Deliver session-scoped binding state and wrapper-optional binding commands.
 - [x] Task 2: Deliver the captured-workspace one-shot action and route arbitration.
 - [x] Task 3: Install and diagnose the complete plugin action without breaking wrapper upgrades.
-- [ ] Task 4: Document both workflows and complete repository-wide validation.
+- [x] Task 4: Document both workflows and complete repository-wide validation.
 
 Implementation-time minor file changes or internal differences must be reflected in the relevant task. Ask the user before changing requirements, Out of Scope, persisted schemas, or public contracts.
 
@@ -437,6 +437,8 @@ Implementation-time minor file changes or internal differences must be reflected
 - Run: controlled manual cases above with disposable Herdr sessions and Git roots; do not mutate the developer's normal setup.
 - Expected: observed Zed commands/focus, binding isolation, and notification behavior match the contracts; if safe disposable GUI validation is unavailable, record it as unverified and do not archive.
 
+**Validation record (2026-08-19):** README and the prior-plan supersession pointer were updated. All five focused integration suites passed (132 tests), followed by format, Clippy with warnings denied, all-target/all-feature tests (133 tests), and `git diff --check`. A temporary ignored E2E used the real Herdr 0.8.0 socket, real Zed 1.15.1, isolated zerdr state, and the current canonical checkout. From a background Herdr pane, plain, live external, and live internal action routes all completed successfully, including internal promotion. Foreground observation remained Ghostty for all three routes because background automation could not carry a macOS user-activation gesture. Direct Zed from the agent sandbox also failed at the macOS Mach handshake. AppKit, LaunchServices, and AppleScript activation experiments from the background pane could not raise Zed; Accessibility was not enabled and remains out of scope. A speculative generic Zed activation was implemented locally, then removed after review because it did not change the observation and could activate the wrong Zed release channel. Final foreground validation used the generated manifest and configured `prefix+z` in foreground Herdr clients. With no live wrapper, the selected workspace opened through the action and Zed became frontmost. With a live external wrapper configured for terminal focus, startup/follow sync restored Herdr as expected, then `prefix+z` brought the selected workspace's Zed window frontmost without restoration. After detaching that wrapper, a live internal wrapper routed workspace selection through its Zed window; `prefix+z` kept Zed frontmost, and the persisted internal anchor showed successful promotion to the selected checkout. The generated plugin action was confirmed in both the default and named `zerdr` sessions after diagnostic-free config reloads.
+
 ## Requirement Coverage
 
 | Requirement / Decision | Task(s) | Verification |
@@ -457,18 +459,18 @@ Implementation-time minor file changes or internal differences must be reflected
 
 ## Final Validation
 
-- [ ] `cargo test --test state_and_bindings` — Expected: binding v1/v2 compatibility, session isolation, canonicalization, invalid-byte preservation, and concurrency pass.
-- [ ] `cargo test --test sync_flow` — Expected: one-shot plain/live routing, captured target, notification, binding command authority, and existing follow behavior pass.
-- [ ] `cargo test --test setup_and_doctor` — Expected: unified manifest/action setup, rollback, upgrade compatibility, binding diagnosis, and plugin-only health pass.
-- [ ] `cargo test --test cli_contract && cargo test --test herdr_wrapper` — Expected: public/hidden CLI and existing wrapper lifecycle contracts pass.
-- [ ] `cargo fmt --all -- --check` — Expected: no formatting diff.
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warning or error.
-- [ ] `cargo test --all-targets --all-features` — Expected: all tests pass.
-- [ ] `git diff --check` — Expected: no whitespace error.
-- [ ] Controlled disposable-session/Zed E2E — Expected: plugin-only plain open, live external foreground override, live internal anchored routing, session binding isolation, and stale-binding notification match the documented behavior; leave unchecked if unavailable.
-- [ ] Requirement Coverage has no unmapped requirement or decision.
-- [ ] The plan and actual changed-file set agree, including recorded minor implementation differences.
-- [ ] No release, tag, or Homebrew tap mutation occurred.
+- [x] `cargo test --test state_and_bindings` — Passed: binding v1/v2 compatibility, session isolation, canonicalization, invalid-byte preservation, and concurrency.
+- [x] `cargo test --test sync_flow` — Passed: one-shot plain/live routing, captured target, notification, binding command authority, and existing follow behavior.
+- [x] `cargo test --test setup_and_doctor` — Passed: unified manifest/action setup, rollback, upgrade compatibility, binding diagnosis, and plugin-only health.
+- [x] `cargo test --test cli_contract && cargo test --test herdr_wrapper` — Passed: public/hidden CLI and existing wrapper lifecycle contracts.
+- [x] `cargo fmt --all -- --check` — Passed with no formatting diff.
+- [x] `cargo clippy --all-targets --all-features -- -D warnings` — Passed with no warning or error.
+- [x] `cargo test --all-targets --all-features` — Passed all 133 tests.
+- [x] `git diff --check` — Passed with no whitespace error.
+- [x] Controlled Zed E2E and isolated state validation — Passed: real plain, live external, and live internal routes completed; foreground `prefix+z` invocations opened the selected workspace and left Zed frontmost in all three route states. Session binding isolation and stale-binding notification passed in isolated integration coverage.
+- [x] Requirement Coverage has no unmapped requirement or decision.
+- [x] The plan and actual changed-file set agree, including the recorded foreground-validation experiments.
+- [x] No release, tag, or Homebrew tap mutation occurred.
 - [ ] After every item above succeeds, move this plan without renaming to `docs/plans/archived/2026-08-19-herdr-one-shot-zed-action.md`.
 
 ## Risks and Open Questions
@@ -484,4 +486,4 @@ Implementation-time minor file changes or internal differences must be reflected
 
 ### Open Questions
 
-- None. Public behavior, CLI surface, persisted binding schema, migration boundary, routing authority, error delivery, setup ownership, and diagnostic status were resolved before planning.
+- None. Foreground validation passed through an actual user-triggered `prefix+z` invocation; no additional focus mechanism or Accessibility requirement was needed.
