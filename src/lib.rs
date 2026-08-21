@@ -85,23 +85,20 @@ pub fn run() -> Result<()> {
         }
         Command::Thread { enable: true, .. } => setup::thread_auto_enable(),
         Command::Thread { disable: true, .. } => setup::thread_auto_disable(),
+        Command::Thread { auto: true, .. } => {
+            thread::run_auto(explicit_session.unwrap_or(DEFAULT_SESSION_NAME))
+        }
         Command::Thread {
             target,
             kind,
             create,
-            auto,
             ..
-        } => {
-            if *auto && !setup::thread_auto_enabled(&state::Paths::discover()?) {
-                return Ok(());
-            }
-            thread::run(
-                explicit_session.unwrap_or(DEFAULT_SESSION_NAME),
-                target.as_deref(),
-                kind.as_deref(),
-                *create,
-            )
-        }
+        } => thread::run(
+            explicit_session.unwrap_or(DEFAULT_SESSION_NAME),
+            target.as_deref(),
+            kind.as_deref(),
+            *create,
+        ),
         Command::Setup => setup::setup(),
         Command::Uninstall { purge } => setup::uninstall(*purge),
         Command::Doctor { .. } => match remote {

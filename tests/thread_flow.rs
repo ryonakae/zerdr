@@ -316,6 +316,90 @@ fn a_bare_thread_without_a_matching_workspace_explains_the_create_flag() {
     assert!(!fixture.env.read_log().contains("workspace create"));
 }
 
+/// With auto mode enabled, `--auto` behaves exactly like a manual `zerdr thread`.
+#[test]
+fn auto_attaches_a_free_agent_while_the_mode_is_enabled() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    let paths = fixture.paths();
+    fs::create_dir_all(&paths.state_dir).unwrap();
+    fs::write(&paths.thread_auto_flag_file, b"").unwrap();
+
+    let child = fixture
+        .std_thread_command()
+        .args(["thread", "--auto"])
+        .spawn()
+        .unwrap();
+    wait_for_log(&fixture.env, "agent attach w1:p1");
+
+    fixture.release_attach();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!("{OSC_PREFIX}pi \u{b7} review")),
+        "{stdout:?}"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+}
+
+/// Auto attach is best-effort: an unmatched project leaves the thread as a plain local
+/// shell with a single note, never a fatal error or a new Herdr workspace.
+#[test]
+fn auto_without_a_matching_workspace_leaves_a_plain_shell_with_one_note() {
+    let fixture = Fixture::new();
+    let paths = fixture.paths();
+    fs::create_dir_all(&paths.state_dir).unwrap();
+    fs::write(&paths.thread_auto_flag_file, b"").unwrap();
+
+    let output = fixture
+        .std_thread_command()
+        .args(["thread", "--auto"])
+        .env(
+            "ZERDR_TEST_WORKSPACES_JSON",
+            r#"{"result":{"workspaces":[]}}"#,
+        )
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(stderr.starts_with("zerdr: "), "{stderr}");
+    assert!(stderr.contains("starting a plain shell"), "{stderr}");
+    let log = fixture.env.read_log();
+    assert!(!log.contains("workspace create"), "{log}");
+    assert!(!log.contains("tab create"), "{log}");
+}
+
+/// A missing or failing Herdr must not block the thread's shell either.
+#[test]
+fn auto_exits_zero_when_herdr_is_unavailable() {
+    let fixture = Fixture::new();
+    let paths = fixture.paths();
+    fs::create_dir_all(&paths.state_dir).unwrap();
+    fs::write(&paths.thread_auto_flag_file, b"").unwrap();
+
+    let output = fixture
+        .std_thread_command()
+        .args(["thread", "--auto"])
+        .env(
+            "ZERDR_HERDR_BIN",
+            fixture.env.root.path().join("missing-herdr"),
+        )
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(stderr.starts_with("zerdr: "), "{stderr}");
+}
+
 /// Herdr only records `worktree.checkout_path` when it detected the checkout at
 /// creation time, so most hand-made workspaces lack it. A workspace whose pane sits in
 /// the project directory must still match, and the match is remembered as a binding.

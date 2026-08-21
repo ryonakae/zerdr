@@ -213,7 +213,7 @@ zerdr setup | uninstall [--purge] | [--session NAME] doctor
 - [x] Task 1: Remove external routing
 - [x] Task 2: Remove pick/next/previous and shrink Zed tasks
 - [x] Task 3: Auto-mode flag with `--enable`/`--disable`
-- [ ] Task 4: `--auto` best-effort attach
+- [x] Task 4: `--auto` best-effort attach
 - [ ] Task 5: Documentation
 
 ## Tasks
@@ -444,6 +444,13 @@ attach while enabled, never blocking the thread's shell with a fatal error.
 **Validation:**
 - Run: `cargo test --test thread_flow --all-features && cargo test --all-targets --all-features`
 - Expected: all tests pass.
+
+**Result:** Done. `thread::run_auto` holds both the disabled check and the best-effort
+wrapper (`zerdr: <one-line message>; starting a plain shell` on stderr, exit 0); lib.rs
+dispatches `--auto` there. The disabled no-op and clap conflicts were already tested in
+Task 3's `tests/cli_contract.rs`; the enabled paths (attach parity, unmatched workspace,
+missing herdr binary) are in `tests/thread_flow.rs`. Validation: full suite green
+(188 tests), fmt clean, clippy `-D warnings` clean.
 
 ### Task 5: Documentation
 
