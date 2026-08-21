@@ -47,7 +47,9 @@ Open a terminal thread in Zed's agent panel and run `zerdr thread` inside it. ze
 
 Every start prints one status line saying what the thread is connected to — an attached agent, a fresh Herdr tab, a created workspace, a reattached pane, or (with auto mode off) a plain local shell — with the pane and workspace, so a Herdr pane and a local shell are distinguishable at a glance.
 
-While attached, the threads sidebar title marks the thread as Herdr-backed and follows the agent's own live title: `[herdr] Pi - <title>` (pi's `π - ` lead is folded into the name) or `[herdr] Claude - <title>`, and `[herdr] <workspace>` for a plain shell pane. Because the agent's own title is what follows the marker, tools that enrich agent titles with session context improve the display automatically. zerdr also rings the terminal bell when the agent stops working, which is what makes Zed notify you. Enable Zed's notifications to see the bell:
+While attached, the threads sidebar title marks the thread as Herdr-backed and follows the agent's own live title: `[herdr] Pi - <title>` (pi's `π - ` lead is folded into the name) or `[herdr] Claude - <title>`, and `[herdr] <workspace>` for a plain shell pane. Because the agent's own title is what follows the marker, tools that enrich agent titles with session context improve the display automatically.
+
+Agent titles also lead with a status glyph, which Zed shows as the thread's row icon. When the agent decorates its own title with one — Claude Code animates a spinner there — that glyph is passed through unchanged. Otherwise the glyph mirrors Herdr's status symbols: `◐` working, `×` blocked, `✓` done, `○` idle, and `·` when Herdr cannot classify the agent. Plain shell panes stay unmarked. zerdr also rings the terminal bell when the agent stops working, which is what makes Zed notify you. Enable Zed's notifications to see the bell:
 
 ```json
 {

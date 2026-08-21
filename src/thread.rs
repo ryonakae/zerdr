@@ -244,6 +244,7 @@ fn resolve_or_create(
             pane_id,
             workspace_id: workspace_id.clone(),
             title: None,
+            raw_title: None,
         };
         return Ok((shell, lease, Some(terminal_id), Attachment::Remembered));
     }
@@ -293,6 +294,7 @@ fn start_and_lease(
             pane_id: pane_id.to_owned(),
             workspace_id: workspace_id.to_owned(),
             title: None,
+            raw_title: None,
         };
         return Ok((shell, lease, Some(terminal_id)));
     };
@@ -317,6 +319,7 @@ fn start_and_lease(
             pane_id: pane_id.to_owned(),
             workspace_id: workspace_id.to_owned(),
             title: None,
+            raw_title: None,
         });
     Ok((agent, lease, None))
 }
@@ -518,11 +521,17 @@ fn wait_for_stop(stop: &(Mutex<bool>, Condvar), interval: Duration) -> bool {
 /// The sidebar title is what tells a Herdr pane apart from a plain Zed shell, so it
 /// carries a `[herdr]` marker followed by a friendly agent name and the agent's own
 /// (live) title. An empty title falls back to the workspace label so a plain-shell
-/// tab still says where it lives.
+/// tab still says where it lives. Agent titles lead with a status glyph, which Zed
+/// promotes into the thread's sidebar row icon.
 fn emit_title(last: &mut Option<String>, agent: &AgentInfo, fallback: Option<&str>) {
     let label = if agent.kind.is_empty() {
         format!("[herdr] {}", fallback.unwrap_or(&agent.workspace_id))
     } else {
+        let glyph = agent
+            .raw_title
+            .as_deref()
+            .and_then(title_glyph_prefix)
+            .unwrap_or_else(|| status_glyph(&agent.status));
         let detail = agent
             .title
             .as_deref()
@@ -530,13 +539,52 @@ fn emit_title(last: &mut Option<String>, agent: &AgentInfo, fallback: Option<&st
             .filter(|detail| !detail.is_empty())
             .or(fallback)
             .unwrap_or(&agent.workspace_id);
-        format!("[herdr] {} - {detail}", display_kind(&agent.kind))
+        format!("{glyph} [herdr] {} - {detail}", display_kind(&agent.kind))
     };
     if last.as_deref() == Some(label.as_str()) {
         return;
     }
     emit(format!("\x1b]0;{label}\x07").as_bytes());
     *last = Some(label);
+}
+
+/// Mirrors Zed's `terminal_title_prefix`: a leading run of non-whitespace,
+/// non-alphanumeric characters followed by whitespace and a non-empty remainder.
+/// This is how agents like Claude Code animate a spinner in their own titles, so a
+/// matching run is passed through verbatim.
+fn title_glyph_prefix(title: &str) -> Option<&str> {
+    let mut prefix_end = 0;
+    let mut rest = None;
+    for (index, character) in title.char_indices() {
+        if character.is_whitespace() {
+            if prefix_end == 0 {
+                return None;
+            }
+            rest = Some(&title[index..]);
+            break;
+        }
+        if character.is_alphanumeric() {
+            return None;
+        }
+        prefix_end = index + character.len_utf8();
+    }
+    if rest?.trim_start().is_empty() {
+        return None;
+    }
+    Some(&title[..prefix_end])
+}
+
+/// Herdr's Symbols-style indicator set (its `state_icon_symbol`), fixed rather than
+/// following the configured style because Zed renders title glyphs without the color
+/// that distinguishes the Dots style.
+fn status_glyph(status: &str) -> &'static str {
+    match status {
+        "working" => "◐",
+        "blocked" => "×",
+        "done" => "✓",
+        "idle" => "○",
+        _ => "·",
+    }
 }
 
 fn display_kind(kind: &str) -> String {

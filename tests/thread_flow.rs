@@ -81,6 +81,20 @@ impl Fixture {
         status: &str,
         title: &str,
     ) {
+        self.agent_with_raw_title(kind, name, pane_id, workspace_id, status, title, title);
+    }
+
+    #[expect(clippy::too_many_arguments, reason = "test fixture mirrors Herdr JSON")]
+    fn agent_with_raw_title(
+        &self,
+        kind: &str,
+        name: &str,
+        pane_id: &str,
+        workspace_id: &str,
+        status: &str,
+        raw_title: &str,
+        title: &str,
+    ) {
         fs::write(
             self.agents_dir.join(format!("{name}.json")),
             serde_json::json!({
@@ -89,6 +103,7 @@ impl Fixture {
                 "agent_status": status,
                 "pane_id": pane_id,
                 "workspace_id": workspace_id,
+                "terminal_title": raw_title,
                 "terminal_title_stripped": title
             })
             .to_string(),
@@ -160,13 +175,18 @@ fn write_sequence(directory: &Path, responses: &[&str]) {
 }
 
 fn agent_response(status: &str, title: &str) -> String {
+    agent_response_of_kind("pi", status, title, title)
+}
+
+fn agent_response_of_kind(kind: &str, status: &str, raw_title: &str, title: &str) -> String {
     serde_json::json!({
         "result": {"agent": {
-            "agent": "pi",
+            "agent": kind,
             "name": "zed-1",
             "agent_status": status,
             "pane_id": "w1:p1",
             "workspace_id": "w1",
+            "terminal_title": raw_title,
             "terminal_title_stripped": title
         }}
     })
@@ -198,7 +218,7 @@ fn bare_thread_attaches_a_free_agent_in_the_matching_workspace() {
     assert!(!log.contains("send-text"), "{log}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains(&format!("{OSC_PREFIX}[herdr] Pi - review")),
+        stdout.contains(&format!("{OSC_PREFIX}○ [herdr] Pi - review")),
         "{stdout:?}"
     );
     let status = stdout.lines().next().unwrap_or_default();
@@ -364,7 +384,7 @@ fn auto_attaches_a_free_agent_while_the_mode_is_enabled() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains(&format!("{OSC_PREFIX}[herdr] Pi - review")),
+        stdout.contains(&format!("{OSC_PREFIX}○ [herdr] Pi - review")),
         "{stdout:?}"
     );
     let status = stdout.lines().next().unwrap_or_default();
@@ -698,11 +718,11 @@ fn titles_are_emitted_once_per_change_and_a_bell_marks_settling() {
         "one title per change, deduplicated: {stdout:?}"
     );
     assert!(
-        stdout.contains(&format!("{OSC_PREFIX}[herdr] Pi - first title")),
+        stdout.contains(&format!("{OSC_PREFIX}◐ [herdr] Pi - first title")),
         "{stdout:?}"
     );
     assert!(
-        stdout.contains(&format!("{OSC_PREFIX}[herdr] Pi - second title")),
+        stdout.contains(&format!("{OSC_PREFIX}○ [herdr] Pi - second title")),
         "{stdout:?}"
     );
     assert_eq!(
@@ -724,7 +744,7 @@ fn an_empty_title_falls_back_to_the_workspace_label() {
 
     assert!(
         String::from_utf8_lossy(&output.stdout)
-            .contains(&format!("{OSC_PREFIX}[herdr] Pi - checkout")),
+            .contains(&format!("{OSC_PREFIX}○ [herdr] Pi - checkout")),
         "{:?}",
         String::from_utf8_lossy(&output.stdout)
     );
@@ -738,17 +758,17 @@ fn titles_carry_the_herdr_marker_and_kind_display_names() {
         (
             "claude",
             "コード内の重複パターン洗い出し",
-            "[herdr] Claude - コード内の重複パターン洗い出し",
+            "○ [herdr] Claude - コード内の重複パターン洗い出し",
         ),
         (
             "pi",
             "π - 施策を進める - mog-app",
-            "[herdr] Pi - 施策を進める - mog-app",
+            "○ [herdr] Pi - 施策を進める - mog-app",
         ),
-        ("codex", "t", "[herdr] Codex - t"),
+        ("codex", "t", "○ [herdr] Codex - t"),
         // A degenerate pi title that is only the stripped prefix falls back to the
         // workspace label instead of leaving a dangling separator.
-        ("pi", "\u{3c0} - ", "[herdr] Pi - checkout"),
+        ("pi", "\u{3c0} - ", "○ [herdr] Pi - checkout"),
     ] {
         let fixture = Fixture::new();
         fixture.agent_of_kind(kind, "zed-1", "w1:p1", "w1", "idle", title);
@@ -764,6 +784,158 @@ fn titles_carry_the_herdr_marker_and_kind_display_names() {
             "{kind}: {stdout:?}"
         );
     }
+}
+
+/// An agent that decorates its own title with a leading glyph (Claude Code's title
+/// spinner) keeps that glyph in the emitted title instead of the status fallback, and
+/// a frame advance alone re-emits the title.
+#[test]
+fn a_raw_title_glyph_passes_through_and_frame_changes_reemit() {
+    let fixture = Fixture::new();
+    fixture.agent_with_raw_title(
+        "claude",
+        "zed-1",
+        "w1:p1",
+        "w1",
+        "working",
+        "⠐ fix tests",
+        "fix tests",
+    );
+    let sequence = fixture.env.root.path().join("agent-get-seq");
+    write_sequence(
+        &sequence,
+        &[
+            &agent_response_of_kind("claude", "working", "⠐ fix tests", "fix tests"),
+            &agent_response_of_kind("claude", "working", "⠙ fix tests", "fix tests"),
+        ],
+    );
+
+    let child = fixture
+        .std_thread_command()
+        .arg("thread")
+        .env("ZERDR_TEST_AGENT_GET_SEQ", &sequence)
+        .spawn()
+        .unwrap();
+    wait_for_log(&fixture.env, "agent attach w1:p1");
+    thread::sleep(Duration::from_millis(300));
+    fixture.release_attach();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains(&format!("{OSC_PREFIX}⠐ [herdr] Claude - fix tests")),
+        "{stdout:?}"
+    );
+    assert!(
+        stdout.contains(&format!("{OSC_PREFIX}⠙ [herdr] Claude - fix tests")),
+        "the frame advance alone re-emits the title: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("◐"),
+        "the native glyph wins over the status fallback: {stdout:?}"
+    );
+}
+
+/// Without a usable raw-title glyph, the status maps to Herdr's Symbols indicator set.
+#[test]
+fn status_glyphs_follow_the_herdr_symbol_set() {
+    for (status, glyph) in [
+        ("working", "◐"),
+        ("blocked", "×"),
+        ("done", "✓"),
+        ("idle", "○"),
+        ("unknown", "·"),
+    ] {
+        let fixture = Fixture::new();
+        fixture.agent("zed-1", "w1:p1", "w1", status, "review the diff");
+
+        let child = fixture.std_thread_command().arg("thread").spawn().unwrap();
+        wait_for_log(&fixture.env, "agent attach w1:p1");
+        fixture.release_attach();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(&format!("{OSC_PREFIX}{glyph} [herdr] Pi - review the diff")),
+            "{status}: {stdout:?}"
+        );
+    }
+}
+
+/// A glyph run not followed by whitespace is not a prefix, and an alphanumeric lead
+/// (pi's `π`) never is; both fall back to the status glyph.
+#[test]
+fn unusable_raw_prefixes_fall_back_to_the_status_glyph() {
+    for (kind, raw_title, title, expected) in [
+        (
+            "claude",
+            "✳Thinking",
+            "Thinking",
+            "◐ [herdr] Claude - Thinking",
+        ),
+        ("pi", "π - review", "π - review", "◐ [herdr] Pi - review"),
+    ] {
+        let fixture = Fixture::new();
+        fixture.agent_with_raw_title(kind, "zed-1", "w1:p1", "w1", "working", raw_title, title);
+
+        let child = fixture.std_thread_command().arg("thread").spawn().unwrap();
+        wait_for_log(&fixture.env, "agent attach w1:p1");
+        fixture.release_attach();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(&format!("{OSC_PREFIX}{expected}")),
+            "{kind}: {stdout:?}"
+        );
+    }
+}
+
+/// A settling transition with an unchanged detail still re-emits: the glyph is part of
+/// the deduplicated label, and the bell keeps marking the settle.
+#[test]
+fn a_status_transition_reemits_the_title_with_the_new_glyph() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "working", "same title");
+    let sequence = fixture.env.root.path().join("agent-get-seq");
+    write_sequence(
+        &sequence,
+        &[
+            &agent_response("working", "same title"),
+            &agent_response("idle", "same title"),
+        ],
+    );
+
+    let child = fixture
+        .std_thread_command()
+        .arg("thread")
+        .env("ZERDR_TEST_AGENT_GET_SEQ", &sequence)
+        .spawn()
+        .unwrap();
+    wait_for_log(&fixture.env, "agent attach w1:p1");
+    thread::sleep(Duration::from_millis(300));
+    fixture.release_attach();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        stdout.matches(OSC_PREFIX).count(),
+        2,
+        "the glyph change alone re-emits: {stdout:?}"
+    );
+    assert!(
+        stdout.contains(&format!("{OSC_PREFIX}◐ [herdr] Pi - same title")),
+        "{stdout:?}"
+    );
+    assert!(
+        stdout.contains(&format!("{OSC_PREFIX}○ [herdr] Pi - same title")),
+        "{stdout:?}"
+    );
+    assert_eq!(
+        stdout.matches('\u{7}').count(),
+        3,
+        "two OSC terminators plus exactly one bell: {stdout:?}"
+    );
 }
 
 #[test]

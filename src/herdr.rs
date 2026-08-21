@@ -38,6 +38,8 @@ pub struct AgentInfo {
     pub pane_id: String,
     pub workspace_id: String,
     pub title: Option<String>,
+    /// The terminal title as the agent set it, leading glyph intact.
+    pub raw_title: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -667,6 +669,7 @@ fn parse_agent(value: &Value) -> Result<AgentInfo> {
         workspace_id,
         title: string_field(value, &["terminal_title_stripped", "terminal_title"])
             .filter(|title| !title.is_empty()),
+        raw_title: string_field(value, &["terminal_title"]).filter(|title| !title.is_empty()),
     })
 }
 

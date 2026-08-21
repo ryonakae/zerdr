@@ -882,9 +882,11 @@ fn agent_list_parses_the_live_agent_payload_shape() {
     assert_eq!(parsed[0].pane_id, "wM:p8");
     assert_eq!(parsed[0].workspace_id, "wM");
     assert_eq!(parsed[0].title.as_deref(), Some("\u{3c0} - mog-app"));
+    assert_eq!(parsed[0].raw_title.as_deref(), Some("\u{3c0} - mog-app"));
     assert_eq!(parsed[1].kind, "claude");
     assert_eq!(parsed[1].status, "working");
     assert_eq!(parsed[1].pane_id, "w13:p1");
+    assert_eq!(parsed[1].raw_title, None);
 }
 
 #[test]
@@ -915,6 +917,7 @@ fn agent_get_parses_a_single_agent_payload() {
                 "agent_status": "blocked",
                 "pane_id": "w0:p1",
                 "workspace_id": "w0",
+                "terminal_title": "⠐ review the diff",
                 "terminal_title_stripped": "review the diff"
             }
         }
@@ -932,6 +935,7 @@ fn agent_get_parses_a_single_agent_payload() {
     assert_eq!(parsed.pane_id, "w0:p1");
     assert_eq!(parsed.workspace_id, "w0");
     assert_eq!(parsed.title.as_deref(), Some("review the diff"));
+    assert_eq!(parsed.raw_title.as_deref(), Some("⠐ review the diff"));
 }
 
 #[test]
