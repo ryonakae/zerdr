@@ -548,8 +548,8 @@ fn create_makes_the_workspace_binds_it_and_starts_an_agent() {
         }
     });
 
-    fixture
-        .thread_command()
+    let output = fixture
+        .std_thread_command()
         .args(["thread", "--create"])
         .env(
             "ZERDR_TEST_WORKSPACES_JSON",
@@ -557,8 +557,11 @@ fn create_makes_the_workspace_binds_it_and_starts_an_agent() {
         )
         .env("ZERDR_TEST_WORKSPACE_CREATE_JSON", workspace.to_string())
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
-        .assert()
-        .success();
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
 
     let log = fixture.env.read_log();
     assert!(
@@ -573,6 +576,11 @@ fn create_makes_the_workspace_binds_it_and_starts_an_agent() {
         .get("default", "w7")
         .unwrap();
     assert_eq!(bound, Some(fixture.repo.clone()));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let status = stdout.lines().next().unwrap_or_default();
+    assert!(status.contains("created Herdr workspace"), "{stdout:?}");
+    assert!(status.contains("w7:p1"), "{stdout:?}");
+    assert!(!stdout.contains("auto mode"), "{stdout:?}");
 }
 
 /// Two threads racing on an empty workspace must each end up with their own tab and
