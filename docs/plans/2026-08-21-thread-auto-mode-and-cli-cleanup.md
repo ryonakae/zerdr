@@ -518,16 +518,25 @@ already updated alongside Tasks 1 and 3.
 
 ## Final Validation
 
-- [ ] `cargo fmt --all -- --check` — Expected: no diff
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings
-- [ ] `cargo test --all-targets --all-features` — Expected: all tests pass
+- [x] `cargo fmt --all -- --check` — Expected: no diff — clean
+- [x] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings — clean
+- [x] `cargo test --all-targets --all-features` — Expected: all tests pass — 190 tests green
+      (locally verified with `--test-threads=4` while the machine sat at load average
+      11–13, where the two pre-existing timing-sensitive tests flake at full parallelism;
+      GitHub CI on macOS and Ubuntu is green on HEAD 92163c4)
 - [ ] Manual check (user's machine, after `cargo install --path . --locked --force`):
       `zerdr thread --enable` once, open a new Zed terminal thread → auto-attaches;
       `zerdr thread --disable`, open another thread → nothing happens; `zerdr doctor`
       shows the mode line. Real `zerdr setup` run is the user's call per AGENTS.md.
-- [ ] Requirement Coverage に未対応項目がない
-- [ ] 計画と実際の変更内容が整合している
+- [x] Requirement Coverage に未対応項目がない
+- [x] 計画と実際の変更内容が整合している
 - [ ] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
+
+**Independent review:** two rounds by a separate reviewer context. Round 1: APPROVED with
+1 medium + 3 low findings. Round 2 (after fix commit 92163c4): APPROVED, all findings
+closed — three fixed with tests, the medium install.json race accepted and recorded in
+Risks. Implementation commits: c6b1977, 1a8bf98, 1b57c64, dd673b7, 49e65e7, 92163c4
+(base cce7c09), all pushed and CI-green on HEAD.
 
 ## Risks and Open Questions
 
