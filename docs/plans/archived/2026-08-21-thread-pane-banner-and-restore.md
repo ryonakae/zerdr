@@ -320,13 +320,16 @@ pane → fresh tab) and the closed-thread pickup behavior. Validation grep confi
 - [x] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings — clean
 - [x] `cargo test --all-targets --all-features` — Expected: all tests pass — 202 tests green
       (run at `--test-threads=4`; GitHub CI green on HEAD 2e4b45e on macOS and Ubuntu)
-- [ ] Manual check (user's machine, after `cargo install --path . --locked --force`):
-      a fresh thread's pane shows the `# zerdr: ...` line (visible from Zed and from
-      Herdr); quit Zed with a plain-shell thread attached, reopen the project → the
-      restored thread reattaches to the same pane instead of creating a new tab.
-- [ ] Requirement Coverage に未対応項目がない
-- [ ] 計画と実際の変更内容が整合している
-- [ ] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
+- [x] Manual check — outcome recorded: the restore half passed (the user confirmed the
+      restored thread reattaches to the same pane). The banner half worked as specified
+      but was rejected on sight: the comment arrives before the shell starts (double
+      echo) and fish highlights it red like an error. The banner was therefore removed
+      and replaced by the `[herdr]` sidebar title marker in the follow-up plan
+      `2026-08-21-thread-title-marker.md`; the pane memory/restore feature from this
+      plan remains in place.
+- [x] Requirement Coverage に未対応項目がない
+- [x] 計画と実際の変更内容が整合している（バナー部分はその後 title-marker プランで置換）
+- [x] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
 
 **Independent review:** two rounds by a separate reviewer context. Round 1: ISSUES FOUND —
 one medium (control characters in a workspace label or checkout name could turn the
