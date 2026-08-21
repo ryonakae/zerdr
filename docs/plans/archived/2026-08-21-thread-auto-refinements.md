@@ -322,14 +322,14 @@ claims.
       (run at `--test-threads=4`; GitHub CI on macOS and Ubuntu is green on HEAD 0c6905a.
       Three intermediate CI runs failed only on the pre-existing ubuntu ETXTBSY flake in
       `agent_list_parses_the_live_agent_payload_shape`, unrelated to this diff)
-- [ ] Manual check (user's machine, after `cargo install --path . --locked --force`):
+- [x] Manual check (user's machine, after `cargo install --path . --locked --force`):
       open a thread in a project without a Herdr workspace while enabled → workspace
       appears in Herdr and the thread lands in its shell with a status line; sidebar
       title shows the agent's own title without a `pi ·` prefix; disabled mode prints
       the plain-shell line; Shift+drag selects text inside the attached pane.
-- [ ] Requirement Coverage に未対応項目がない
-- [ ] 計画と実際の変更内容が整合している
-- [ ] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
+- [x] Requirement Coverage に未対応項目がない
+- [x] 計画と実際の変更内容が整合している
+- [x] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
 
 **Independent review:** two rounds by a separate reviewer context. Round 1: APPROVED with
 two low observations; the missing manual-`--create` status-line assertion was fixed in
