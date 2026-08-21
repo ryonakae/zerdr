@@ -1547,6 +1547,30 @@ fn thread_enable_refuses_a_foreign_init_command() {
 }
 
 #[test]
+fn thread_enable_refuses_a_non_object_settings_root() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    env.command().arg("setup").assert().success();
+    fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
+    fs::write(&paths.zed_settings_file, "[]\n").unwrap();
+
+    env.command()
+        .args(["thread", "--enable"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("top-level object"));
+
+    assert_eq!(
+        fs::read_to_string(&paths.zed_settings_file).unwrap(),
+        "[]\n"
+    );
+    assert!(!paths.thread_auto_flag_file.exists());
+    let install: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
+    assert!(install.get("terminal_init_command_fingerprint").is_none());
+}
+
+#[test]
 fn thread_disable_removes_only_the_flag() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());

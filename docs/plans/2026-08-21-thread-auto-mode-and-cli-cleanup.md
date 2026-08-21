@@ -504,7 +504,7 @@ already updated alongside Tasks 1 and 3.
 | R1 | Task 1 | removed-flag rejection tests; internal wrapper tests pass |
 | R2 | Task 2 | unknown-subcommand tests; sync tests still pass |
 | R3 | Task 2 | seeded stale-task cleanup and preserve-modified tests |
-| R4 | Task 1 | no migration added; corrupt-route handling untouched (code review) |
+| R4 | Task 1 | `legacy_external_route_notifies_without_workspace_or_zed_calls` (added post-review) |
 | R5 | Task 3 | flag file created/removed in enable/disable tests |
 | R6 | Task 3 | enable tests: fresh, idempotent, foreign-value, symlink, no-install-state |
 | R7 | Task 3 | disable tests: flag removed, settings untouched, idempotent |
@@ -534,6 +534,11 @@ already updated alongside Tasks 1 and 3.
 - A route-state file written by an older binary with external routing fails to parse after
   R1; it is reported as corrupt rather than cleaned automatically. Acceptable: routes only
   matter while a wrapper is live, and the user machine will not have a live external route.
+- Known limitation (independent review, medium): `setup`, `thread --enable`/`--disable`,
+  and `uninstall` mutate install.json without a shared lock, so a genuinely concurrent
+  `setup` + `--enable` could revert the just-recorded init-command fingerprint. This
+  extends a pre-existing unlocked pattern; interactive single-user usage makes the race
+  unlikely, and adding cross-command locking was judged not worth the complexity now.
 - `--auto` runs in every new terminal thread while enabled; if Herdr's CLI is slow to fail
   (e.g. hung socket), thread startup waits on it. Existing herdr calls have no zerdr-side
   timeout; unchanged by this plan.

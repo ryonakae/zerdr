@@ -17,12 +17,6 @@ const REMOTE_ENV_MARKERS: [&str; 9] = [
 ];
 const REMOTE_FILE_MARKERS: [&str; 2] = ["/.dockerenv", "/run/.containerenv"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Platform {
-    MacOs,
-    Linux,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteEnvironment {
     markers: Vec<String>,
@@ -80,21 +74,6 @@ pub fn resolve_launch(anchor: Option<&Path>) -> Result<RouteStrategy> {
     Ok(RouteStrategy::Internal {
         anchor_root: canonical_git_root(&candidate)?,
     })
-}
-
-pub fn platform() -> Platform {
-    if env::var_os("ZERDR_TEST_ROOT").is_some() {
-        match env::var("ZERDR_TEST_PLATFORM").as_deref() {
-            Ok("macos") => return Platform::MacOs,
-            Ok("linux") => return Platform::Linux,
-            _ => {}
-        }
-    }
-    if cfg!(target_os = "macos") {
-        Platform::MacOs
-    } else {
-        Platform::Linux
-    }
 }
 
 pub fn current_directory() -> Result<PathBuf> {

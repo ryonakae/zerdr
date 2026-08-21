@@ -870,6 +870,18 @@ fn malformed_route_notifies_without_workspace_or_zed_calls() {
     });
 }
 
+/// External routing no longer exists, so a route file recorded by an older zerdr with
+/// `mode: "external"` is reported as corrupt instead of being migrated.
+#[test]
+fn legacy_external_route_notifies_without_workspace_or_zed_calls() {
+    assert_route_corruption_blocks_sync(|_, _, route_path| {
+        let mut route: serde_json::Value =
+            serde_json::from_slice(&fs::read(route_path).unwrap()).unwrap();
+        route["routing"] = serde_json::json!({"mode": "external", "focus": "zed"});
+        fs::write(route_path, serde_json::to_vec_pretty(&route).unwrap()).unwrap();
+    });
+}
+
 #[test]
 fn unsupported_route_schema_notifies_without_workspace_or_zed_calls() {
     assert_route_corruption_blocks_sync(|_, _, route_path| {
