@@ -119,7 +119,7 @@ marker moved to the Zed agent panel's thread title instead, and the shell left a
 
 ## Progress
 
-- [ ] Task 1: Title marker and banner removal
+- [x] Task 1: Title marker and banner removal
 - [ ] Task 2: Documentation
 
 ## Tasks
@@ -167,6 +167,15 @@ title, and nothing is ever typed into a pane's shell.
 **Validation:**
 - Run: `cargo test --test thread_flow --test herdr_wrapper --all-features && cargo test --all-targets --all-features`
 - Expected: all tests pass (herdr_wrapper included for the fake-timing budget).
+
+**Result:** Done. `emit_title` + `display_kind` + `strip_kind_prefix` in src/thread.rs;
+`Fixture::agent_of_kind` added; new `titles_carry_the_herdr_marker_and_kind_display_names`
+test covers claude / pi-strip / unknown-kind. One deviation from the "Complete when"
+grep: the negative assertions the plan itself requires (`!log.contains("send-text")` in
+the creation/attach/restore tests) necessarily contain the string "send-text", so the
+grep matches those three test lines and nothing else — no banner code remains
+(`rg "send_banner|single_line|pane_send"` has zero matches). Full suite green
+(200 tests at --test-threads=4), fmt/clippy clean.
 
 ### Task 2: Documentation
 

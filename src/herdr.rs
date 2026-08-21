@@ -180,32 +180,6 @@ impl Herdr {
             .map_err(|error| Error::User(format!("failed to attach to Herdr {surface}: {error}")))
     }
 
-    pub fn pane_send_text_for(&self, session_name: &str, pane_id: &str, text: &str) -> Result<()> {
-        self.session_output_for(
-            session_name,
-            [
-                OsStr::new("pane"),
-                OsStr::new("send-text"),
-                OsStr::new(pane_id),
-                OsStr::new(text),
-            ],
-        )?;
-        Ok(())
-    }
-
-    pub fn pane_send_keys_for(&self, session_name: &str, pane_id: &str, key: &str) -> Result<()> {
-        self.session_output_for(
-            session_name,
-            [
-                OsStr::new("pane"),
-                OsStr::new("send-keys"),
-                OsStr::new(pane_id),
-                OsStr::new(key),
-            ],
-        )?;
-        Ok(())
-    }
-
     pub fn pane_terminal_for(&self, session_name: &str, pane_id: &str) -> Result<String> {
         let value = self.session_json_output_for(session_name, ["pane", "get", pane_id])?;
         value

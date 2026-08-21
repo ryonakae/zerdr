@@ -69,10 +69,22 @@ impl Fixture {
     }
 
     fn agent(&self, name: &str, pane_id: &str, workspace_id: &str, status: &str, title: &str) {
+        self.agent_of_kind("pi", name, pane_id, workspace_id, status, title);
+    }
+
+    fn agent_of_kind(
+        &self,
+        kind: &str,
+        name: &str,
+        pane_id: &str,
+        workspace_id: &str,
+        status: &str,
+        title: &str,
+    ) {
         fs::write(
             self.agents_dir.join(format!("{name}.json")),
             serde_json::json!({
-                "agent": "pi",
+                "agent": kind,
                 "name": name,
                 "agent_status": status,
                 "pane_id": pane_id,
@@ -186,7 +198,7 @@ fn bare_thread_attaches_a_free_agent_in_the_matching_workspace() {
     assert!(!log.contains("send-text"), "{log}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains(&format!("{OSC_PREFIX}review")),
+        stdout.contains(&format!("{OSC_PREFIX}[herdr] Pi - review")),
         "{stdout:?}"
     );
     let status = stdout.lines().next().unwrap_or_default();
@@ -247,22 +259,13 @@ fn an_empty_workspace_gets_a_new_tab_with_a_plain_shell() {
         "{log}"
     );
     assert!(!log.contains("agent attach"), "{log}");
-    let banner = log
-        .lines()
-        .find(|line| line.contains("pane send-text w1:p9"))
-        .unwrap_or_else(|| panic!("no banner send-text in {log}"));
-    assert!(banner.contains("# zerdr:"), "{log}");
-    assert!(banner.contains("Zed terminal thread"), "{log}");
-    assert!(banner.contains("checkout"), "{log}");
-    let text_at = log.find("pane send-text w1:p9").unwrap();
-    let keys_at = log
-        .find("pane send-keys w1:p9 enter")
-        .unwrap_or_else(|| panic!("no banner enter in {log}"));
-    let attach_at = log.find("terminal attach term-w1:p9").unwrap();
-    assert!(text_at < keys_at && keys_at < attach_at, "{log}");
+    assert!(
+        !log.contains("send-text"),
+        "nothing is ever typed into the pane: {log}"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains(&format!("{OSC_PREFIX}checkout")),
+        stdout.contains(&format!("{OSC_PREFIX}[herdr] checkout")),
         "the sidebar shows the workspace label until an agent appears: {stdout:?}"
     );
     let status = stdout.lines().next().unwrap_or_default();
@@ -299,42 +302,7 @@ fn auto_start_kind_comes_from_the_flag_then_the_environment() {
             log.contains(&format!("agent start zed-1 --kind {expected} --pane w1:p9")),
             "{log}"
         );
-        let banner_at = log
-            .find("pane send-text w1:p9")
-            .unwrap_or_else(|| panic!("no banner send-text in {log}"));
-        assert!(banner_at < log.find("agent start").unwrap(), "{log}");
     }
-}
-
-/// The banner is cosmetic: a failure to write it must not block the attach.
-#[test]
-fn a_failing_banner_warns_but_does_not_block_the_attach() {
-    let fixture = Fixture::new();
-    let tab = serde_json::json!({"result": {"root_pane": {"pane_id": "w1:p9"}}});
-
-    let output = fixture
-        .std_thread_command()
-        .arg("thread")
-        .env("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string())
-        .env("ZERDR_TEST_SEND_TEXT_EXIT", "1")
-        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
-        .spawn()
-        .unwrap()
-        .wait_with_output()
-        .unwrap();
-
-    assert!(output.status.success(), "{output:?}");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(stderr.lines().count(), 1, "{stderr}");
-    assert!(stderr.starts_with("zerdr: "), "{stderr}");
-    assert!(
-        fixture
-            .env
-            .read_log()
-            .contains("terminal attach term-w1:p9"),
-        "{}",
-        fixture.env.read_log()
-    );
 }
 
 #[test]
@@ -396,7 +364,7 @@ fn auto_attaches_a_free_agent_while_the_mode_is_enabled() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains(&format!("{OSC_PREFIX}review")),
+        stdout.contains(&format!("{OSC_PREFIX}[herdr] Pi - review")),
         "{stdout:?}"
     );
     let status = stdout.lines().next().unwrap_or_default();
@@ -450,7 +418,6 @@ fn auto_without_a_matching_workspace_creates_and_binds_one() {
     assert!(log.contains("--label checkout --no-focus"), "{log}");
     assert!(!log.contains("agent start"), "{log}");
     assert!(log.contains("terminal attach term-w7:p1"), "{log}");
-    assert!(log.contains("pane send-text w7:p1 # zerdr:"), "{log}");
     let bound = BindingStore::new(paths.bindings_file)
         .get("default", "w7")
         .unwrap();
@@ -621,8 +588,6 @@ fn create_makes_the_workspace_binds_it_and_starts_an_agent() {
     assert!(log.contains("--label checkout --no-focus"), "{log}");
     assert!(!log.contains("agent start"), "{log}");
     assert!(log.contains("terminal attach term-w7:p1"), "{log}");
-    assert!(log.contains("pane send-text w7:p1 # zerdr:"), "{log}");
-    assert!(log.contains("pane send-keys w7:p1 enter"), "{log}");
 
     let bound = BindingStore::new(fixture.paths().bindings_file)
         .get("default", "w7")
@@ -733,11 +698,11 @@ fn titles_are_emitted_once_per_change_and_a_bell_marks_settling() {
         "one title per change, deduplicated: {stdout:?}"
     );
     assert!(
-        stdout.contains(&format!("{OSC_PREFIX}first title")),
+        stdout.contains(&format!("{OSC_PREFIX}[herdr] Pi - first title")),
         "{stdout:?}"
     );
     assert!(
-        stdout.contains(&format!("{OSC_PREFIX}second title")),
+        stdout.contains(&format!("{OSC_PREFIX}[herdr] Pi - second title")),
         "{stdout:?}"
     );
     assert_eq!(
@@ -758,10 +723,44 @@ fn an_empty_title_falls_back_to_the_workspace_label() {
     let output = child.wait_with_output().unwrap();
 
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains(&format!("{OSC_PREFIX}checkout")),
+        String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("{OSC_PREFIX}[herdr] Pi - checkout")),
         "{:?}",
         String::from_utf8_lossy(&output.stdout)
     );
+}
+
+/// Kind display names: known kinds map to friendly names, others are capitalized, and
+/// pi's own "π - " title prefix is stripped from the detail.
+#[test]
+fn titles_carry_the_herdr_marker_and_kind_display_names() {
+    for (kind, title, expected) in [
+        (
+            "claude",
+            "コード内の重複パターン洗い出し",
+            "[herdr] Claude - コード内の重複パターン洗い出し",
+        ),
+        (
+            "pi",
+            "π - 施策を進める - mog-app",
+            "[herdr] Pi - 施策を進める - mog-app",
+        ),
+        ("codex", "t", "[herdr] Codex - t"),
+    ] {
+        let fixture = Fixture::new();
+        fixture.agent_of_kind(kind, "zed-1", "w1:p1", "w1", "idle", title);
+
+        let child = fixture.std_thread_command().arg("thread").spawn().unwrap();
+        wait_for_log(&fixture.env, "agent attach w1:p1");
+        fixture.release_attach();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(&format!("{OSC_PREFIX}{expected}")),
+            "{kind}: {stdout:?}"
+        );
+    }
 }
 
 #[test]
@@ -1001,7 +1000,7 @@ fn a_restored_thread_reattaches_the_remembered_shell_pane() {
         if stdout.contains("reattached") {
             // Second run: sidebar still shows the workspace label for a shell pane.
             assert!(
-                stdout.contains(&format!("{OSC_PREFIX}checkout")),
+                stdout.contains(&format!("{OSC_PREFIX}[herdr] checkout")),
                 "{stdout:?}"
             );
         }
@@ -1014,11 +1013,7 @@ fn a_restored_thread_reattaches_the_remembered_shell_pane() {
         2,
         "{log}"
     );
-    assert_eq!(
-        log.matches("pane send-text").count(),
-        1,
-        "the banner is written only when the pane is created: {log}"
-    );
+    assert!(!log.contains("send-text"), "{log}");
 }
 
 /// With several remembered panes the most recently attached one wins.
@@ -1194,73 +1189,4 @@ fn an_explicit_target_attach_is_remembered() {
             .any(|record| record.pane_id == "w1:p1" && record.workspace_id == "w1"),
         "{panes:?}"
     );
-}
-
-/// The banner must stay one literal comment line: control characters in a workspace
-/// label (or any interpolated part) would otherwise submit real input to the shell.
-#[test]
-fn banner_text_never_contains_control_characters() {
-    let fixture = Fixture::new();
-    let workspaces = serde_json::json!({
-        "result": {"workspaces": [{
-            "workspace_id": "w1",
-            "label": "evil\nlabel",
-            "focused": true,
-            "worktree": {"checkout_path": fixture.repo}
-        }]}
-    });
-    let tab = serde_json::json!({"result": {"root_pane": {"pane_id": "w1:p9"}}});
-
-    let output = fixture
-        .std_thread_command()
-        .arg("thread")
-        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-        .env("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string())
-        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
-        .spawn()
-        .unwrap()
-        .wait_with_output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-
-    let log = fixture.env.read_log();
-    let banner = log
-        .lines()
-        .find(|line| line.contains("pane send-text w1:p9"))
-        .unwrap_or_else(|| panic!("no banner send-text in {log}"));
-    assert!(banner.contains("evil label"), "{log}");
-    assert!(!log.contains("evil\nlabel"), "{log}");
-}
-
-/// The banner lands before the agent starts on the workspace-creation path too.
-#[test]
-fn create_with_a_kind_writes_the_banner_before_the_agent_starts() {
-    let fixture = Fixture::new();
-    let workspace = serde_json::json!({
-        "result": {
-            "workspace": {"workspace_id": "w7", "label": "checkout"},
-            "root_pane": {"pane_id": "w7:p1"}
-        }
-    });
-
-    fixture
-        .thread_command()
-        .args(["thread", "--create", "--kind", "pi"])
-        .env(
-            "ZERDR_TEST_WORKSPACES_JSON",
-            r#"{"result":{"workspaces":[]}}"#,
-        )
-        .env("ZERDR_TEST_WORKSPACE_CREATE_JSON", workspace.to_string())
-        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
-        .assert()
-        .success();
-
-    let log = fixture.env.read_log();
-    let banner_at = log
-        .find("pane send-text w7:p1")
-        .unwrap_or_else(|| panic!("no banner send-text in {log}"));
-    let start_at = log
-        .find("agent start zed-1 --kind pi --pane w7:p1")
-        .unwrap_or_else(|| panic!("no agent start in {log}"));
-    assert!(banner_at < start_at, "{log}");
 }

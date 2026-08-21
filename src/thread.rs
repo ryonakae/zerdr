@@ -180,7 +180,6 @@ fn resolve_or_create(
                 .herdr
                 .workspace_create_for(session.name, &root, &label)?;
             bindings.bind_if_absent(session.name, &created.workspace_id, &root)?;
-            send_banner(session, &created.root_pane_id, &label);
             let (agent, lease, terminal) = start_and_lease(
                 session,
                 &created.workspace_id,
@@ -252,27 +251,10 @@ fn resolve_or_create(
     let pane_id = session
         .herdr
         .tab_create_for(session.name, &workspace_id, &root)?;
-    let workspace_label = workspaces
-        .iter()
-        .find(|workspace| workspace.id == workspace_id)
-        .map_or(workspace_id.as_str(), |workspace| workspace.label.as_str());
-    send_banner(session, &pane_id, workspace_label);
     let (agent, lease, terminal) =
         start_and_lease(session, &workspace_id, &pane_id, kind, &agents)?;
     remember_pane(memory, session, &workspace_id, &agent.pane_id);
     Ok((agent, lease, terminal, Attachment::NewTab))
-}
-
-fn single_line(text: &str) -> String {
-    text.chars()
-        .map(|character| {
-            if character.is_control() {
-                ' '
-            } else {
-                character
-            }
-        })
-        .collect()
 }
 
 /// Recording is advisory (R4): a store hiccup must not fail an otherwise good attach.
@@ -284,33 +266,6 @@ fn remember_pane(
 ) {
     if let Err(error) = memory.record(session.name, session.socket, workspace_id, pane_id) {
         eprintln!("zerdr: could not record the thread pane: {error}");
-    }
-}
-
-/// One comment line typed into a pane zerdr just created, so the pane's shell says
-/// where it came from. The banner is cosmetic and must never block the attach; it is
-/// also never sent to a pane zerdr did not create, whose input belongs to whatever is
-/// already running there.
-fn send_banner(session: &Session<'_>, pane_id: &str, workspace: &str) {
-    // The banner becomes literal input typed into a live shell, so a control character
-    // smuggled in via a workspace label or directory name (a newline above all) would
-    // submit real commands instead of one comment. Everything interpolated is flattened
-    // to plain printable text first.
-    let pane_id_text = single_line(pane_id);
-    let workspace_text = single_line(workspace);
-    let banner = format!(
-        "# zerdr: Herdr pane {pane_id_text} in workspace {workspace_text}, opened from a Zed terminal thread"
-    );
-    let sent = session
-        .herdr
-        .pane_send_text_for(session.name, pane_id, &banner)
-        .and_then(|()| {
-            session
-                .herdr
-                .pane_send_keys_for(session.name, pane_id, "enter")
-        });
-    if let Err(error) = sent {
-        eprintln!("zerdr: could not write the pane banner: {error}");
     }
 }
 
@@ -560,22 +515,51 @@ fn wait_for_stop(stop: &(Mutex<bool>, Condvar), interval: Duration) -> bool {
     }
 }
 
-/// The title is forwarded verbatim: Zed's agent panel renders the raw OSC title (and
-/// promotes a leading decorative glyph to the row icon), so any zerdr-added prefix
-/// would diverge from how a natively-run agent looks. An empty title intentionally
-/// falls back to the workspace label so a plain-shell tab still says where it lives.
+/// The sidebar title is what tells a Herdr pane apart from a plain Zed shell, so it
+/// carries a `[herdr]` marker followed by a friendly agent name and the agent's own
+/// (live) title. An empty title falls back to the workspace label so a plain-shell
+/// tab still says where it lives.
 fn emit_title(last: &mut Option<String>, agent: &AgentInfo, fallback: Option<&str>) {
-    let label = agent
-        .title
-        .as_deref()
-        .or(fallback)
-        .unwrap_or(&agent.workspace_id)
-        .to_owned();
+    let label = if agent.kind.is_empty() {
+        format!("[herdr] {}", fallback.unwrap_or(&agent.workspace_id))
+    } else {
+        let detail = agent
+            .title
+            .as_deref()
+            .map(|title| strip_kind_prefix(&agent.kind, title))
+            .or(fallback)
+            .unwrap_or(&agent.workspace_id);
+        format!("[herdr] {} - {detail}", display_kind(&agent.kind))
+    };
     if last.as_deref() == Some(label.as_str()) {
         return;
     }
     emit(format!("\x1b]0;{label}\x07").as_bytes());
     *last = Some(label);
+}
+
+fn display_kind(kind: &str) -> String {
+    match kind {
+        "pi" => "Pi".to_owned(),
+        "claude" => "Claude".to_owned(),
+        other => {
+            let mut characters = other.chars();
+            match characters.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + characters.as_str(),
+                None => String::new(),
+            }
+        }
+    }
+}
+
+/// Pi prefixes its own terminal titles with `π - `, which would double up with the
+/// friendly name in the marker.
+fn strip_kind_prefix<'a>(kind: &str, title: &'a str) -> &'a str {
+    if kind == "pi" {
+        title.strip_prefix("\u{3c0} - ").unwrap_or(title)
+    } else {
+        title
+    }
 }
 
 fn emit(bytes: &[u8]) {
