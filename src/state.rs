@@ -370,18 +370,10 @@ pub fn canonical_git_root(candidate: &Path) -> Result<PathBuf> {
         .map_err(|error| Error::io(candidate, error))
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum RouteFocus {
-    Terminal,
-    Zed,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "mode", rename_all = "lowercase", deny_unknown_fields)]
 pub enum RouteStrategy {
     Internal { anchor_root: PathBuf },
-    External { focus: RouteFocus },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -397,7 +389,6 @@ impl RouteState {
     pub fn internal_anchor(&self) -> Option<&Path> {
         match &self.routing {
             RouteStrategy::Internal { anchor_root } => Some(anchor_root),
-            RouteStrategy::External { .. } => None,
         }
     }
 }
@@ -503,7 +494,6 @@ impl RouteStore {
             RouteStrategy::Internal { anchor_root } => RouteStrategy::Internal {
                 anchor_root: canonical_git_root(&anchor_root)?,
             },
-            RouteStrategy::External { focus } => RouteStrategy::External { focus },
         };
         let state = RouteState {
             schema_version: ROUTE_SCHEMA_VERSION,
@@ -589,11 +579,7 @@ impl RouteStore {
     ) -> Result<()> {
         let socket_path = canonical_socket(socket_path)?;
         let mut state = self.load_with_session(&socket_path, expected_session)?;
-        let RouteStrategy::Internal { anchor_root } = &mut state.routing else {
-            return Err(Error::User(
-                "external routes do not have a promotable anchor".to_owned(),
-            ));
-        };
+        let RouteStrategy::Internal { anchor_root } = &mut state.routing;
         *anchor_root = canonical_git_root(anchor)?;
         state.schema_version = ROUTE_SCHEMA_VERSION;
         if std::env::var("ZERDR_TEST_FAIL_ROUTE_WRITE").is_ok_and(|value| value == "1") {
@@ -652,14 +638,6 @@ fn validate_route(
             expected_socket.display()
         )));
     }
-    if state.schema_version == SCHEMA_VERSION
-        && !matches!(state.routing, RouteStrategy::Internal { .. })
-    {
-        return Err(Error::User(format!(
-            "route has an incompatible schema or session for {}",
-            expected_socket.display()
-        )));
-    }
     let socket = canonical_socket(&state.socket_path)?;
     if socket != expected_socket {
         return Err(Error::User(format!(
@@ -668,14 +646,13 @@ fn validate_route(
             expected_socket.display()
         )));
     }
-    if let RouteStrategy::Internal { anchor_root } = &state.routing {
-        let anchor = canonical_git_root(anchor_root)?;
-        if anchor != *anchor_root {
-            return Err(Error::User(format!(
-                "route anchor is not a canonical Git checkout root: {}",
-                anchor_root.display()
-            )));
-        }
+    let RouteStrategy::Internal { anchor_root } = &state.routing;
+    let anchor = canonical_git_root(anchor_root)?;
+    if anchor != *anchor_root {
+        return Err(Error::User(format!(
+            "route anchor is not a canonical Git checkout root: {}",
+            anchor_root.display()
+        )));
     }
     Ok(())
 }

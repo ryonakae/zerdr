@@ -39,14 +39,14 @@ CI runs these checks on macOS and Ubuntu. Platform-specific behavior needs cover
 ## Repository map
 
 - `src/cli.rs` defines public commands and launch options; `src/lib.rs` dispatches them.
-- `src/runtime.rs` resolves local versus remote execution, routing mode, anchor, and focus policy.
+- `src/runtime.rs` resolves local versus remote execution and the wrapper anchor.
 - `src/herdr.rs` wraps Herdr JSON commands and owns the child process lifecycle.
 - `src/sync.rs` maps focused workspaces to Git roots and routes them into Zed.
 - `src/thread.rs` resolves and attaches Zed terminal threads to Herdr agents, and mirrors agent titles and bells into the threads sidebar.
 - `src/state.rs` owns bindings, route schemas, leases, locks, and atomic persistence.
 - `src/setup.rs` merges the Herdr plugin and Zed tasks into user configuration, and migrates away the `agent.terminal_init_command` older versions installed.
 - `src/doctor.rs` checks capabilities, installation state, bindings, routes, and leases.
-- `src/focus.rs` contains macOS foreground restoration; `src/zed.rs` wraps the Zed CLI.
+- `src/zed.rs` wraps the Zed CLI.
 - `assets/herdr/` and `assets/zed/` contain templates embedded by `setup`.
 - `tests/support/mod.rs` provides isolated fake `herdr` and `zed` executables; `FAKE_HERDR_BODY` is shared by the `PATH` fake and the private fakes from `TestEnv::baked_herdr`.
 - `docs/plans/` records historical implementation plans. Treat current code and tests as the source of truth.
@@ -59,7 +59,7 @@ CI runs these checks on macOS and Ubuntu. Platform-specific behavior needs cover
 - Preserve one-live-wrapper ownership checks when changing routes, leases, or manual commands.
 - Preserve backward compatibility for persisted state, or add an explicit migration and tests.
 - Keep setup merges ownership-aware. Never overwrite foreign or user-modified Zed tasks or settings, and back up a user-owned Zed file before mutating it.
-- Keep platform and remote-environment decisions in `src/runtime.rs` or `src/focus.rs` rather than scattering environment checks.
+- Keep platform and remote-environment decisions in `src/runtime.rs` rather than scattering environment checks.
 - `sync-from-herdr` is a hidden plugin entry point, not a public user command.
 
 ## Safety and workflow

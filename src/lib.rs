@@ -1,7 +1,6 @@
 pub mod cli;
 pub mod doctor;
 pub mod error;
-pub mod focus;
 pub mod herdr;
 pub mod picker;
 pub mod runtime;
@@ -12,7 +11,7 @@ pub mod thread;
 pub mod zed;
 
 use clap::Parser;
-use cli::{Cli, Command, LaunchMode};
+use cli::{Cli, Command};
 use error::{Error, Result};
 use state::DEFAULT_SESSION_NAME;
 
@@ -27,17 +26,13 @@ pub fn run() -> Result<()> {
 
     let Some(command) = cli.command else {
         let session_name = cli.session.as_deref().unwrap_or(DEFAULT_SESSION_NAME);
-        let routing = runtime::resolve_launch(
-            cli.mode.unwrap_or(LaunchMode::Auto),
-            cli.anchor.as_deref(),
-            cli.focus,
-        )?;
+        let routing = runtime::resolve_launch(cli.anchor.as_deref())?;
         return herdr::run_wrapper(session_name, routing);
     };
 
-    if cli.mode.is_some() || cli.anchor.is_some() || cli.focus.is_some() {
+    if cli.anchor.is_some() {
         return Err(Error::User(
-            "--mode, --anchor, and --focus cannot be used with a subcommand".to_owned(),
+            "--anchor cannot be used with a subcommand".to_owned(),
         ));
     }
 

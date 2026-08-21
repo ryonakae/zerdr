@@ -8,15 +8,31 @@ use std::time::Duration;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use support::TestEnv;
-use zerdr::state::{BindingStore, LeaseSet, Paths, RouteFocus, RouteStore, RouteStrategy};
+use zerdr::state::{BindingStore, LeaseSet, Paths, RouteStore};
+
+fn anchor_repo(env: &TestEnv) -> std::path::PathBuf {
+    let repo = env.root.path().join("anchor-repo");
+    fs::create_dir_all(&repo).unwrap();
+    assert!(
+        ProcessCommand::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    repo.canonicalize().unwrap()
+}
 
 #[test]
 fn launcher_requires_a_compatible_plugin_before_spawning_herdr() {
     let env = TestEnv::new();
     env.prepare_launcher();
+    let anchor = anchor_repo(&env);
 
     env.command()
-        .args(["--mode", "external"])
+        .arg("--anchor")
+        .arg(&anchor)
         .env("ZERDR_TEST_PLUGINS_JSON", r#"{"result":{"plugins":[]}}"#)
         .assert()
         .failure()
@@ -37,6 +53,7 @@ fn launcher_requires_a_compatible_plugin_before_spawning_herdr() {
 fn bare_launcher_attaches_the_default_herdr_session() {
     let env = TestEnv::new();
     env.prepare_launcher();
+    let anchor = anchor_repo(&env);
     let socket = env.root.path().join("default.sock");
     fs::write(&socket, "").unwrap();
     let sessions = serde_json::json!({
@@ -44,8 +61,7 @@ fn bare_launcher_attaches_the_default_herdr_session() {
     });
 
     env.command()
-        .args(["--mode", "external"])
-        .env("ZERDR_TEST_PLATFORM", "linux")
+        .current_dir(&anchor)
         .env("ZERDR_TEST_HERDR_SLEEP", "0.1")
         .env("ZERDR_READY_TIMEOUT_MS", "100")
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
@@ -65,6 +81,7 @@ fn bare_launcher_attaches_the_default_herdr_session() {
 fn named_launcher_attaches_the_matching_herdr_session() {
     let env = TestEnv::new();
     env.prepare_launcher();
+    let anchor = anchor_repo(&env);
     let socket = env.root.path().join("work.sock");
     fs::write(&socket, "").unwrap();
     let sessions = serde_json::json!({
@@ -72,8 +89,8 @@ fn named_launcher_attaches_the_matching_herdr_session() {
     });
 
     env.command()
-        .args(["--session", "work", "--mode", "external"])
-        .env("ZERDR_TEST_PLATFORM", "linux")
+        .args(["--session", "work"])
+        .current_dir(&anchor)
         .env("ZERDR_TEST_HERDR_SLEEP", "0.1")
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env(
@@ -132,9 +149,10 @@ command = [{executable:?}, "sync-from-herdr"]
         "sessions":[{"name":"default","running":true,"socket_path":socket}]
     });
 
+    let anchor = anchor_repo(&env);
     env.command()
-        .args(["--mode", "external"])
-        .env("ZERDR_TEST_PLATFORM", "linux")
+        .arg("--anchor")
+        .arg(&anchor)
         .env("ZERDR_TEST_HERDR_SLEEP", "0.1")
         .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
@@ -154,8 +172,9 @@ fn launcher_rejects_duplicate_focus_event_identities_in_manifest_or_plugin_regis
         let env = TestEnv::new();
         env.prepare_launcher();
         let paths = Paths::for_test(env.root.path());
+        let anchor = anchor_repo(&env);
         let mut invocation = env.command();
-        invocation.args(["--mode", "external"]);
+        invocation.arg("--anchor").arg(&anchor);
 
         if source == "manifest" {
             let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
@@ -200,9 +219,11 @@ fn launcher_preflight_rejects_unsupported_install_state_and_manifest() {
         serde_json::from_slice(&fs::read(&install_path).unwrap()).unwrap();
     install["schema_version"] = 99.into();
     fs::write(&install_path, serde_json::to_vec(&install).unwrap()).unwrap();
+    let anchor = anchor_repo(&invalid_install);
     invalid_install
         .command()
-        .args(["--mode", "external"])
+        .arg("--anchor")
+        .arg(&anchor)
         .assert()
         .failure()
         .stderr(predicates::str::contains("run `zerdr setup`"));
@@ -221,9 +242,11 @@ fn launcher_preflight_rejects_unsupported_install_state_and_manifest() {
         .unwrap()
         .replace("sync-from-herdr", "wrong-event-command");
     fs::write(&manifest_path, manifest).unwrap();
+    let anchor = anchor_repo(&invalid_manifest);
     invalid_manifest
         .command()
-        .args(["--mode", "external"])
+        .arg("--anchor")
+        .arg(&anchor)
         .assert()
         .failure()
         .stderr(predicates::str::contains("run `zerdr setup`"));
@@ -242,8 +265,10 @@ fn launcher_preflight_uses_the_running_executable_not_the_setup_override() {
     let alternate = env.root.path().join("alternate-zerdr");
     fs::copy(installed, &alternate).unwrap();
 
+    let anchor = anchor_repo(&env);
     env.command_for(&alternate)
-        .args(["--mode", "external"])
+        .arg("--anchor")
+        .arg(&anchor)
         .env("ZERDR_SETUP_EXECUTABLE", installed)
         .assert()
         .failure()
@@ -258,12 +283,12 @@ fn launcher_preflight_uses_the_running_executable_not_the_setup_override() {
 }
 
 #[test]
-fn auto_mode_selects_internal_in_zed_and_external_elsewhere() {
-    let internal = TestEnv::new();
-    internal.prepare_launcher();
-    let internal_socket = internal.root.path().join("herdr.sock");
-    fs::write(&internal_socket, "").unwrap();
-    let repo = internal.root.path().join("repo");
+fn bare_wrapper_routes_internally_regardless_of_terminal_environment() {
+    let env = TestEnv::new();
+    env.prepare_launcher();
+    let socket = env.root.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let repo = env.root.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
     assert!(
         ProcessCommand::new("git")
@@ -274,16 +299,15 @@ fn auto_mode_selects_internal_in_zed_and_external_elsewhere() {
             .success()
     );
     let repo = repo.canonicalize().unwrap();
-    let internal_sessions = serde_json::json!({
-        "sessions": [{"name":"default","running":true,"socket_path":internal_socket}]
+    let sessions = serde_json::json!({
+        "sessions": [{"name":"default","running":true,"socket_path":socket}]
     });
-    internal
-        .command()
+    env.command()
         .current_dir(&repo)
-        .env("ZED_TERM", "true")
-        .env("TERM_PROGRAM", "zed")
+        .env_remove("ZED_TERM")
+        .env_remove("TERM_PROGRAM")
         .env("ZERDR_TEST_HERDR_SLEEP", "0.2")
-        .env("ZERDR_TEST_SESSIONS_JSON", internal_sessions.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env(
             "ZERDR_TEST_WORKSPACES_JSON",
             r#"{"result":{"workspaces":[]}}"#,
@@ -291,42 +315,16 @@ fn auto_mode_selects_internal_in_zed_and_external_elsewhere() {
         .assert()
         .success();
     assert_eq!(
-        RouteStore::new(Paths::for_test(internal.root.path()).routes_dir)
-            .load(&internal_socket)
+        RouteStore::new(Paths::for_test(env.root.path()).routes_dir)
+            .load(&socket)
             .unwrap()
             .internal_anchor(),
         Some(repo.as_path())
     );
-
-    let external = TestEnv::new();
-    external.prepare_launcher();
-    let external_socket = external.root.path().join("herdr.sock");
-    fs::write(&external_socket, "").unwrap();
-    let external_sessions = serde_json::json!({
-        "sessions": [{"name":"default","running":true,"socket_path":external_socket}]
-    });
-    external
-        .command()
-        .env_remove("ZED_TERM")
-        .env_remove("TERM_PROGRAM")
-        .env("ZERDR_TEST_PLATFORM", "linux")
-        .env("ZERDR_TEST_HERDR_SLEEP", "0.2")
-        .env("ZERDR_TEST_SESSIONS_JSON", external_sessions.to_string())
-        .assert()
-        .success();
-    assert_eq!(
-        RouteStore::new(Paths::for_test(external.root.path()).routes_dir)
-            .load(&external_socket)
-            .unwrap()
-            .routing,
-        RouteStrategy::External {
-            focus: RouteFocus::Zed,
-        }
-    );
 }
 
 #[test]
-fn external_wrapper_syncs_the_initial_workspace_without_requiring_the_zed_task() {
+fn wrapper_syncs_the_initial_workspace_without_requiring_the_zed_task() {
     let env = TestEnv::new();
     env.prepare_launcher();
     let socket = env.root.path().join("herdr.sock");
@@ -356,14 +354,11 @@ fn external_wrapper_syncs_the_initial_workspace_without_requiring_the_zed_task()
     }]}});
 
     env.command()
-        .args(["--mode", "external"])
-        .env("ZERDR_TEST_PLATFORM", "macos")
+        .arg("--anchor")
+        .arg(&repo)
         .env("ZERDR_TEST_HERDR_SLEEP", "0.2")
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-        .env("ZERDR_TEST_FOCUS_BACKEND", "1")
-        .env("ZERDR_TEST_FRONTMOST_BEFORE", "com.mitchellh.ghostty")
-        .env("ZERDR_TEST_FRONTMOST_AFTER", "dev.zed.Zed")
         .assert()
         .success();
 
@@ -375,19 +370,16 @@ fn external_wrapper_syncs_the_initial_workspace_without_requiring_the_zed_task()
         log.contains(&format!("zed\t--existing {}", repo.display())),
         "{log}"
     );
-    assert!(!log.contains("zed\t--add"), "{log}");
     assert!(
-        log.contains("focus\tactivate com.mitchellh.ghostty"),
+        log.contains(&format!("zed\t--add {}", repo.display())),
         "{log}"
     );
     assert_eq!(
         RouteStore::new(paths.routes_dir)
             .load(&socket)
             .unwrap()
-            .routing,
-        RouteStrategy::External {
-            focus: RouteFocus::Terminal,
-        }
+            .internal_anchor(),
+        Some(repo.as_path())
     );
     assert!(!LeaseSet::new(paths.leases_dir).has_live(&socket).unwrap());
 }
@@ -425,7 +417,7 @@ fn wrapper_holds_a_lease_runs_startup_sync_and_preserves_session() {
     });
 
     env.command()
-        .args(["--mode", "internal", "--anchor"])
+        .arg("--anchor")
         .arg(&repo)
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
@@ -487,7 +479,7 @@ fn concurrent_wrappers_admit_one_owner_and_reap_the_loser() {
         |anchor: &std::path::Path, ready: &std::path::Path, child_pid: &std::path::Path| {
             let mut command = env.std_command();
             command
-                .args(["--mode", "internal", "--anchor"])
+                .arg("--anchor")
                 .arg(anchor)
                 .env("ZED_TERM", "true")
                 .env("TERM_PROGRAM", "zed")
@@ -571,7 +563,7 @@ fn wrappers_for_different_named_sessions_can_coexist() {
     let spawn_wrapper = |session: &str, anchor: &std::path::Path| {
         let mut command = env.std_command();
         command
-            .args(["--session", session, "--mode", "internal", "--anchor"])
+            .args(["--session", session, "--anchor"])
             .arg(anchor)
             .env("ZED_TERM", "true")
             .env("TERM_PROGRAM", "zed")
@@ -614,51 +606,6 @@ fn wrappers_for_different_named_sessions_can_coexist() {
 }
 
 #[test]
-fn external_startup_sync_failure_notifies_without_terminating_the_client() {
-    let env = TestEnv::new();
-    env.prepare_launcher();
-    let socket = env.root.path().join("herdr.sock");
-    fs::write(&socket, "").unwrap();
-    let paths = Paths::for_test(env.root.path());
-    let target = env.root.path().join("target");
-    fs::create_dir_all(&target).unwrap();
-    assert!(
-        ProcessCommand::new("git")
-            .args(["init", "--quiet"])
-            .current_dir(&target)
-            .status()
-            .unwrap()
-            .success()
-    );
-    let target = target.canonicalize().unwrap();
-    BindingStore::new(paths.bindings_file)
-        .bind("default", "w1", &target)
-        .unwrap();
-    let sessions = serde_json::json!({
-        "sessions": [{"name":"default","running":true,"socket_path":socket}]
-    });
-    let workspaces = serde_json::json!({"result":{"workspaces":[{
-        "workspace_id":"w1","label":"target","focused":true,
-        "worktree":{"checkout_path":target}
-    }]}});
-
-    env.command()
-        .args(["--mode", "external", "--focus", "zed"])
-        .env("ZERDR_TEST_PLATFORM", "macos")
-        .env("ZERDR_TEST_HERDR_SLEEP", "0.2")
-        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
-        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-        .env("ZERDR_TEST_ZED_FAIL", "1")
-        .assert()
-        .success()
-        .stderr(predicates::str::contains("startup synchronization failed"));
-
-    let log = env.read_log();
-    assert_eq!(log.matches("zed\t--existing").count(), 1, "{log}");
-    assert_eq!(log.matches("notification show").count(), 1, "{log}");
-}
-
-#[test]
 fn startup_sync_failure_notifies_but_keeps_the_client_until_its_normal_exit() {
     let env = TestEnv::new();
     env.prepare_launcher();
@@ -693,7 +640,7 @@ fn startup_sync_failure_notifies_but_keeps_the_client_until_its_normal_exit() {
 
     let mut command = env.std_command();
     command
-        .args(["--mode", "internal", "--anchor"])
+        .arg("--anchor")
         .arg(&anchor)
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
@@ -750,7 +697,7 @@ fn post_readiness_initialization_failure_terminates_the_client() {
     });
 
     env.command()
-        .args(["--mode", "internal", "--anchor"])
+        .arg("--anchor")
         .arg(&anchor)
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
@@ -789,7 +736,7 @@ fn readiness_timeout_terminates_the_spawned_herdr_client() {
     );
 
     env.command()
-        .args(["--mode", "internal", "--anchor"])
+        .arg("--anchor")
         .arg(&anchor)
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
@@ -833,7 +780,7 @@ fn wrapper_propagates_the_herdr_client_exit_status() {
     );
 
     env.command()
-        .args(["--mode", "internal", "--anchor"])
+        .arg("--anchor")
         .arg(&anchor)
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")

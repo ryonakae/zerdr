@@ -14,8 +14,7 @@ use crate::setup::{
     owned_labels, plugin_has_complete_action, terminal_init_command,
 };
 use crate::state::{
-    BindingStore, LeaseSet, LifecycleGuard, Paths, RouteFocus, RouteStore, RouteStrategy,
-    canonical_git_root,
+    BindingStore, LeaseSet, LifecycleGuard, Paths, RouteStore, RouteStrategy, canonical_git_root,
 };
 use crate::zed::Zed;
 
@@ -190,37 +189,12 @@ pub fn doctor(session_name: &str) -> Result<()> {
                                 "Herdr session {session_name:?} has one live wrapper: {}",
                                 socket.display()
                             ));
-                            match &route.routing {
-                                RouteStrategy::Internal { anchor_root } => {
-                                    report.pass("route mode: internal");
-                                    report.pass(format!(
-                                        "route anchor is valid: {}",
-                                        anchor_root.display()
-                                    ));
-                                }
-                                RouteStrategy::External { focus } => {
-                                    report.pass("route mode: external");
-                                    let focus_name = match focus {
-                                        RouteFocus::Terminal => "terminal",
-                                        RouteFocus::Zed => "zed",
-                                    };
-                                    report.pass(format!("focus policy: {focus_name}"));
-                                    if *focus == RouteFocus::Terminal
-                                        && crate::runtime::platform()
-                                            == crate::runtime::Platform::MacOs
-                                    {
-                                        report.pass(
-                                            "terminal focus restoration is supported on macOS",
-                                        );
-                                    } else if *focus == RouteFocus::Zed {
-                                        report.pass("Zed remains foreground after external routing");
-                                    } else {
-                                        report.warn(
-                                            "terminal focus restoration is unavailable on this platform",
-                                        );
-                                    }
-                                }
-                            }
+                            let RouteStrategy::Internal { anchor_root } = &route.routing;
+                            report.pass("route mode: internal");
+                            report.pass(format!(
+                                "route anchor is valid: {}",
+                                anchor_root.display()
+                            ));
                         }
                         Ok(route) => report.fail(format!(
                             "route belongs to wrapper {}, but live wrapper is {}; restart `zerdr --session {session_name}`",

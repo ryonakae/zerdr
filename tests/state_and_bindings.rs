@@ -9,8 +9,7 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 use zerdr::state::{
-    BindingStore, LeaseSet, LifecycleGuard, Paths, RouteFocus, RouteStore, RouteStrategy,
-    SyncGuard, ThreadLeaseSet,
+    BindingStore, LeaseSet, LifecycleGuard, Paths, RouteStore, SyncGuard, ThreadLeaseSet,
 };
 
 fn git_repo() -> (TempDir, std::path::PathBuf) {
@@ -239,56 +238,6 @@ fn route_state_tracks_the_canonical_dynamic_anchor() {
         routes.load(&socket).unwrap().internal_anchor(),
         Some(second.as_path())
     );
-}
-
-#[test]
-fn external_route_has_no_anchor_and_cannot_be_promoted() {
-    let state = tempfile::tempdir().unwrap();
-    let paths = Paths::for_test(state.path());
-    let socket = state.path().join("herdr.sock");
-    fs::write(&socket, "").unwrap();
-    let routes = RouteStore::new(paths.routes_dir);
-
-    routes
-        .initialize_strategy(
-            &socket,
-            RouteStrategy::External {
-                focus: RouteFocus::Terminal,
-            },
-            73,
-        )
-        .unwrap();
-    let route_path = routes.path(&socket).unwrap();
-    let original = fs::read(&route_path).unwrap();
-    let route = routes.load(&socket).unwrap();
-    assert_eq!(route.internal_anchor(), None);
-    assert_eq!(
-        route.routing,
-        RouteStrategy::External {
-            focus: RouteFocus::Terminal,
-        }
-    );
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&original).unwrap(),
-        serde_json::json!({
-            "schema_version": 2,
-            "session_name": "default",
-            "socket_path": socket.canonicalize().unwrap(),
-            "wrapper_pid": 73,
-            "routing": {
-                "mode": "external",
-                "focus": "terminal",
-            },
-        })
-    );
-
-    let (repo, _) = git_repo();
-    let error = routes
-        .promote(&socket, repo.path())
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("external routes do not have a promotable anchor"));
-    assert_eq!(fs::read(route_path).unwrap(), original);
 }
 
 #[test]

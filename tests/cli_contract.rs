@@ -12,9 +12,9 @@ fn help_lists_public_commands_and_hides_event_entry_point() {
         .success()
         .stdout(predicate::str::contains("  herdr").not())
         .stdout(predicate::str::contains("--session <SESSION>"))
-        .stdout(predicate::str::contains("--mode <MODE>"))
+        .stdout(predicate::str::contains("--mode <MODE>").not())
         .stdout(predicate::str::contains("--anchor <ANCHOR>"))
-        .stdout(predicate::str::contains("--focus <FOCUS>"))
+        .stdout(predicate::str::contains("--focus <FOCUS>").not())
         .stdout(predicate::str::contains("pick"))
         .stdout(predicate::str::contains("next"))
         .stdout(predicate::str::contains("previous"))
@@ -111,11 +111,7 @@ fn launch_options_are_rejected_with_every_subcommand_in_either_order() {
         "sync-from-herdr",
         "open-from-herdr",
     ];
-    let options: [&[&str]; 3] = [
-        &["--mode", "external"],
-        &["--anchor", "."],
-        &["--focus", "zed"],
-    ];
+    let options: [&[&str]; 1] = [&["--anchor", "."]];
     for subcommand in subcommands {
         for option in options {
             let env = TestEnv::new();
@@ -131,13 +127,30 @@ fn launch_options_are_rejected_with_every_subcommand_in_either_order() {
 }
 
 #[test]
+fn removed_mode_and_focus_flags_fail_as_unknown_arguments() {
+    for option in [
+        ["--mode", "internal"],
+        ["--mode", "external"],
+        ["--focus", "zed"],
+    ] {
+        let env = TestEnv::new();
+        env.command()
+            .args(option)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("unexpected argument"));
+        assert_eq!(env.read_log(), "");
+    }
+}
+
+#[test]
 fn internal_launch_rejects_a_non_git_anchor_before_spawning_a_child() {
     let env = TestEnv::new();
     let anchor = env.root.path().join("not-a-repository");
     std::fs::create_dir_all(&anchor).unwrap();
 
     env.command()
-        .args(["--mode", "internal", "--anchor"])
+        .arg("--anchor")
         .arg(&anchor)
         .assert()
         .failure()
@@ -161,7 +174,6 @@ fn every_remote_marker_and_runtime_command_is_rejected_before_any_process() {
     ] {
         let env = TestEnv::new();
         env.command()
-            .args(["--mode", "external"])
             .env(marker, "detected")
             .assert()
             .failure()
@@ -171,7 +183,6 @@ fn every_remote_marker_and_runtime_command_is_rejected_before_any_process() {
     for marker in ["/.dockerenv", "/run/.containerenv"] {
         let env = TestEnv::new();
         env.command()
-            .args(["--mode", "external"])
             .env("ZERDR_TEST_REMOTE_MARKERS", marker)
             .assert()
             .failure()
@@ -203,29 +214,6 @@ fn every_remote_marker_and_runtime_command_is_rejected_before_any_process() {
             .stderr(predicate::str::contains("detected SSH_CONNECTION"));
         assert_eq!(env.read_log(), "");
     }
-}
-
-#[test]
-fn external_anchor_and_linux_terminal_focus_fail_before_any_process() {
-    let env = TestEnv::new();
-    let anchor = env.root.path();
-
-    env.command()
-        .args(["--mode", "external", "--anchor"])
-        .arg(anchor)
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "--anchor cannot be used with --mode external",
-        ));
-    env.command()
-        .args(["--mode", "external", "--focus", "terminal"])
-        .env("ZERDR_TEST_PLATFORM", "linux")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("unsupported on Linux"));
-
-    assert_eq!(env.read_log(), "");
 }
 
 #[test]

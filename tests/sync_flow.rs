@@ -12,8 +12,7 @@ use fs2::FileExt;
 use predicates::prelude::*;
 use support::TestEnv;
 use zerdr::state::{
-    BindingStore, LeaseGuard, LeaseSet, OperationGuard, Paths, RouteFocus, RouteStore,
-    RouteStrategy, SyncGuard,
+    BindingStore, LeaseGuard, LeaseSet, OperationGuard, Paths, RouteStore, RouteStrategy, SyncGuard,
 };
 
 fn git_repo(parent: &std::path::Path) -> std::path::PathBuf {
@@ -102,12 +101,13 @@ fn manual_sync_targets_the_explicit_named_session() {
     fs::write(&socket, "").unwrap();
     let paths = Paths::for_test(env.root.path());
     let target = git_repo(&env.root.path().join("target-parent"));
+    let anchor = git_repo(&env.root.path().join("anchor-parent"));
     RouteStore::new(paths.routes_dir.clone())
         .initialize_strategy_for(
             "work",
             &socket,
-            RouteStrategy::External {
-                focus: RouteFocus::Zed,
+            RouteStrategy::Internal {
+                anchor_root: anchor.clone(),
             },
             std::process::id(),
         )
@@ -139,7 +139,11 @@ fn manual_sync_targets_the_explicit_named_session() {
         "{log}"
     );
     assert!(
-        log.contains(&format!("zed\t--existing {}", target.display())),
+        log.contains(&format!("zed\t--existing {}", anchor.display())),
+        "{log}"
+    );
+    assert!(
+        log.contains(&format!("zed\t--add {}", target.display())),
         "{log}"
     );
     assert!(!log.contains("--session default workspace list"), "{log}");
@@ -494,41 +498,6 @@ fn one_shot_action_with_a_live_internal_route_uses_existing_add_and_promotes() {
         routes.load(&socket).unwrap().internal_anchor(),
         Some(target.as_path())
     );
-}
-
-#[test]
-fn one_shot_action_with_a_live_external_terminal_route_never_restores_focus() {
-    let env = TestEnv::new();
-    let socket = env.root.path().join("default.sock");
-    fs::write(&socket, "").unwrap();
-    let paths = Paths::for_test(env.root.path());
-    let target = git_repo(&env.root.path().join("target-parent"));
-    RouteStore::new(paths.routes_dir.clone())
-        .initialize_strategy(
-            &socket,
-            RouteStrategy::External {
-                focus: RouteFocus::Terminal,
-            },
-            std::process::id(),
-        )
-        .unwrap();
-    let _lease = LeaseSet::new(paths.leases_dir)
-        .acquire(&socket, 99)
-        .unwrap();
-
-    one_shot_action(&env, &socket, &target)
-        .success()
-        .stderr(predicate::str::is_empty());
-
-    let log = env.read_log();
-    assert_eq!(
-        log.lines()
-            .filter(|line| line.starts_with("zed\t"))
-            .collect::<Vec<_>>(),
-        vec![format!("zed\t--existing {}", target.display())],
-        "{log}"
-    );
-    assert!(!log.contains("focus\t"), "{log}");
 }
 
 #[test]
@@ -1001,97 +970,6 @@ fn multiple_live_leases_notify_without_calling_zed() {
 }
 
 #[test]
-fn external_terminal_focus_restores_after_zed_success_and_failure() {
-    let env = TestEnv::new();
-    let socket = env.root.path().join("herdr.sock");
-    fs::write(&socket, "").unwrap();
-    let paths = Paths::for_test(env.root.path());
-    let target = git_repo(&env.root.path().join("target-parent"));
-    RouteStore::new(paths.routes_dir.clone())
-        .initialize_strategy(
-            &socket,
-            RouteStrategy::External {
-                focus: RouteFocus::Terminal,
-            },
-            std::process::id(),
-        )
-        .unwrap();
-    let _lease = LeaseSet::new(paths.leases_dir.clone())
-        .acquire(&socket, 99)
-        .unwrap();
-    BindingStore::new(paths.bindings_file)
-        .bind("default", "w1", &target)
-        .unwrap();
-    let workspaces = serde_json::json!({"result":{"workspaces":[{
-        "workspace_id":"w1","label":"target","focused":true,
-        "worktree":{"checkout_path":target}
-    }]}});
-
-    env.command()
-        .arg("sync-from-herdr")
-        .env("HERDR_PLUGIN_EVENT", "workspace.focused")
-        .env("HERDR_SOCKET_PATH", &socket)
-        .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
-        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-        .env("ZERDR_TEST_FOCUS_BACKEND", "1")
-        .env("ZERDR_TEST_FRONTMOST_BEFORE", "com.mitchellh.ghostty")
-        .env("ZERDR_TEST_FRONTMOST_AFTER", "dev.zed.Zed")
-        .assert()
-        .success();
-
-    assert_eq!(
-        env.read_log().lines().collect::<Vec<_>>(),
-        vec![
-            "herdr\t--session default workspace list",
-            "focus\tcapture com.mitchellh.ghostty",
-            &format!("zed\t--existing {}", target.display()),
-            "focus\tinspect dev.zed.Zed",
-            "focus\tactivate com.mitchellh.ghostty",
-        ]
-    );
-
-    fs::write(&env.log, "").unwrap();
-    env.command()
-        .arg("sync-from-herdr")
-        .env("HERDR_PLUGIN_EVENT", "workspace.focused")
-        .env("HERDR_SOCKET_PATH", &socket)
-        .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
-        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-        .env("ZERDR_TEST_FOCUS_BACKEND", "1")
-        .env("ZERDR_TEST_FRONTMOST_BEFORE", "com.mitchellh.ghostty")
-        .env("ZERDR_TEST_FRONTMOST_AFTER", "com.apple.finder")
-        .assert()
-        .success();
-    let switched_log = env.read_log();
-    assert!(
-        switched_log.contains("focus\tinspect com.apple.finder"),
-        "{switched_log}"
-    );
-    assert!(!switched_log.contains("focus\tactivate"), "{switched_log}");
-
-    fs::write(&env.log, "").unwrap();
-    env.command()
-        .arg("sync-from-herdr")
-        .env("HERDR_PLUGIN_EVENT", "workspace.focused")
-        .env("HERDR_SOCKET_PATH", &socket)
-        .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
-        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-        .env("ZERDR_TEST_FOCUS_BACKEND", "1")
-        .env("ZERDR_TEST_FRONTMOST_BEFORE", "com.mitchellh.ghostty")
-        .env("ZERDR_TEST_FRONTMOST_AFTER", "dev.zed.Zed")
-        .env("ZERDR_TEST_ZED_FAIL", "1")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("fake Zed failure"));
-    let failed_log = env.read_log();
-    assert!(
-        failed_log.contains("focus\tactivate com.mitchellh.ghostty"),
-        "{failed_log}"
-    );
-    assert_eq!(failed_log.matches("notification show").count(), 1);
-}
-
-#[test]
 fn internal_routes_from_different_sessions_do_not_interleave_zed_operations() {
     let env = TestEnv::new();
     let first_socket = env.root.path().join("first.sock");
@@ -1189,67 +1067,6 @@ fn internal_routes_from_different_sessions_do_not_interleave_zed_operations() {
             format!("zed\t--add {}", second_target.display()),
         ]
     );
-}
-
-#[test]
-fn repeated_external_events_each_run_one_existing_call_without_mutating_route() {
-    let env = TestEnv::new();
-    let socket = env.root.path().join("herdr.sock");
-    fs::write(&socket, "").unwrap();
-    let paths = Paths::for_test(env.root.path());
-    let target = git_repo(&env.root.path().join("target-parent"));
-    let routes = RouteStore::new(paths.routes_dir.clone());
-    routes
-        .initialize_strategy(
-            &socket,
-            RouteStrategy::External {
-                focus: RouteFocus::Zed,
-            },
-            std::process::id(),
-        )
-        .unwrap();
-    let route_path = routes.path(&socket).unwrap();
-    let original_route = fs::read(&route_path).unwrap();
-    let _lease = LeaseSet::new(paths.leases_dir.clone())
-        .acquire(&socket, 99)
-        .unwrap();
-    BindingStore::new(paths.bindings_file)
-        .bind("default", "w1", &target)
-        .unwrap();
-    let workspaces = serde_json::json!({"result":{"workspaces":[{
-        "workspace_id":"w1","label":"target","number":1,"focused":true,
-        "worktree":{"checkout_path":target}
-    }]}});
-
-    for _ in 0..2 {
-        env.command()
-            .arg("sync-from-herdr")
-            .env("HERDR_PLUGIN_EVENT", "workspace.focused")
-            .env("HERDR_SOCKET_PATH", &socket)
-            .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
-            .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-            .env("ZERDR_TEST_FOCUS_BACKEND", "1")
-            .env("ZERDR_TEST_FRONTMOST_BEFORE", "com.mitchellh.ghostty")
-            .env("ZERDR_TEST_FRONTMOST_AFTER", "dev.zed.Zed")
-            .assert()
-            .success();
-    }
-
-    let zed_lines = env
-        .read_log()
-        .lines()
-        .filter(|line| line.starts_with("zed\t"))
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    assert_eq!(
-        zed_lines,
-        vec![
-            format!("zed\t--existing {}", target.display()),
-            format!("zed\t--existing {}", target.display()),
-        ]
-    );
-    assert!(!env.read_log().contains("focus\t"));
-    assert_eq!(fs::read(route_path).unwrap(), original_route);
 }
 
 #[test]
@@ -2250,55 +2067,6 @@ fn unbind_explicit_session_without_wrapper_removes_only_that_mapping_and_skips_z
     assert!(store.get("default", "w1").unwrap().is_none());
     assert_eq!(store.get("zerdr", "w1").unwrap(), Some(zerdr_repo));
     assert!(!env.read_log().contains("zed\t"));
-}
-
-#[test]
-fn bind_with_live_external_wrapper_persists_then_uses_the_existing_route() {
-    let env = TestEnv::new();
-    let socket = env.root.path().join("herdr.sock");
-    fs::write(&socket, "").unwrap();
-    let paths = Paths::for_test(env.root.path());
-    let target = git_repo(&env.root.path().join("target-parent"));
-    RouteStore::new(paths.routes_dir.clone())
-        .initialize_strategy(
-            &socket,
-            RouteStrategy::External {
-                focus: RouteFocus::Zed,
-            },
-            std::process::id(),
-        )
-        .unwrap();
-    let _lease = LeaseSet::new(paths.leases_dir.clone())
-        .acquire(&socket, 99)
-        .unwrap();
-    let sessions = serde_json::json!({
-        "result":{"sessions":[{"name":"default","running":true,"socket_path":socket}]}
-    });
-    let workspaces = serde_json::json!({"result":{"workspaces":[{
-        "workspace_id":"w1","label":"target","focused":true
-    }]}});
-
-    env.command()
-        .arg("bind")
-        .arg(&target)
-        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
-        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-        .assert()
-        .success();
-
-    assert_eq!(
-        BindingStore::new(paths.bindings_file)
-            .get("default", "w1")
-            .unwrap(),
-        Some(target.clone())
-    );
-    let log = env.read_log();
-    assert!(
-        log.contains(&format!("zed\t--existing {}", target.display())),
-        "{log}"
-    );
-    assert!(!log.contains("zed\t--add"), "{log}");
-    assert!(!log.contains("focus\t"), "{log}");
 }
 
 #[test]

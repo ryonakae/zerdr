@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -12,30 +12,11 @@ pub struct Cli {
     /// Use or create a named persistent Herdr session.
     #[arg(long)]
     pub session: Option<String>,
-    /// Select terminal routing behavior.
-    #[arg(long, value_enum)]
-    pub mode: Option<LaunchMode>,
     /// Git project already open in the target Zed window.
     #[arg(long)]
     pub anchor: Option<PathBuf>,
-    /// Select which application remains foreground after external routing.
-    #[arg(long, value_enum)]
-    pub focus: Option<FocusPolicy>,
     #[command(subcommand)]
     pub command: Option<Command>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum LaunchMode {
-    Auto,
-    Internal,
-    External,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum FocusPolicy {
-    Terminal,
-    Zed,
 }
 
 #[derive(Debug, Subcommand)]

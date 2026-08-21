@@ -1,9 +1,8 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use crate::cli::{FocusPolicy, LaunchMode};
 use crate::error::{Error, Result};
-use crate::state::{RouteFocus, RouteStrategy, canonical_git_root};
+use crate::state::{RouteStrategy, canonical_git_root};
 
 const REMOTE_ENV_MARKERS: [&str; 9] = [
     "SSH_CONNECTION",
@@ -69,66 +68,18 @@ pub fn detect_remote_environment() -> Option<RemoteEnvironment> {
     (!markers.is_empty()).then_some(RemoteEnvironment { markers })
 }
 
-pub fn resolve_launch(
-    mode: LaunchMode,
-    anchor: Option<&Path>,
-    focus: Option<FocusPolicy>,
-) -> Result<RouteStrategy> {
+pub fn resolve_launch(anchor: Option<&Path>) -> Result<RouteStrategy> {
     if let Some(remote) = detect_remote_environment() {
         return Err(remote.rejection());
     }
-    if mode == LaunchMode::External && anchor.is_some() {
-        return Err(Error::User(
-            "--anchor cannot be used with --mode external".to_owned(),
-        ));
-    }
-    let resolved_mode = if anchor.is_some() {
-        LaunchMode::Internal
-    } else {
-        match mode {
-            LaunchMode::Auto if in_zed_terminal() => LaunchMode::Internal,
-            LaunchMode::Auto => LaunchMode::External,
-            explicit => explicit,
-        }
+    let candidate = match anchor {
+        Some(path) => path.to_path_buf(),
+        None => env::current_dir()
+            .map_err(|error| Error::User(format!("could not read current directory: {error}")))?,
     };
-    match resolved_mode {
-        LaunchMode::Internal => {
-            if focus.is_some() {
-                return Err(Error::User(
-                    "--focus applies only to external routing".to_owned(),
-                ));
-            }
-            let candidate = match anchor {
-                Some(path) => path.to_path_buf(),
-                None => env::current_dir().map_err(|error| {
-                    Error::User(format!("could not read current directory: {error}"))
-                })?,
-            };
-            Ok(RouteStrategy::Internal {
-                anchor_root: canonical_git_root(&candidate)?,
-            })
-        }
-        LaunchMode::External => {
-            let focus = match focus {
-                Some(FocusPolicy::Terminal) if platform() == Platform::Linux => {
-                    return Err(Error::User(
-                        "--focus terminal is unsupported on Linux; use --focus zed".to_owned(),
-                    ));
-                }
-                Some(FocusPolicy::Terminal) => RouteFocus::Terminal,
-                Some(FocusPolicy::Zed) => RouteFocus::Zed,
-                None if platform() == Platform::MacOs => RouteFocus::Terminal,
-                None => RouteFocus::Zed,
-            };
-            Ok(RouteStrategy::External { focus })
-        }
-        LaunchMode::Auto => unreachable!("auto mode is resolved above"),
-    }
-}
-
-pub fn in_zed_terminal() -> bool {
-    env::var("ZED_TERM").is_ok_and(|value| value == "true")
-        && env::var("TERM_PROGRAM").is_ok_and(|value| value == "zed")
+    Ok(RouteStrategy::Internal {
+        anchor_root: canonical_git_root(&candidate)?,
+    })
 }
 
 pub fn platform() -> Platform {

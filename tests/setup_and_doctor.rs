@@ -6,7 +6,7 @@ use std::process::{Command as ProcessCommand, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use zerdr::state::{LeaseSet, LifecycleGuard, Paths, RouteFocus, RouteStore, RouteStrategy};
+use zerdr::state::{LeaseSet, LifecycleGuard, Paths, RouteStore};
 
 use jsonc_parser::ParseOptions;
 use jsonc_parser::cst::CstRootNode;
@@ -89,7 +89,7 @@ fn setup_is_idempotent_and_installs_exact_plugin_and_tasks_without_config_change
     }
     assert!(first.contains(r#""reveal_target": "center""#));
     assert!(first.contains(r#""ZERDR_TASK_MODE": "1""#));
-    assert!(first.contains(r#""args": ["--mode", "internal", "--anchor", "$ZED_WORKTREE_ROOT"]"#));
+    assert!(first.contains(r#""args": ["--anchor", "$ZED_WORKTREE_ROOT"]"#));
     assert!(first.contains(r#""allow_concurrent_runs": true"#));
     assert!(first.contains(r#""use_new_terminal": true"#));
     assert!(first.contains(r#""hide": "never""#));
@@ -538,7 +538,7 @@ fn doctor_waits_for_admission_and_preserves_the_new_live_route() {
     let proceed = env.root.path().join("admission-continue");
     let mut wrapper_command = env.std_command();
     wrapper_command
-        .args(["--mode", "internal", "--anchor"])
+        .arg("--anchor")
         .arg(&new_anchor)
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
@@ -1074,42 +1074,6 @@ fn doctor_does_not_treat_another_sessions_wrapper_as_an_error() {
         .success()
         .stdout(predicates::str::contains(
             "Herdr session \"default\" is not running",
-        ));
-}
-
-#[test]
-fn doctor_reports_external_route_focus_and_platform_capability() {
-    let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
-    let paths = Paths::for_test(env.root.path());
-    let socket = env.root.path().join("herdr.sock");
-    fs::write(&socket, "").unwrap();
-    RouteStore::new(paths.routes_dir.clone())
-        .initialize_strategy(
-            &socket,
-            RouteStrategy::External {
-                focus: RouteFocus::Terminal,
-            },
-            std::process::id(),
-        )
-        .unwrap();
-    let _lease = LeaseSet::new(paths.leases_dir)
-        .acquire(&socket, 99)
-        .unwrap();
-    let sessions = serde_json::json!({
-        "sessions":[{"name":"default","running":true,"socket_path":socket}]
-    });
-
-    env.command()
-        .arg("doctor")
-        .env("ZERDR_TEST_PLATFORM", "macos")
-        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("route mode: external"))
-        .stdout(predicates::str::contains("focus policy: terminal"))
-        .stdout(predicates::str::contains(
-            "terminal focus restoration is supported on macOS",
         ));
 }
 

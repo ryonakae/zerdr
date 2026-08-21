@@ -197,16 +197,10 @@ impl Synchronizer {
         let _zed_guard = self.acquire_zed_guard()?;
         let routes = RouteStore::new(self.paths.routes_dir.clone());
         let route = self.live_route(session_name, socket)?;
-        match &route.routing {
-            RouteStrategy::Internal { anchor_root } => {
-                self.zed.activate_existing(anchor_root)?;
-                self.zed.add_to_current(&root)?;
-                routes.promote_for(session_name, socket, &root)?;
-            }
-            RouteStrategy::External { focus } => {
-                crate::focus::with_external_focus(*focus, || self.zed.activate_existing(&root))?;
-            }
-        }
+        let RouteStrategy::Internal { anchor_root } = &route.routing;
+        self.zed.activate_existing(anchor_root)?;
+        self.zed.add_to_current(&root)?;
+        routes.promote_for(session_name, socket, &root)?;
         Ok(root)
     }
 
@@ -344,18 +338,10 @@ impl Synchronizer {
         route: &RouteState,
         root: &Path,
     ) -> Result<()> {
-        match &route.routing {
-            RouteStrategy::Internal { anchor_root } => {
-                self.zed.activate_existing(anchor_root)?;
-                self.zed.add_to_current(root)?;
-                RouteStore::new(self.paths.routes_dir.clone()).promote_for(
-                    session_name,
-                    socket,
-                    root,
-                )?;
-            }
-            RouteStrategy::External { .. } => self.zed.activate_existing(root)?,
-        }
+        let RouteStrategy::Internal { anchor_root } = &route.routing;
+        self.zed.activate_existing(anchor_root)?;
+        self.zed.add_to_current(root)?;
+        RouteStore::new(self.paths.routes_dir.clone()).promote_for(session_name, socket, root)?;
         Ok(())
     }
 
@@ -481,20 +467,10 @@ impl Synchronizer {
         let Some(route) = self.binding_route(session_name, socket)? else {
             return Ok(());
         };
-        match &route.routing {
-            RouteStrategy::Internal { anchor_root } => {
-                self.zed.activate_existing(anchor_root)?;
-                self.zed.add_to_current(root)?;
-                RouteStore::new(self.paths.routes_dir.clone()).promote_for(
-                    session_name,
-                    socket,
-                    root,
-                )?;
-            }
-            RouteStrategy::External { focus } => {
-                crate::focus::with_external_focus(*focus, || self.zed.activate_existing(root))?;
-            }
-        }
+        let RouteStrategy::Internal { anchor_root } = &route.routing;
+        self.zed.activate_existing(anchor_root)?;
+        self.zed.add_to_current(root)?;
+        RouteStore::new(self.paths.routes_dir.clone()).promote_for(session_name, socket, root)?;
         Ok(())
     }
 
