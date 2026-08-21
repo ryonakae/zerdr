@@ -45,7 +45,9 @@ The action opens the current workspace in Zed once and leaves Zed in front. `zer
 
 Open a terminal thread in Zed's agent panel and run `zerdr thread` inside it. zerdr finds the Herdr workspace for the project you have open — by explicit binding, by Herdr's recorded checkout, or by where the workspace's panes sit, remembering that last match as a binding — and attaches the thread to a free agent there. If every agent is already attached to another thread, it opens a fresh Herdr tab holding a plain shell, the same starting point as creating a tab in Herdr; launch whatever you like there and the sidebar title and notifications follow as soon as Herdr recognizes the agent. Pass `--kind pi` (or set `ZERDR_THREAD_KIND`) to have the fresh tab start an agent immediately instead.
 
-While attached, zerdr mirrors the agent's name and Herdr terminal title into the threads sidebar and rings the terminal bell when the agent stops working, which is what makes Zed notify you. Enable Zed's notifications to see it:
+Every start prints one status line saying what the thread is connected to — an attached agent, a fresh Herdr tab, a created workspace, or (with auto mode off) a plain local shell — with the pane and workspace, so a Herdr pane and a local shell are distinguishable at a glance.
+
+While attached, zerdr mirrors the Herdr terminal title into the threads sidebar exactly as the agent sets it — the same rendering as running the agent in a plain terminal thread, including Zed promoting a leading spinner glyph to the row icon — and rings the terminal bell when the agent stops working, which is what makes Zed notify you. An empty title falls back to the workspace label so a plain-shell tab still says where it lives. Enable Zed's notifications to see the bell:
 
 ```json
 {
@@ -64,9 +66,11 @@ Attaching is manual by default, so Zed sessions that do not involve Herdr stay u
 zerdr thread --enable
 ```
 
-The first `--enable` writes `zerdr thread --auto` into Zed's `agent.terminal_init_command` (backing your settings file up and writing through a dotfiles symlink); after that the toggle only flips a flag in zerdr's state directory. While the mode is on, `--auto` attaches each new thread best-effort: when the project has no matching Herdr workspace or Herdr is not running, it prints one line and leaves the thread as a plain local shell. Because Zed restores terminal threads on restart, restored threads reattach to the still-running agents — resume, in effect. `zerdr thread --disable` turns the mode off without touching your Zed settings, and `zerdr doctor` shows the current state. Prefer staying manual? `zerdr setup` prints a `terminal::SendText` keybinding example for typing `zerdr thread` with one key.
+The first `--enable` writes `zerdr thread --auto` into Zed's `agent.terminal_init_command` (backing your settings file up and writing through a dotfiles symlink); after that the toggle only flips a flag in zerdr's state directory. While the mode is on, `--auto` attaches each new thread best-effort: a project without a matching Herdr workspace gets one created and bound automatically, and when that cannot help — outside a Git checkout, or Herdr is not running — it prints one line and leaves the thread as a plain local shell. Because Zed restores terminal threads on restart, restored threads reattach to the still-running agents — resume, in effect — and can likewise create workspaces for restored projects. `zerdr thread --disable` turns the mode off without touching your Zed settings, and `zerdr doctor` shows the current state. Prefer staying manual? `zerdr setup` prints a `terminal::SendText` keybinding example for typing `zerdr thread` with one key.
 
-Threads only attach to workspaces Herdr already manages. In a checkout without one, `zerdr thread` says so rather than adding a workspace. Run `zerdr thread --create` there when you do want the workspace.
+Manual `zerdr thread` only attaches to workspaces Herdr already manages. In a checkout without one, it says so rather than adding a workspace; run `zerdr thread --create` there when you do want the workspace.
+
+To select text with the mouse while attached, hold Shift and drag: the Herdr client enables mouse reporting, and Shift is Zed's built-in escape hatch for native selection (fixed for the no-prior-selection case in Zed v1.16.1).
 
 ## Commands
 

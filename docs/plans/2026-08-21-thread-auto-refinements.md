@@ -142,7 +142,7 @@ pane or a plain local shell, nor whether auto mode is on.
 - [x] Task 1: Auto-create the workspace on `--auto`
 - [x] Task 2: Native verbatim titles
 - [x] Task 3: Status lines
-- [ ] Task 4: Documentation
+- [x] Task 4: Documentation
 
 ## Tasks
 
@@ -296,6 +296,11 @@ outcomes asserted; the disabled test was renamed to
 **Validation:**
 - Run: `rg -n "auto|Shift" README.md`
 - Expected: the three additions present; no stale "never creates a workspace on auto" claims.
+
+**Result:** Done. Terminal-threads section: status-line paragraph, verbatim-title wording,
+auto-create sentence (with the restore caveat), manual-`--create` clarification, and the
+Shift+drag tip with the v1.16.1 note. Validation grep confirms all additions and no stale
+claims.
 
 ## Requirement Coverage
 
