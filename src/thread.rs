@@ -21,15 +21,16 @@ struct Session<'a> {
     socket: &'a Path,
 }
 
-/// Best-effort attach for the auto-mode `terminal_init_command`: a silent no-op while
-/// the mode is off, and while it is on any failure leaves the thread usable as a plain
+/// Best-effort attach for the auto-mode `terminal_init_command`. While the mode is on,
+/// a missing workspace is created rather than reported, and any remaining failure
+/// (outside a Git checkout, Herdr unavailable) leaves the thread usable as a plain
 /// local shell instead of surfacing a fatal error.
 pub fn run_auto(session_name: &str) -> Result<()> {
     let paths = Paths::discover()?;
     if !crate::setup::thread_auto_enabled(&paths) {
         return Ok(());
     }
-    if let Err(error) = run(session_name, None, None, false) {
+    if let Err(error) = run(session_name, None, None, true) {
         let message = error.to_string().replace('\n', " ");
         eprintln!("zerdr: {message}; starting a plain shell");
     }

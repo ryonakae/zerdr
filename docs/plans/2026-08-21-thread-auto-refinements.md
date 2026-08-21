@@ -139,7 +139,7 @@ pane or a plain local shell, nor whether auto mode is on.
 
 ## Progress
 
-- [ ] Task 1: Auto-create the workspace on `--auto`
+- [x] Task 1: Auto-create the workspace on `--auto`
 - [ ] Task 2: Native verbatim titles
 - [ ] Task 3: Status lines
 - [ ] Task 4: Documentation
@@ -179,6 +179,10 @@ binds the workspace and lands in a plain shell inside it; manual behavior unchan
 **Validation:**
 - Run: `cargo test --test thread_flow --all-features`
 - Expected: all tests pass.
+
+**Result:** Done. One-line change in `run_auto` (`create: true`); tests replaced/added as
+planned (`auto_without_a_matching_workspace_creates_and_binds_one`,
+`auto_outside_a_git_checkout_leaves_a_plain_shell_with_one_note`). thread_flow green (27).
 
 ### Task 2: Native verbatim titles
 

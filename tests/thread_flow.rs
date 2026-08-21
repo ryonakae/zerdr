@@ -343,14 +343,20 @@ fn auto_attaches_a_free_agent_while_the_mode_is_enabled() {
     assert!(String::from_utf8_lossy(&output.stderr).is_empty());
 }
 
-/// Auto attach is best-effort: an unmatched project leaves the thread as a plain local
-/// shell with a single note, never a fatal error or a new Herdr workspace.
+/// An unmatched project no longer dead-ends: auto creates the workspace like an
+/// explicit `--create`, binds it, and lands in its plain shell.
 #[test]
-fn auto_without_a_matching_workspace_leaves_a_plain_shell_with_one_note() {
+fn auto_without_a_matching_workspace_creates_and_binds_one() {
     let fixture = Fixture::new();
     let paths = fixture.paths();
     fs::create_dir_all(&paths.state_dir).unwrap();
     fs::write(&paths.thread_auto_flag_file, b"").unwrap();
+    let workspace = serde_json::json!({
+        "result": {
+            "workspace": {"workspace_id": "w7", "label": "checkout"},
+            "root_pane": {"pane_id": "w7:p1"}
+        }
+    });
 
     let output = fixture
         .std_thread_command()
@@ -359,6 +365,44 @@ fn auto_without_a_matching_workspace_leaves_a_plain_shell_with_one_note() {
             "ZERDR_TEST_WORKSPACES_JSON",
             r#"{"result":{"workspaces":[]}}"#,
         )
+        .env("ZERDR_TEST_WORKSPACE_CREATE_JSON", workspace.to_string())
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+    let log = fixture.env.read_log();
+    assert!(
+        log.contains("herdr\t--session default workspace create --cwd"),
+        "{log}"
+    );
+    assert!(log.contains("--label checkout --no-focus"), "{log}");
+    assert!(!log.contains("agent start"), "{log}");
+    assert!(log.contains("terminal attach term-w7:p1"), "{log}");
+    let bound = BindingStore::new(paths.bindings_file)
+        .get("default", "w7")
+        .unwrap();
+    assert_eq!(bound, Some(fixture.repo.clone()));
+}
+
+/// Auto attach stays best-effort where creation cannot help: outside a Git checkout the
+/// thread is left as a plain local shell with a single note.
+#[test]
+fn auto_outside_a_git_checkout_leaves_a_plain_shell_with_one_note() {
+    let fixture = Fixture::new();
+    let paths = fixture.paths();
+    fs::create_dir_all(&paths.state_dir).unwrap();
+    fs::write(&paths.thread_auto_flag_file, b"").unwrap();
+    let plain_dir = fixture.env.root.path().join("not-a-repository");
+    fs::create_dir_all(&plain_dir).unwrap();
+
+    let output = fixture
+        .std_thread_command()
+        .args(["thread", "--auto"])
+        .current_dir(&plain_dir)
         .spawn()
         .unwrap()
         .wait_with_output()
