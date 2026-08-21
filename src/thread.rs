@@ -171,6 +171,7 @@ fn resolve_or_create(
                 .herdr
                 .workspace_create_for(session.name, &root, &label)?;
             bindings.bind_if_absent(session.name, &created.workspace_id, &root)?;
+            send_banner(session, &created.root_pane_id, &label);
             let (agent, lease, terminal) = start_and_lease(
                 session,
                 &created.workspace_id,
@@ -196,9 +197,35 @@ fn resolve_or_create(
     let pane_id = session
         .herdr
         .tab_create_for(session.name, &workspace_id, &root)?;
+    let workspace_label = workspaces
+        .iter()
+        .find(|workspace| workspace.id == workspace_id)
+        .map_or(workspace_id.as_str(), |workspace| workspace.label.as_str());
+    send_banner(session, &pane_id, workspace_label);
     let (agent, lease, terminal) =
         start_and_lease(session, &workspace_id, &pane_id, kind, &agents)?;
     Ok((agent, lease, terminal, Attachment::NewTab))
+}
+
+/// One comment line typed into a pane zerdr just created, so the pane's shell says
+/// where it came from. The banner is cosmetic and must never block the attach; it is
+/// also never sent to a pane zerdr did not create, whose input belongs to whatever is
+/// already running there.
+fn send_banner(session: &Session<'_>, pane_id: &str, workspace: &str) {
+    let banner = format!(
+        "# zerdr: Herdr pane {pane_id} in workspace {workspace}, opened from a Zed terminal thread"
+    );
+    let sent = session
+        .herdr
+        .pane_send_text_for(session.name, pane_id, &banner)
+        .and_then(|()| {
+            session
+                .herdr
+                .pane_send_keys_for(session.name, pane_id, "enter")
+        });
+    if let Err(error) = sent {
+        eprintln!("zerdr: could not write the pane banner: {error}");
+    }
 }
 
 /// A fresh pane starts as a plain shell, matching a new Herdr tab; an agent is started

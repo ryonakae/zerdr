@@ -154,7 +154,7 @@ piles up fresh Herdr tabs.
 
 ## Progress
 
-- [ ] Task 1: In-pane banner for created panes
+- [x] Task 1: In-pane banner for created panes
 - [ ] Task 2: Pane memory and restore
 - [ ] Task 3: Documentation
 
@@ -200,6 +200,12 @@ panes zerdr merely attaches to receive nothing.
 **Validation:**
 - Run: `cargo test --test thread_flow --test herdr_wrapper --all-features`
 - Expected: all tests pass.
+
+**Result:** Done. `send_banner` in src/thread.rs (called after `workspace_create_for` and
+after `tab_create_for`, before `start_and_lease` so the comment lands before any
+`agent start`); `pane_send_text_for`/`pane_send_keys_for` wrappers in src/herdr.rs; the
+fake herdr gained only the conditional `ZERDR_TEST_SEND_TEXT_EXIT` branch. thread_flow
+(28) and herdr_wrapper (20, timing budget intact) green; fmt/clippy clean.
 
 ### Task 2: Pane memory and restore
 

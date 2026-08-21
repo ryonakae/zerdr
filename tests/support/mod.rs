@@ -119,6 +119,10 @@ if [ "$1" = "--session" ] && [ "$3" = "agent" ] && [ "$4" = "get" ]; then
   printf '%s\n' "$ZERDR_TEST_AGENT_GET_JSON"
   exit 0
 fi
+if [ "$1" = "--session" ] && [ "$3" = "pane" ] && [ "$4" = "send-text" ] && [ -n "$ZERDR_TEST_SEND_TEXT_EXIT" ]; then
+  printf '%s\n' '{"error":"injected send-text failure"}' >&2
+  exit "$ZERDR_TEST_SEND_TEXT_EXIT"
+fi
 if [ "$1" = "--session" ] && [ "$3" = "pane" ] && [ "$4" = "get" ]; then
   found=''
   if [ -n "$ZERDR_TEST_AGENTS_DIR" ]; then

@@ -183,6 +183,7 @@ fn bare_thread_attaches_a_free_agent_in_the_matching_workspace() {
     );
     assert!(!log.contains("tab create"), "{log}");
     assert!(!log.contains("agent start"), "{log}");
+    assert!(!log.contains("send-text"), "{log}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(&format!("{OSC_PREFIX}review")),
@@ -246,6 +247,19 @@ fn an_empty_workspace_gets_a_new_tab_with_a_plain_shell() {
         "{log}"
     );
     assert!(!log.contains("agent attach"), "{log}");
+    let banner = log
+        .lines()
+        .find(|line| line.contains("pane send-text w1:p9"))
+        .unwrap_or_else(|| panic!("no banner send-text in {log}"));
+    assert!(banner.contains("# zerdr:"), "{log}");
+    assert!(banner.contains("Zed terminal thread"), "{log}");
+    assert!(banner.contains("checkout"), "{log}");
+    let text_at = log.find("pane send-text w1:p9").unwrap();
+    let keys_at = log
+        .find("pane send-keys w1:p9 enter")
+        .unwrap_or_else(|| panic!("no banner enter in {log}"));
+    let attach_at = log.find("terminal attach term-w1:p9").unwrap();
+    assert!(text_at < keys_at && keys_at < attach_at, "{log}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(&format!("{OSC_PREFIX}checkout")),
@@ -285,7 +299,42 @@ fn auto_start_kind_comes_from_the_flag_then_the_environment() {
             log.contains(&format!("agent start zed-1 --kind {expected} --pane w1:p9")),
             "{log}"
         );
+        let banner_at = log
+            .find("pane send-text w1:p9")
+            .unwrap_or_else(|| panic!("no banner send-text in {log}"));
+        assert!(banner_at < log.find("agent start").unwrap(), "{log}");
     }
+}
+
+/// The banner is cosmetic: a failure to write it must not block the attach.
+#[test]
+fn a_failing_banner_warns_but_does_not_block_the_attach() {
+    let fixture = Fixture::new();
+    let tab = serde_json::json!({"result": {"root_pane": {"pane_id": "w1:p9"}}});
+
+    let output = fixture
+        .std_thread_command()
+        .arg("thread")
+        .env("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string())
+        .env("ZERDR_TEST_SEND_TEXT_EXIT", "1")
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(stderr.starts_with("zerdr: "), "{stderr}");
+    assert!(
+        fixture
+            .env
+            .read_log()
+            .contains("terminal attach term-w1:p9"),
+        "{}",
+        fixture.env.read_log()
+    );
 }
 
 #[test]
@@ -401,6 +450,7 @@ fn auto_without_a_matching_workspace_creates_and_binds_one() {
     assert!(log.contains("--label checkout --no-focus"), "{log}");
     assert!(!log.contains("agent start"), "{log}");
     assert!(log.contains("terminal attach term-w7:p1"), "{log}");
+    assert!(log.contains("pane send-text w7:p1 # zerdr:"), "{log}");
     let bound = BindingStore::new(paths.bindings_file)
         .get("default", "w7")
         .unwrap();
@@ -571,6 +621,8 @@ fn create_makes_the_workspace_binds_it_and_starts_an_agent() {
     assert!(log.contains("--label checkout --no-focus"), "{log}");
     assert!(!log.contains("agent start"), "{log}");
     assert!(log.contains("terminal attach term-w7:p1"), "{log}");
+    assert!(log.contains("pane send-text w7:p1 # zerdr:"), "{log}");
+    assert!(log.contains("pane send-keys w7:p1 enter"), "{log}");
 
     let bound = BindingStore::new(fixture.paths().bindings_file)
         .get("default", "w7")
