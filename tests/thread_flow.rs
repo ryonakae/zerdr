@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use predicates::prelude::*;
 use support::TestEnv;
-use zerdr::state::{BindingStore, Paths};
+use zerdr::state::{BindingStore, Paths, ThreadPaneMemory};
 
 const OSC_PREFIX: &str = "\u{1b}]0;";
 
@@ -972,5 +972,226 @@ fn thread_runs_without_the_plugin_or_install_state() {
         !fixture.env.read_log().contains("plugin list"),
         "{}",
         fixture.env.read_log()
+    );
+}
+
+/// A thread reopened later (e.g. after a Zed restart) reattaches to the remembered
+/// shell pane instead of creating another tab.
+#[test]
+fn a_restored_thread_reattaches_the_remembered_shell_pane() {
+    let fixture = Fixture::new();
+    let tab = serde_json::json!({"result": {"root_pane": {"pane_id": "w1:p9"}}});
+
+    for _ in 0..2 {
+        let output = fixture
+            .std_thread_command()
+            .arg("thread")
+            .env("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string())
+            .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+            .spawn()
+            .unwrap()
+            .wait_with_output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.lines().next().unwrap_or_default().contains("w1:p9"),
+            "{stdout:?}"
+        );
+        if stdout.contains("reattached") {
+            // Second run: sidebar still shows the workspace label for a shell pane.
+            assert!(
+                stdout.contains(&format!("{OSC_PREFIX}checkout")),
+                "{stdout:?}"
+            );
+        }
+    }
+
+    let log = fixture.env.read_log();
+    assert_eq!(log.matches("tab create").count(), 1, "{log}");
+    assert_eq!(
+        log.matches("terminal attach term-w1:p9").count(),
+        2,
+        "{log}"
+    );
+    assert_eq!(
+        log.matches("pane send-text").count(),
+        1,
+        "the banner is written only when the pane is created: {log}"
+    );
+}
+
+/// With several remembered panes the most recently attached one wins.
+#[test]
+fn reattach_prefers_the_most_recently_attached_pane() {
+    let fixture = Fixture::new();
+    let counter = fixture.env.root.path().join("pane-counter");
+    let first_release = fixture.env.root.path().join("first-release");
+    let second_release = fixture.env.root.path().join("second-release");
+
+    let first = fixture
+        .std_thread_command()
+        .arg("thread")
+        .env("ZERDR_TEST_PANE_COUNTER_FILE", &counter)
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", &first_release)
+        .spawn()
+        .unwrap();
+    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
+    let second = fixture
+        .std_thread_command()
+        .arg("thread")
+        .env("ZERDR_TEST_PANE_COUNTER_FILE", &counter)
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", &second_release)
+        .spawn()
+        .unwrap();
+    wait_for_log(&fixture.env, "terminal attach term-w1:p2");
+    fs::write(&first_release, "go").unwrap();
+    fs::write(&second_release, "go").unwrap();
+    assert!(first.wait_with_output().unwrap().status.success());
+    assert!(second.wait_with_output().unwrap().status.success());
+
+    let output = fixture
+        .std_thread_command()
+        .arg("thread")
+        .env("ZERDR_TEST_PANE_COUNTER_FILE", &counter)
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let log = fixture.env.read_log();
+    assert_eq!(log.matches("tab create").count(), 2, "{log}");
+    assert_eq!(
+        log.matches("terminal attach term-w1:p2").count(),
+        2,
+        "the most recently attached pane is reattached: {log}"
+    );
+}
+
+/// A remembered pane that no longer exists is pruned and never blocks resolution.
+#[test]
+fn a_dead_remembered_pane_is_pruned_and_a_new_tab_is_created() {
+    let fixture = Fixture::new();
+    let paths = fixture.paths();
+    let first_tab = serde_json::json!({"result": {"root_pane": {"pane_id": "w1:p9"}}});
+    let output = fixture
+        .std_thread_command()
+        .arg("thread")
+        .env("ZERDR_TEST_TAB_CREATE_JSON", first_tab.to_string())
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let second_tab = serde_json::json!({"result": {"root_pane": {"pane_id": "w1:p10"}}});
+    let output = fixture
+        .std_thread_command()
+        .arg("thread")
+        .env("ZERDR_TEST_TAB_CREATE_JSON", second_tab.to_string())
+        .env("ZERDR_TEST_PANE_GET_MISSING_IDS", "w1:p9")
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let log = fixture.env.read_log();
+    assert!(log.contains("terminal attach term-w1:p10"), "{log}");
+    let memory = ThreadPaneMemory::new(paths.thread_memory_dir);
+    let panes = memory.load("default", &fixture.socket);
+    assert!(
+        panes.iter().all(|record| record.pane_id != "w1:p9"),
+        "{panes:?}"
+    );
+    assert!(
+        panes.iter().any(|record| record.pane_id == "w1:p10"),
+        "{panes:?}"
+    );
+}
+
+/// Free agents keep their priority over remembered shell panes.
+#[test]
+fn a_free_agent_still_wins_over_a_remembered_shell_pane() {
+    let fixture = Fixture::new();
+    let tab = serde_json::json!({"result": {"root_pane": {"pane_id": "w1:p9"}}});
+    let output = fixture
+        .std_thread_command()
+        .arg("thread")
+        .env("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string())
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "ready");
+    let child = fixture.std_thread_command().arg("thread").spawn().unwrap();
+    wait_for_log(&fixture.env, "agent attach w1:p1");
+    fixture.release_attach();
+    assert!(child.wait_with_output().unwrap().status.success());
+
+    let log = fixture.env.read_log();
+    assert_eq!(
+        log.matches("terminal attach term-w1:p9").count(),
+        1,
+        "the remembered shell pane must not outrank the free agent: {log}"
+    );
+}
+
+/// Memory is scoped per workspace: a pane remembered elsewhere is never probed.
+#[test]
+fn a_pane_remembered_for_another_workspace_is_not_considered() {
+    let fixture = Fixture::new();
+    let paths = fixture.paths();
+    ThreadPaneMemory::new(paths.thread_memory_dir)
+        .record("default", &fixture.socket, "w2", "w2:p1")
+        .unwrap();
+    let tab = serde_json::json!({"result": {"root_pane": {"pane_id": "w1:p9"}}});
+
+    let output = fixture
+        .std_thread_command()
+        .arg("thread")
+        .env("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string())
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let log = fixture.env.read_log();
+    assert!(!log.contains("pane get w2:p1"), "{log}");
+    assert!(log.contains("terminal attach term-w1:p9"), "{log}");
+}
+
+/// The explicit-TARGET path records its pane too, outside resolve_or_create.
+#[test]
+fn an_explicit_target_attach_is_remembered() {
+    let fixture = Fixture::new();
+    let paths = fixture.paths();
+    let agent = agent_response("idle", "explicit target");
+
+    let child = fixture
+        .std_thread_command()
+        .args(["thread", "w1:p1"])
+        .env("ZERDR_TEST_AGENT_GET_JSON", agent)
+        .spawn()
+        .unwrap();
+    wait_for_log(&fixture.env, "agent attach w1:p1");
+    fixture.release_attach();
+    assert!(child.wait_with_output().unwrap().status.success());
+
+    let panes = ThreadPaneMemory::new(paths.thread_memory_dir).load("default", &fixture.socket);
+    assert!(
+        panes
+            .iter()
+            .any(|record| record.pane_id == "w1:p1" && record.workspace_id == "w1"),
+        "{panes:?}"
     );
 }

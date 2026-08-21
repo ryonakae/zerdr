@@ -10,6 +10,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use zerdr::state::{
     BindingStore, LeaseSet, LifecycleGuard, Paths, RouteStore, SyncGuard, ThreadLeaseSet,
+    ThreadPaneMemory,
 };
 
 fn git_repo() -> (TempDir, std::path::PathBuf) {
@@ -491,4 +492,56 @@ fn thread_leases_are_scoped_by_session_and_socket() {
         leases.leased_panes("default", &second_socket).unwrap(),
         BTreeSet::from(["w1:p1".to_owned()])
     );
+}
+
+#[test]
+fn thread_pane_memory_dedups_by_pane_and_orders_by_recency() {
+    let state = tempfile::tempdir().unwrap();
+    let socket = state.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let memory = ThreadPaneMemory::new(Paths::for_test(state.path()).thread_memory_dir);
+
+    memory.record("default", &socket, "w1", "w1:p1").unwrap();
+    thread::sleep(Duration::from_millis(2));
+    memory.record("default", &socket, "w1", "w1:p2").unwrap();
+    thread::sleep(Duration::from_millis(2));
+    memory.record("default", &socket, "w1", "w1:p1").unwrap();
+
+    let panes = memory.load("default", &socket);
+    assert_eq!(panes.len(), 2, "{panes:?}");
+    assert_eq!(panes[0].pane_id, "w1:p1", "refreshed record is most recent");
+    assert_eq!(panes[1].pane_id, "w1:p2");
+
+    memory
+        .prune("default", &socket, &["w1:p1".to_owned()])
+        .unwrap();
+    let panes = memory.load("default", &socket);
+    assert_eq!(panes.len(), 1);
+    assert_eq!(panes[0].pane_id, "w1:p2");
+}
+
+#[test]
+fn thread_pane_memory_treats_foreign_content_as_empty() {
+    let state = tempfile::tempdir().unwrap();
+    let socket = state.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let paths = Paths::for_test(state.path());
+    let memory = ThreadPaneMemory::new(paths.thread_memory_dir.clone());
+
+    memory.record("default", &socket, "w1", "w1:p1").unwrap();
+    let file = fs::read_dir(&paths.thread_memory_dir)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .unwrap();
+    for foreign in ["{", "[1, 2]", "{\"schema_version\": 99, \"panes\": []}"] {
+        fs::write(&file, foreign).unwrap();
+        assert!(memory.load("default", &socket).is_empty(), "{foreign}");
+    }
+
+    memory.record("default", &socket, "w1", "w1:p3").unwrap();
+    let panes = memory.load("default", &socket);
+    assert_eq!(panes.len(), 1);
+    assert_eq!(panes[0].pane_id, "w1:p3");
 }

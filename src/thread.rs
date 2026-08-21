@@ -7,7 +7,8 @@ use std::time::Duration;
 use crate::error::{Error, Result};
 use crate::herdr::{AgentInfo, Herdr, ManagedChild, SignalForwarder, Workspace};
 use crate::state::{
-    BindingStore, OperationGuard, Paths, ThreadLeaseGuard, ThreadLeaseSet, canonical_git_root,
+    BindingStore, OperationGuard, Paths, ThreadLeaseGuard, ThreadLeaseSet, ThreadPaneMemory,
+    canonical_git_root,
 };
 
 const DEFAULT_POLL_MS: u64 = 2_000;
@@ -24,6 +25,7 @@ struct Session<'a> {
 /// How the pane this thread ended up on was obtained, for the status line.
 enum Attachment {
     Agent,
+    Remembered,
     NewTab,
     NewWorkspace { label: String },
 }
@@ -72,6 +74,7 @@ fn run_with_mode(
         name: session_name,
         socket: &socket,
     };
+    let memory = ThreadPaneMemory::new(paths.thread_memory_dir.clone());
 
     let (agent, _lease, terminal, attachment) = match target {
         Some(target) => {
@@ -79,9 +82,14 @@ fn run_with_mode(
                 .agent_get_for(session_name, target)?
                 .ok_or_else(|| Error::User(format!("no Herdr agent matches {target:?}")))?;
             let lease = leases.acquire(session_name, &socket, &agent.pane_id)?;
+            {
+                let _serialize =
+                    OperationGuard::acquire(&leases.resolve_lock_path(session_name, &socket)?)?;
+                remember_pane(&memory, &session, &agent.workspace_id, &agent.pane_id);
+            }
             (agent, lease, None, Attachment::Agent)
         }
-        None => resolve_or_create(&session, &paths, kind, create)?,
+        None => resolve_or_create(&session, &memory, &paths, kind, create)?,
     };
 
     // Without the workspace list there is no way to tell whether this workspace is
@@ -134,6 +142,7 @@ fn run_with_mode(
 /// empty workspace cannot claim the same pane.
 fn resolve_or_create(
     session: &Session<'_>,
+    memory: &ThreadPaneMemory,
     paths: &Paths,
     kind: Option<&str>,
     create: bool,
@@ -179,6 +188,7 @@ fn resolve_or_create(
                 kind,
                 &agents,
             )?;
+            remember_pane(memory, session, &created.workspace_id, &agent.pane_id);
             return Ok((agent, lease, terminal, Attachment::NewWorkspace { label }));
         }
     };
@@ -191,7 +201,52 @@ fn resolve_or_create(
         let lease = session
             .leases
             .acquire(session.name, session.socket, &agent.pane_id)?;
+        remember_pane(memory, session, &workspace_id, &agent.pane_id);
         return Ok((agent.clone(), lease, None, Attachment::Agent));
+    }
+
+    // A remembered shell pane (typically left behind by a thread a Zed restart closed)
+    // is reattached before a new tab is created. Agent panes are excluded: the pass
+    // above owns them. Dead records are pruned as they are encountered.
+    let mut dead = Vec::new();
+    let mut reattach = None;
+    for record in memory.load(session.name, session.socket) {
+        if record.workspace_id != workspace_id
+            || leased.contains(&record.pane_id)
+            || agents.iter().any(|agent| agent.pane_id == record.pane_id)
+        {
+            continue;
+        }
+        match session
+            .herdr
+            .pane_terminal_for(session.name, &record.pane_id)
+        {
+            Ok(terminal_id) => {
+                reattach = Some((record.pane_id, terminal_id));
+                break;
+            }
+            Err(_) => dead.push(record.pane_id),
+        }
+    }
+    if !dead.is_empty()
+        && let Err(error) = memory.prune(session.name, session.socket, &dead)
+    {
+        eprintln!("zerdr: could not prune dead thread panes: {error}");
+    }
+    if let Some((pane_id, terminal_id)) = reattach {
+        let lease = session
+            .leases
+            .acquire(session.name, session.socket, &pane_id)?;
+        remember_pane(memory, session, &workspace_id, &pane_id);
+        let shell = AgentInfo {
+            kind: String::new(),
+            name: None,
+            status: "unknown".to_owned(),
+            pane_id,
+            workspace_id: workspace_id.clone(),
+            title: None,
+        };
+        return Ok((shell, lease, Some(terminal_id), Attachment::Remembered));
     }
 
     let pane_id = session
@@ -204,7 +259,20 @@ fn resolve_or_create(
     send_banner(session, &pane_id, workspace_label);
     let (agent, lease, terminal) =
         start_and_lease(session, &workspace_id, &pane_id, kind, &agents)?;
+    remember_pane(memory, session, &workspace_id, &agent.pane_id);
     Ok((agent, lease, terminal, Attachment::NewTab))
+}
+
+/// Recording is advisory (R4): a store hiccup must not fail an otherwise good attach.
+fn remember_pane(
+    memory: &ThreadPaneMemory,
+    session: &Session<'_>,
+    workspace_id: &str,
+    pane_id: &str,
+) {
+    if let Err(error) = memory.record(session.name, session.socket, workspace_id, pane_id) {
+        eprintln!("zerdr: could not record the thread pane: {error}");
+    }
 }
 
 /// One comment line typed into a pane zerdr just created, so the pane's shell says
@@ -347,6 +415,10 @@ fn print_status(auto: bool, attachment: &Attachment, agent: &AgentInfo, label: O
                 agent.pane_id
             )
         }
+        Attachment::Remembered => format!(
+            "reattached to Herdr pane {} in workspace {workspace}",
+            agent.pane_id
+        ),
         Attachment::NewTab => format!(
             "opened a new Herdr tab (pane {}) in workspace {workspace}",
             agent.pane_id

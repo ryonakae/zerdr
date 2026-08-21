@@ -124,6 +124,12 @@ if [ "$1" = "--session" ] && [ "$3" = "pane" ] && [ "$4" = "send-text" ] && [ -n
   exit "$ZERDR_TEST_SEND_TEXT_EXIT"
 fi
 if [ "$1" = "--session" ] && [ "$3" = "pane" ] && [ "$4" = "get" ]; then
+  case " $ZERDR_TEST_PANE_GET_MISSING_IDS " in
+    *" $5 "*)
+      printf '%s\n' '{"error":"no such pane"}' >&2
+      exit 1
+      ;;
+  esac
   found=''
   if [ -n "$ZERDR_TEST_AGENTS_DIR" ]; then
     for entry in "$ZERDR_TEST_AGENTS_DIR"/*.json; do

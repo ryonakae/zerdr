@@ -28,6 +28,7 @@ pub struct Paths {
     pub bindings_file: PathBuf,
     pub leases_dir: PathBuf,
     pub thread_leases_dir: PathBuf,
+    pub thread_memory_dir: PathBuf,
     pub routes_dir: PathBuf,
     pub sync_locks_dir: PathBuf,
     pub lifecycle_lock_file: PathBuf,
@@ -90,6 +91,7 @@ impl Paths {
             bindings_file: state_dir.join("bindings.json"),
             leases_dir: state_dir.join("leases"),
             thread_leases_dir: state_dir.join("thread-leases"),
+            thread_memory_dir: state_dir.join("thread-panes"),
             routes_dir: state_dir.join("routes"),
             sync_locks_dir: state_dir.join("sync-locks"),
             lifecycle_lock_file,
@@ -1083,6 +1085,106 @@ impl ThreadLeaseSet {
         scope.push("\u{0}");
         scope.push(session_name);
         self.root.join(path_hash(Path::new(&scope)))
+    }
+}
+
+const THREAD_PANE_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadPaneRecord {
+    pub workspace_id: String,
+    pub pane_id: String,
+    pub last_attached_unix_ms: u128,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ThreadPaneState {
+    schema_version: u32,
+    panes: Vec<ThreadPaneRecord>,
+}
+
+/// Remembers which Herdr panes zerdr threads were attached to, so a thread reopened
+/// after a Zed restart reattaches instead of creating yet another tab. The store is
+/// advisory: unreadable or foreign content loads as empty, and callers treat write
+/// failures as non-fatal.
+pub struct ThreadPaneMemory {
+    root: PathBuf,
+}
+
+impl ThreadPaneMemory {
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    /// Records for one session scope, most recently attached first.
+    pub fn load(&self, session_name: &str, socket_path: &Path) -> Vec<ThreadPaneRecord> {
+        let Ok(path) = self.scope_path(session_name, socket_path) else {
+            return Vec::new();
+        };
+        let Ok(bytes) = fs::read(&path) else {
+            return Vec::new();
+        };
+        let Ok(state) = serde_json::from_slice::<ThreadPaneState>(&bytes) else {
+            return Vec::new();
+        };
+        if state.schema_version != THREAD_PANE_SCHEMA_VERSION {
+            return Vec::new();
+        }
+        let mut panes = state.panes;
+        panes.sort_by(|first, second| {
+            second
+                .last_attached_unix_ms
+                .cmp(&first.last_attached_unix_ms)
+        });
+        panes
+    }
+
+    /// Adds or refreshes one pane, deduplicated by pane id.
+    pub fn record(
+        &self,
+        session_name: &str,
+        socket_path: &Path,
+        workspace_id: &str,
+        pane_id: &str,
+    ) -> Result<()> {
+        let path = self.scope_path(session_name, socket_path)?;
+        let mut panes = self.load(session_name, socket_path);
+        panes.retain(|record| record.pane_id != pane_id);
+        panes.push(ThreadPaneRecord {
+            workspace_id: workspace_id.to_owned(),
+            pane_id: pane_id.to_owned(),
+            last_attached_unix_ms: now_millis(),
+        });
+        self.write(&path, panes)
+    }
+
+    /// Drops panes that no longer exist.
+    pub fn prune(&self, session_name: &str, socket_path: &Path, pane_ids: &[String]) -> Result<()> {
+        let path = self.scope_path(session_name, socket_path)?;
+        let mut panes = self.load(session_name, socket_path);
+        panes.retain(|record| !pane_ids.contains(&record.pane_id));
+        self.write(&path, panes)
+    }
+
+    fn write(&self, path: &Path, panes: Vec<ThreadPaneRecord>) -> Result<()> {
+        fs::create_dir_all(&self.root).map_err(|error| Error::io(&self.root, error))?;
+        atomic_write_json(
+            path,
+            &ThreadPaneState {
+                schema_version: THREAD_PANE_SCHEMA_VERSION,
+                panes,
+            },
+        )
+    }
+
+    fn scope_path(&self, session_name: &str, socket_path: &Path) -> Result<PathBuf> {
+        let socket_path = canonical_socket(socket_path)?;
+        let mut scope = socket_path.as_os_str().to_os_string();
+        scope.push("\u{0}");
+        scope.push(session_name);
+        Ok(self
+            .root
+            .join(format!("{}.json", path_hash(Path::new(&scope)))))
     }
 }
 

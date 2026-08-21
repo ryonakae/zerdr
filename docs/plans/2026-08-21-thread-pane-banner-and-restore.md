@@ -155,7 +155,7 @@ piles up fresh Herdr tabs.
 ## Progress
 
 - [x] Task 1: In-pane banner for created panes
-- [ ] Task 2: Pane memory and restore
+- [x] Task 2: Pane memory and restore
 - [ ] Task 3: Documentation
 
 ## Tasks
@@ -256,6 +256,18 @@ to the remembered shell pane instead of creating another tab.
 **Validation:**
 - Run: `cargo test --test thread_flow --test state_and_bindings --all-features && cargo test --all-targets --all-features`
 - Expected: all tests pass.
+
+**Result:** Done. `ThreadPaneMemory` in src/state.rs (scope path = hash(socket + NUL +
+session) like the lease scopes; tolerant `load`, dedup-refresh `record`, `prune`);
+`Paths.thread_memory_dir` (`<state>/thread-panes`). thread.rs records on all five attach
+sites (`remember_pane`, advisory with a stderr warning on failure), and pass ② sits
+between the free-agent pass and tab creation inside the resolve lock; the explicit-TARGET
+arm takes the resolve lock briefly just to record (no deadlock: pane-lease acquisition is
+non-blocking try-lock, so lock-order inversion cannot block). New `Attachment::Remembered`
+prints "reattached to Herdr pane ...". Fake herdr gained the conditional
+`ZERDR_TEST_PANE_GET_MISSING_IDS` branch. All six planned scenarios covered
+(tests/thread_flow.rs) plus two store tests (tests/state_and_bindings.rs). Full suite
+green (200 tests at --test-threads=4), fmt/clippy clean.
 
 ### Task 3: Documentation
 
