@@ -231,13 +231,13 @@ the enrichment note without naming the plugin. Validation greps confirm.
 - [x] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings — clean
 - [x] `cargo test --all-targets --all-features` — Expected: all tests pass — 200 tests green
       (run at `--test-threads=4`; GitHub CI green on macOS and Ubuntu)
-- [ ] Manual check (user's machine, after `cargo install --path . --locked --force`):
+- [x] Manual check (user's machine, after `cargo install --path . --locked --force`):
       threads show `[herdr] Pi - ...` / `[herdr] Claude - ...` titles that follow the
       agents' own titles; a fresh shell pane shows `[herdr] <workspace>`; nothing is
-      typed into the pane's shell anymore.
-- [ ] Requirement Coverage に未対応項目がない
-- [ ] 計画と実際の変更内容が整合している
-- [ ] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
+      typed into the pane's shell anymore. — ユーザーが実機で確認済み。
+- [x] Requirement Coverage に未対応項目がない — R1–R5 / D1–D3 すべて Task と検証に対応済み。
+- [x] 計画と実際の変更内容が整合している — 実装コミット 07d4286, c3bf4a2, a3dd936、独立レビュー 2 回 APPROVED。
+- [x] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
 
 **Independent review:** two rounds by a separate reviewer context. Round 1: APPROVED with
 one low correctness note (a prefix-only pi title of exactly "π - " would leave a dangling
