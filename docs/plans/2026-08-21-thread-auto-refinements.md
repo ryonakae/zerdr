@@ -316,9 +316,12 @@ claims.
 
 ## Final Validation
 
-- [ ] `cargo fmt --all -- --check` — Expected: no diff
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings
-- [ ] `cargo test --all-targets --all-features` — Expected: all tests pass
+- [x] `cargo fmt --all -- --check` — Expected: no diff — clean
+- [x] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings — clean
+- [x] `cargo test --all-targets --all-features` — Expected: all tests pass — 192 tests green
+      (run at `--test-threads=4`; GitHub CI on macOS and Ubuntu is green on HEAD 0c6905a.
+      Three intermediate CI runs failed only on the pre-existing ubuntu ETXTBSY flake in
+      `agent_list_parses_the_live_agent_payload_shape`, unrelated to this diff)
 - [ ] Manual check (user's machine, after `cargo install --path . --locked --force`):
       open a thread in a project without a Herdr workspace while enabled → workspace
       appears in Herdr and the thread lands in its shell with a status line; sidebar
@@ -327,6 +330,12 @@ claims.
 - [ ] Requirement Coverage に未対応項目がない
 - [ ] 計画と実際の変更内容が整合している
 - [ ] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
+
+**Independent review:** two rounds by a separate reviewer context. Round 1: APPROVED with
+two low observations; the missing manual-`--create` status-line assertion was fixed in
+0c6905a, and the unarchived plan was confirmed as intentionally gated on the user's
+manual check. Round 2: APPROVED, no remaining issues. Implementation commits: ec7f6e5,
+8bae3ad, 4badbef, 0e58e36, 0c6905a (base 3acf8f4), all pushed, CI green on HEAD.
 
 ## Risks and Open Questions
 
