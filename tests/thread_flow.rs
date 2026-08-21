@@ -746,6 +746,9 @@ fn titles_carry_the_herdr_marker_and_kind_display_names() {
             "[herdr] Pi - 施策を進める - mog-app",
         ),
         ("codex", "t", "[herdr] Codex - t"),
+        // A degenerate pi title that is only the stripped prefix falls back to the
+        // workspace label instead of leaving a dangling separator.
+        ("pi", "\u{3c0} - ", "[herdr] Pi - checkout"),
     ] {
         let fixture = Fixture::new();
         fixture.agent_of_kind(kind, "zed-1", "w1:p1", "w1", "idle", title);

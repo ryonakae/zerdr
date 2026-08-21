@@ -527,6 +527,7 @@ fn emit_title(last: &mut Option<String>, agent: &AgentInfo, fallback: Option<&st
             .title
             .as_deref()
             .map(|title| strip_kind_prefix(&agent.kind, title))
+            .filter(|detail| !detail.is_empty())
             .or(fallback)
             .unwrap_or(&agent.workspace_id);
         format!("[herdr] {} - {detail}", display_kind(&agent.kind))
