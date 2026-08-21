@@ -184,7 +184,7 @@ fn bare_thread_attaches_a_free_agent_in_the_matching_workspace() {
     assert!(!log.contains("tab create"), "{log}");
     assert!(!log.contains("agent start"), "{log}");
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains(&format!("{OSC_PREFIX}pi \u{b7} review")),
+        String::from_utf8_lossy(&output.stdout).contains(&format!("{OSC_PREFIX}review")),
         "{:?}",
         String::from_utf8_lossy(&output.stdout)
     );
@@ -337,7 +337,7 @@ fn auto_attaches_a_free_agent_while_the_mode_is_enabled() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains(&format!("{OSC_PREFIX}pi \u{b7} review")),
+        stdout.contains(&format!("{OSC_PREFIX}review")),
         "{stdout:?}"
     );
     assert!(String::from_utf8_lossy(&output.stderr).is_empty());
@@ -642,11 +642,11 @@ fn titles_are_emitted_once_per_change_and_a_bell_marks_settling() {
         "one title per change, deduplicated: {stdout:?}"
     );
     assert!(
-        stdout.contains(&format!("{OSC_PREFIX}pi \u{b7} first title")),
+        stdout.contains(&format!("{OSC_PREFIX}first title")),
         "{stdout:?}"
     );
     assert!(
-        stdout.contains(&format!("{OSC_PREFIX}pi \u{b7} second title")),
+        stdout.contains(&format!("{OSC_PREFIX}second title")),
         "{stdout:?}"
     );
     assert_eq!(
@@ -668,7 +668,7 @@ fn an_empty_title_falls_back_to_the_workspace_label() {
 
     assert!(
         String::from_utf8_lossy(&output.stdout)
-            .contains(&format!("{OSC_PREFIX}pi \u{b7} checkout")),
+            .contains(&format!("{OSC_PREFIX}checkout")),
         "{:?}",
         String::from_utf8_lossy(&output.stdout)
     );

@@ -140,7 +140,7 @@ pane or a plain local shell, nor whether auto mode is on.
 ## Progress
 
 - [x] Task 1: Auto-create the workspace on `--auto`
-- [ ] Task 2: Native verbatim titles
+- [x] Task 2: Native verbatim titles
 - [ ] Task 3: Status lines
 - [ ] Task 4: Documentation
 
@@ -216,6 +216,9 @@ Zed-native rendering.
 **Validation:**
 - Run: `cargo test --test thread_flow --all-features`
 - Expected: all tests pass.
+
+**Result:** Done. `emit_title` emits the title (or fallback) verbatim; the four OSC
+assertions in tests/thread_flow.rs updated. thread_flow green (27).
 
 ### Task 3: Status lines
 

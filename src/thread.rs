@@ -389,17 +389,17 @@ fn wait_for_stop(stop: &(Mutex<bool>, Condvar), interval: Duration) -> bool {
     }
 }
 
+/// The title is forwarded verbatim: Zed's agent panel renders the raw OSC title (and
+/// promotes a leading decorative glyph to the row icon), so any zerdr-added prefix
+/// would diverge from how a natively-run agent looks. An empty title intentionally
+/// falls back to the workspace label so a plain-shell tab still says where it lives.
 fn emit_title(last: &mut Option<String>, agent: &AgentInfo, fallback: Option<&str>) {
-    let detail = agent
+    let label = agent
         .title
         .as_deref()
         .or(fallback)
-        .unwrap_or(&agent.workspace_id);
-    let label = if agent.kind.is_empty() {
-        detail.to_owned()
-    } else {
-        format!("{} \u{b7} {detail}", agent.kind)
-    };
+        .unwrap_or(&agent.workspace_id)
+        .to_owned();
     if last.as_deref() == Some(label.as_str()) {
         return;
     }
