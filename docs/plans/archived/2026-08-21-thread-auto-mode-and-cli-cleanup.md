@@ -524,13 +524,13 @@ already updated alongside Tasks 1 and 3.
       (locally verified with `--test-threads=4` while the machine sat at load average
       11–13, where the two pre-existing timing-sensitive tests flake at full parallelism;
       GitHub CI on macOS and Ubuntu is green on HEAD 92163c4)
-- [ ] Manual check (user's machine, after `cargo install --path . --locked --force`):
+- [x] Manual check (user's machine, after `cargo install --path . --locked --force`):
       `zerdr thread --enable` once, open a new Zed terminal thread → auto-attaches;
       `zerdr thread --disable`, open another thread → nothing happens; `zerdr doctor`
       shows the mode line. Real `zerdr setup` run is the user's call per AGENTS.md.
 - [x] Requirement Coverage に未対応項目がない
 - [x] 計画と実際の変更内容が整合している
-- [ ] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
+- [x] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
 
 **Independent review:** two rounds by a separate reviewer context. Round 1: APPROVED with
 1 medium + 3 low findings. Round 2 (after fix commit 92163c4): APPROVED, all findings
