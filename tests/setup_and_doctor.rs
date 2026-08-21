@@ -1394,18 +1394,13 @@ fn doctor_fails_when_zed_lacks_add_capability() {
 fn setup_leaves_zed_settings_alone_and_prints_the_thread_hint() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
-    let expected = format!(
-        "{} thread",
-        assert_cmd::cargo::cargo_bin!("zerdr").display()
-    );
 
     env.command()
         .arg("setup")
         .assert()
         .success()
         .stdout(predicate::str::contains("zerdr thread"))
-        .stdout(predicate::str::contains("terminal_init_command"))
-        .stdout(predicate::str::contains(expected.as_str()));
+        .stdout(predicate::str::contains("zerdr thread --enable"));
 
     assert!(
         !paths.zed_settings_file.exists(),
@@ -1417,6 +1412,217 @@ fn setup_leaves_zed_settings_alone_and_prints_the_thread_hint() {
         install.get("terminal_init_command_fingerprint").is_none(),
         "{install}"
     );
+}
+
+fn expected_init_command() -> String {
+    format!(
+        "{} thread --auto",
+        assert_cmd::cargo::cargo_bin!("zerdr").display()
+    )
+}
+
+#[test]
+fn thread_enable_requires_setup_first() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+
+    env.command()
+        .args(["thread", "--enable"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("run `zerdr setup`"));
+
+    assert!(!paths.thread_auto_flag_file.exists());
+    assert!(!paths.zed_settings_file.exists());
+}
+
+#[test]
+fn thread_enable_installs_the_init_command_and_is_idempotent() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    env.command().arg("setup").assert().success();
+    fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
+    fs::write(
+        &paths.zed_settings_file,
+        "{\n  // my editor preferences\n  \"theme\": \"One Dark\"\n}\n",
+    )
+    .unwrap();
+
+    env.command()
+        .args(["thread", "--enable"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("thread auto mode is enabled"));
+
+    let settings = fs::read_to_string(&paths.zed_settings_file).unwrap();
+    assert_eq!(
+        parse_settings(&settings)["agent"]["terminal_init_command"],
+        serde_json::Value::String(expected_init_command()),
+        "{settings}"
+    );
+    assert!(
+        settings.contains("// my editor preferences"),
+        "unrelated JSONC content must survive: {settings}"
+    );
+    assert!(paths.thread_auto_flag_file.exists());
+    let install: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
+    assert!(
+        install["terminal_init_command_fingerprint"].is_string(),
+        "{install}"
+    );
+    let backups = paths.state_dir.join("backups");
+    assert!(
+        fs::read_dir(&backups)
+            .unwrap()
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().starts_with("settings-")),
+        "enable must back the settings file up before writing"
+    );
+
+    env.command()
+        .args(["thread", "--enable"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&paths.zed_settings_file).unwrap(),
+        settings,
+        "a second enable must not rewrite the settings file"
+    );
+}
+
+#[test]
+fn thread_enable_adopts_a_manually_set_matching_value() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    env.command().arg("setup").assert().success();
+    fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
+    let original = format!(
+        "{{\n  \"agent\": {{ \"terminal_init_command\": {} }}\n}}\n",
+        serde_json::to_string(&expected_init_command()).unwrap()
+    );
+    fs::write(&paths.zed_settings_file, &original).unwrap();
+
+    env.command()
+        .args(["thread", "--enable"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&paths.zed_settings_file).unwrap(),
+        original
+    );
+    assert!(paths.thread_auto_flag_file.exists());
+    let install: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
+    assert!(
+        install["terminal_init_command_fingerprint"].is_string(),
+        "{install}"
+    );
+}
+
+#[test]
+fn thread_enable_refuses_a_foreign_init_command() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    env.command().arg("setup").assert().success();
+    fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
+    let original = "{\n  \"agent\": { \"terminal_init_command\": \"claude\" }\n}\n";
+    fs::write(&paths.zed_settings_file, original).unwrap();
+
+    env.command()
+        .args(["thread", "--enable"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already set"));
+
+    assert_eq!(
+        fs::read_to_string(&paths.zed_settings_file).unwrap(),
+        original
+    );
+    assert!(!paths.thread_auto_flag_file.exists());
+    let install: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
+    assert!(install.get("terminal_init_command_fingerprint").is_none());
+}
+
+#[test]
+fn thread_disable_removes_only_the_flag() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    env.command().arg("setup").assert().success();
+    env.command()
+        .args(["thread", "--enable"])
+        .assert()
+        .success();
+    let settings = fs::read_to_string(&paths.zed_settings_file).unwrap();
+
+    env.command()
+        .args(["thread", "--disable"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("thread auto mode is disabled"));
+
+    assert!(!paths.thread_auto_flag_file.exists());
+    assert_eq!(
+        fs::read_to_string(&paths.zed_settings_file).unwrap(),
+        settings,
+        "disable must leave the Zed settings alone"
+    );
+
+    env.command()
+        .args(["thread", "--disable"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn setup_after_enable_preserves_the_init_command_and_fingerprint() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    env.command().arg("setup").assert().success();
+    env.command()
+        .args(["thread", "--enable"])
+        .assert()
+        .success();
+    let settings = fs::read_to_string(&paths.zed_settings_file).unwrap();
+
+    env.command().arg("setup").assert().success();
+
+    assert_eq!(
+        fs::read_to_string(&paths.zed_settings_file).unwrap(),
+        settings,
+        "setup must not migrate the enabled init command away"
+    );
+    let install: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
+    assert!(
+        install["terminal_init_command_fingerprint"].is_string(),
+        "setup must carry the enable-recorded fingerprint forward: {install}"
+    );
+}
+
+#[test]
+fn uninstall_after_enable_removes_the_init_command_and_flag() {
+    let env = TestEnv::new();
+    let paths = Paths::for_test(env.root.path());
+    env.command().arg("setup").assert().success();
+    env.command()
+        .args(["thread", "--enable"])
+        .assert()
+        .success();
+
+    env.command().arg("uninstall").assert().success();
+
+    let after = fs::read_to_string(&paths.zed_settings_file).unwrap();
+    assert!(
+        parse_settings(&after)
+            .get("agent")
+            .and_then(|agent| agent.get("terminal_init_command"))
+            .is_none(),
+        "{after}"
+    );
+    assert!(!paths.thread_auto_flag_file.exists());
 }
 
 #[test]
@@ -1435,10 +1641,10 @@ fn setup_leaves_unrelated_zed_settings_byte_identical() {
     );
 }
 
-/// Installs made before init-command management was dropped left the setting and its
-/// ownership fingerprint behind; setup migrates them away, with a backup.
+/// An init command recorded by an older install (any value) stays in place across setup;
+/// only uninstall consumes the fingerprint and cleans it up.
 #[test]
-fn setup_removes_a_previously_owned_init_command() {
+fn setup_preserves_an_owned_init_command_and_its_fingerprint() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
     env.command().arg("setup").assert().success();
@@ -1456,25 +1662,16 @@ fn setup_removes_a_previously_owned_init_command() {
 
     env.command().arg("setup").assert().success();
 
-    let after = fs::read_to_string(&paths.zed_settings_file).unwrap();
-    assert!(
-        parse_settings(&after)["agent"]
-            .get("terminal_init_command")
-            .is_none(),
-        "{after}"
+    assert_eq!(
+        fs::read_to_string(&paths.zed_settings_file).unwrap(),
+        original
     );
-    assert!(after.contains("One Dark"), "{after}");
     let install: serde_json::Value =
         serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
-    assert!(install.get("terminal_init_command_fingerprint").is_none());
-    let backups = paths.state_dir.join("backups");
-    let saved = fs::read_dir(&backups)
-        .unwrap()
-        .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with("settings-"))
-        .map(|entry| fs::read_to_string(entry.path()).unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(saved, vec![original]);
+    assert!(
+        install["terminal_init_command_fingerprint"].is_string(),
+        "{install}"
+    );
 }
 
 #[test]
@@ -1530,25 +1727,29 @@ fn uninstall_removes_a_previously_owned_init_command() {
     );
 }
 
-/// The init command is optional automation now, so doctor informs and never fails on it.
+/// Thread auto mode is optional automation, so doctor informs and never fails on it.
 #[test]
-fn doctor_reports_the_terminal_init_command_informationally() {
-    let expected = format!(
-        "{} thread",
-        assert_cmd::cargo::cargo_bin!("zerdr").display()
-    );
-    let cases = [
-        (None, "Zed terminal_init_command is not set"),
+fn doctor_reports_thread_auto_mode_informationally() {
+    let expected = expected_init_command();
+    let cases: [(bool, Option<&str>, &str); 4] = [
+        (false, None, "thread auto mode is disabled"),
         (
-            Some("claude"),
-            "Zed terminal_init_command is set to a custom value",
+            true,
+            Some(expected.as_str()),
+            "thread auto mode is enabled: Zed terminal_init_command runs",
         ),
         (
-            Some(expected.as_str()),
-            "Zed terminal_init_command automates zerdr thread",
+            true,
+            Some("claude"),
+            "thread auto mode is enabled but Zed terminal_init_command is set to",
+        ),
+        (
+            true,
+            None,
+            "thread auto mode is enabled but Zed terminal_init_command is not set",
         ),
     ];
-    for (existing, report) in cases {
+    for (enabled, existing, report) in cases {
         let env = TestEnv::new();
         let paths = Paths::for_test(env.root.path());
         if let Some(existing) = existing {
@@ -1563,6 +1764,9 @@ fn doctor_reports_the_terminal_init_command_informationally() {
             .unwrap();
         }
         env.command().arg("setup").assert().success();
+        if enabled {
+            fs::write(&paths.thread_auto_flag_file, b"").unwrap();
+        }
 
         env.command()
             .arg("doctor")
@@ -1582,11 +1786,11 @@ fn install_state_with_a_legacy_fingerprint_still_loads() {
     env.command().arg("doctor").assert().success();
 }
 
-/// Zed configuration is commonly a symlink into a dotfiles checkout. Setup must operate
-/// on the real file so the symlink survives and the dotfiles copy stays the source of
-/// truth — for the owned tasks it installs and for the init command it migrates away.
+/// Zed configuration is commonly a symlink into a dotfiles checkout. Setup and
+/// `thread --enable` must operate on the real files so the symlinks survive and the
+/// dotfiles copies stay the source of truth.
 #[test]
-fn setup_writes_through_symlinked_zed_configuration() {
+fn setup_and_thread_enable_write_through_symlinked_zed_configuration() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
     let dotfiles = env.root.path().join("dotfiles");
@@ -1594,22 +1798,16 @@ fn setup_writes_through_symlinked_zed_configuration() {
     fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
     let real_settings = dotfiles.join("settings.json");
     let real_tasks = dotfiles.join("tasks.json");
-    let command = format!(
-        "{} thread",
-        assert_cmd::cargo::cargo_bin!("zerdr").display()
-    );
-    let seeded_settings = format!(
-        "{{\n  \"theme\": \"One Dark\",\n  \"agent\": {{ \"terminal_init_command\": {} }}\n}}\n",
-        serde_json::to_string(&command).unwrap()
-    );
-    fs::write(&real_settings, &seeded_settings).unwrap();
+    fs::write(&real_settings, "{\n  \"theme\": \"One Dark\"\n}\n").unwrap();
     fs::write(&real_tasks, "[]\n").unwrap();
     symlink(&real_settings, &paths.zed_settings_file).unwrap();
     symlink(&real_tasks, &paths.zed_tasks_file).unwrap();
-    env.command().arg("setup").assert().success();
-    seed_owned_install(&paths, &command);
 
     env.command().arg("setup").assert().success();
+    env.command()
+        .args(["thread", "--enable"])
+        .assert()
+        .success();
 
     for link in [&paths.zed_settings_file, &paths.zed_tasks_file] {
         assert!(
@@ -1619,10 +1817,9 @@ fn setup_writes_through_symlinked_zed_configuration() {
         );
     }
     let settings = fs::read_to_string(&real_settings).unwrap();
-    assert!(
-        parse_settings(&settings)["agent"]
-            .get("terminal_init_command")
-            .is_none(),
+    assert_eq!(
+        parse_settings(&settings)["agent"]["terminal_init_command"],
+        serde_json::Value::String(expected_init_command()),
         "{settings}"
     );
     assert!(settings.contains("One Dark"), "{settings}");
@@ -1635,8 +1832,9 @@ fn setup_writes_through_symlinked_zed_configuration() {
 }
 
 /// A symlink with no target is a broken configuration, not something to write through.
+/// Setup no longer opens the settings file, so only `thread --enable` refuses it.
 #[test]
-fn setup_refuses_a_broken_zed_configuration_symlink() {
+fn thread_enable_refuses_a_broken_settings_symlink() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
     fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
@@ -1645,12 +1843,15 @@ fn setup_refuses_a_broken_zed_configuration_symlink() {
         &paths.zed_settings_file,
     )
     .unwrap();
+    env.command().arg("setup").assert().success();
 
     env.command()
-        .arg("setup")
+        .args(["thread", "--enable"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("broken symlink"));
+
+    assert!(!paths.thread_auto_flag_file.exists());
 }
 
 fn seed_owned_install(paths: &Paths, command: &str) {

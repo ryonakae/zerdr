@@ -53,6 +53,15 @@ pub enum Command {
         /// Create the Herdr workspace when none matches this Git checkout.
         #[arg(long, conflicts_with = "target")]
         create: bool,
+        /// Attach best-effort, and only while thread auto mode is enabled.
+        #[arg(long, conflicts_with_all = ["target", "kind", "create"])]
+        auto: bool,
+        /// Turn on thread auto mode, installing Zed's terminal_init_command once.
+        #[arg(long, conflicts_with_all = ["target", "kind", "create", "session", "auto"])]
+        enable: bool,
+        /// Turn off thread auto mode; Zed settings are left as they are.
+        #[arg(long, conflicts_with_all = ["target", "kind", "create", "session", "auto", "enable"])]
+        disable: bool,
     },
     /// Install the Herdr plugin and Zed tasks.
     Setup,

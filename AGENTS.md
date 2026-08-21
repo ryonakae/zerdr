@@ -44,7 +44,7 @@ CI runs these checks on macOS and Ubuntu. Platform-specific behavior needs cover
 - `src/sync.rs` maps focused workspaces to Git roots and routes them into Zed.
 - `src/thread.rs` resolves and attaches Zed terminal threads to Herdr agents, and mirrors agent titles and bells into the threads sidebar.
 - `src/state.rs` owns bindings, route schemas, leases, locks, and atomic persistence.
-- `src/setup.rs` merges the Herdr plugin and Zed tasks into user configuration, and migrates away the `agent.terminal_init_command` older versions installed.
+- `src/setup.rs` merges the Herdr plugin and Zed tasks into user configuration, and owns thread auto mode: `zerdr thread --enable` installs `agent.terminal_init_command` with a recorded fingerprint that setup preserves and uninstall consumes.
 - `src/doctor.rs` checks capabilities, installation state, bindings, routes, and leases.
 - `src/zed.rs` wraps the Zed CLI.
 - `assets/herdr/` and `assets/zed/` contain templates embedded by `setup`.

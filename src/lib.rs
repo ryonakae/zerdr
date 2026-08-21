@@ -76,17 +76,32 @@ pub fn run() -> Result<()> {
         Command::Unbind { .. } => run_manual(explicit_session, |synchronizer| {
             synchronizer.unbind(explicit_session)
         }),
+        Command::Thread { enable: true, .. } | Command::Thread { disable: true, .. }
+            if explicit_session.is_some() =>
+        {
+            Err(Error::User(
+                "--session cannot be used when toggling thread auto mode".to_owned(),
+            ))
+        }
+        Command::Thread { enable: true, .. } => setup::thread_auto_enable(),
+        Command::Thread { disable: true, .. } => setup::thread_auto_disable(),
         Command::Thread {
             target,
             kind,
             create,
+            auto,
             ..
-        } => thread::run(
-            explicit_session.unwrap_or(DEFAULT_SESSION_NAME),
-            target.as_deref(),
-            kind.as_deref(),
-            *create,
-        ),
+        } => {
+            if *auto && !setup::thread_auto_enabled(&state::Paths::discover()?) {
+                return Ok(());
+            }
+            thread::run(
+                explicit_session.unwrap_or(DEFAULT_SESSION_NAME),
+                target.as_deref(),
+                kind.as_deref(),
+                *create,
+            )
+        }
         Command::Setup => setup::setup(),
         Command::Uninstall { purge } => setup::uninstall(*purge),
         Command::Doctor { .. } => match remote {

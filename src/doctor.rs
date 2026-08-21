@@ -112,7 +112,7 @@ pub fn doctor(session_name: &str) -> Result<()> {
             Ok(()) => report.pass("all owned Zed task payloads are valid"),
             Err(error) => report.fail(error.to_string()),
         }
-        report_init_command(&paths, install, &mut report);
+        report_thread_auto(&paths, install, &mut report);
     }
 
     match BindingStore::new(paths.bindings_file.clone()).load() {
@@ -270,7 +270,7 @@ fn inspect_static_installation(paths: &Paths, report: &mut Report) {
             Ok(()) => report.pass("all owned Zed task payloads are valid"),
             Err(error) => report.fail(error.to_string()),
         }
-        report_init_command(paths, install, report);
+        report_thread_auto(paths, install, report);
     }
 }
 
@@ -320,15 +320,21 @@ fn inspect_manifest(paths: &Paths, install: &InstallState) -> Result<()> {
     }
 }
 
-/// The init command is optional automation, so its state is reported without failing:
+/// Thread auto mode is optional automation, so its state is reported without failing:
 /// attaching manually with `zerdr thread` is the default workflow.
-fn report_init_command(paths: &Paths, install: &InstallState, report: &mut Report) {
+fn report_thread_auto(paths: &Paths, install: &InstallState, report: &mut Report) {
+    if !paths.thread_auto_flag_file.exists() {
+        report.pass(
+            "thread auto mode is disabled; attach manually with `zerdr thread` or run `zerdr thread --enable`",
+        );
+        return;
+    }
     let expected = terminal_init_command(&install.executable);
-    let not_set = "Zed terminal_init_command is not set; attach by running `zerdr thread` inside a Zed terminal thread";
+    let not_set = "thread auto mode is enabled but Zed terminal_init_command is not set; run `zerdr thread --enable`";
     let text = match fs::read_to_string(&paths.zed_settings_file) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            report.pass(not_set);
+            report.warn(not_set);
             return;
         }
         Err(error) => {
@@ -342,13 +348,13 @@ fn report_init_command(paths: &Paths, install: &InstallState, report: &mut Repor
     match installed_init_command(&text) {
         Ok(Some(current)) if current == expected => {
             report.pass(format!(
-                "Zed terminal_init_command automates zerdr thread: {current}"
+                "thread auto mode is enabled: Zed terminal_init_command runs {current}"
             ));
         }
-        Ok(Some(current)) => report.pass(format!(
-            "Zed terminal_init_command is set to a custom value: {current:?}"
+        Ok(Some(current)) => report.warn(format!(
+            "thread auto mode is enabled but Zed terminal_init_command is set to {current:?}; clear it and run `zerdr thread --enable`"
         )),
-        Ok(None) => report.pass(not_set),
+        Ok(None) => report.warn(not_set),
         Err(error) => report.warn(format!("could not inspect the Zed settings file: {error}")),
     }
 }

@@ -240,6 +240,9 @@ fn thread_exposes_session_kind_and_create_options() {
         .stdout(predicate::str::contains("--session <SESSION>"))
         .stdout(predicate::str::contains("--kind <KIND>"))
         .stdout(predicate::str::contains("--create"))
+        .stdout(predicate::str::contains("--auto"))
+        .stdout(predicate::str::contains("--enable"))
+        .stdout(predicate::str::contains("--disable"))
         .stdout(predicate::str::contains("[TARGET]"));
     cargo_bin_cmd!("zerdr")
         .arg("--help")
@@ -259,6 +262,60 @@ fn thread_rejects_auto_start_options_alongside_an_explicit_target() {
             .assert()
             .code(2)
             .stderr(predicate::str::contains("cannot be used with"));
+        assert_eq!(env.read_log(), "");
+    }
+}
+
+#[test]
+fn thread_mode_flags_are_mutually_exclusive_and_reject_attach_options() {
+    let conflicting: [&[&str]; 7] = [
+        &["thread", "--enable", "--disable"],
+        &["thread", "--enable", "--auto"],
+        &["thread", "--disable", "--auto"],
+        &["thread", "--enable", "wM:p8"],
+        &["thread", "--enable", "--session", "work"],
+        &["thread", "--auto", "--kind", "pi"],
+        &["thread", "--auto", "wM:p8"],
+    ];
+    for args in conflicting {
+        let env = TestEnv::new();
+        env.command()
+            .args(args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("cannot be used with"));
+        assert_eq!(env.read_log(), "");
+    }
+}
+
+#[test]
+fn thread_mode_flags_reject_the_root_session_option() {
+    for flag in ["--enable", "--disable"] {
+        let env = TestEnv::new();
+        env.command()
+            .args(["--session", "work", "thread", flag])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "--session cannot be used when toggling thread auto mode",
+            ));
+        assert_eq!(env.read_log(), "");
+    }
+}
+
+#[test]
+fn thread_auto_is_a_silent_no_op_while_the_mode_is_disabled() {
+    for args in [
+        vec!["thread", "--auto"],
+        vec!["thread", "--auto", "--session", "work"],
+    ] {
+        let env = TestEnv::new();
+        env.command()
+            .args(args)
+            .assert()
+            .success()
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::is_empty());
         assert_eq!(env.read_log(), "");
     }
 }

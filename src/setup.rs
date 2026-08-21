@@ -22,8 +22,8 @@ pub(crate) struct InstallState {
     pub(crate) schema_version: u32,
     pub(crate) executable: PathBuf,
     pub(crate) task_fingerprints: BTreeMap<String, String>,
-    /// Recorded only by older versions that managed Zed's `agent.terminal_init_command`;
-    /// kept so setup and uninstall can migrate that value away.
+    /// Present while zerdr owns Zed's `agent.terminal_init_command`, recorded by
+    /// `zerdr thread --enable` and consumed by uninstall.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) terminal_init_command_fingerprint: Option<String>,
 }
@@ -190,7 +190,6 @@ pub fn setup() -> Result<()> {
     let generated = generated_tasks(&executable)?;
     let old_install = load_install_state(&paths.install_state_file)?;
     let tasks_file = resolve_config_file(&paths.zed_tasks_file)?;
-    let settings_file = resolve_config_file(&paths.zed_settings_file)?;
     let original = read_optional_file(&tasks_file)?;
     let original_text = original
         .as_deref()
@@ -199,21 +198,6 @@ pub fn setup() -> Result<()> {
         .map_err(|error| Error::User(format!("Zed tasks file is not UTF-8: {error}")))?
         .unwrap_or("[]\n");
     let merged = merge_tasks(original_text, &generated, old_install.as_ref())?;
-    let init_command = terminal_init_command(&executable);
-    let original_settings = read_optional_file(&settings_file)?;
-    let original_settings_text = original_settings
-        .as_deref()
-        .map(std::str::from_utf8)
-        .transpose()
-        .map_err(|error| Error::User(format!("Zed settings file is not UTF-8: {error}")))?
-        .unwrap_or("{}\n")
-        .to_owned();
-    // The init command became optional manual automation; a value written by an older
-    // zerdr (still owned per the recorded fingerprint) is migrated away here.
-    let migrated_settings = match old_install.as_ref() {
-        Some(previous) => remove_owned_init_command(&original_settings_text, previous)?,
-        None => original_settings_text.clone(),
-    };
     let install = InstallState {
         schema_version: INSTALL_SCHEMA_VERSION,
         executable: executable.clone(),
@@ -221,7 +205,11 @@ pub fn setup() -> Result<()> {
             .iter()
             .map(|task| (task_label(task).unwrap().to_owned(), fingerprint(task)))
             .collect(),
-        terminal_init_command_fingerprint: None,
+        // Ownership recorded by `zerdr thread --enable` must survive rerunning setup,
+        // or uninstall could no longer clean the settings value up.
+        terminal_init_command_fingerprint: old_install
+            .as_ref()
+            .and_then(|state| state.terminal_init_command_fingerprint.clone()),
     };
 
     let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
@@ -240,20 +228,6 @@ pub fn setup() -> Result<()> {
         rollback_plugin(&herdr, &paths, previous_manifest.as_deref());
         return Err(error);
     }
-    if migrated_settings.as_bytes() != original_settings_text.as_bytes() {
-        let write = backup_before_mutation(&paths, "settings", &original_settings).and_then(|()| {
-            write_checked(
-                &settings_file,
-                original_settings.as_deref(),
-                migrated_settings.as_bytes(),
-            )
-        });
-        if let Err(error) = write {
-            let _ = restore_optional(&tasks_file, original.as_deref());
-            rollback_plugin(&herdr, &paths, previous_manifest.as_deref());
-            return Err(error);
-        }
-    }
     let install_write =
         if std::env::var("ZERDR_TEST_FAIL_INSTALL_STATE_WRITE").is_ok_and(|value| value == "1") {
             Err(Error::User(
@@ -263,7 +237,6 @@ pub fn setup() -> Result<()> {
             write_json(&paths.install_state_file, &install)
         };
     if let Err(error) = install_write {
-        let _ = restore_optional(&settings_file, original_settings.as_deref());
         let _ = restore_optional(&tasks_file, original.as_deref());
         rollback_plugin(&herdr, &paths, previous_manifest.as_deref());
         return Err(error);
@@ -271,7 +244,7 @@ pub fn setup() -> Result<()> {
 
     println!("zerdr setup complete");
     println!(
-        "Attach a Zed terminal thread to Herdr by running `zerdr thread` inside it.\nOptional automation: set Zed's agent.terminal_init_command to {init_command:?} to attach every new terminal thread."
+        "Attach a Zed terminal thread to Herdr by running `zerdr thread` inside it.\nOptional automation: run `zerdr thread --enable` to attach every new terminal thread automatically."
     );
     println!(
         "Add this Herdr keybinding manually if desired:\n{}",
@@ -337,6 +310,11 @@ pub fn uninstall(purge: bool) -> Result<()> {
                 )?;
             }
         }
+    }
+    if let Err(error) = fs::remove_file(&paths.thread_auto_flag_file)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(Error::io(&paths.thread_auto_flag_file, error));
     }
     if paths.plugin_dir.exists() {
         fs::remove_dir_all(&paths.plugin_dir)
@@ -466,7 +444,104 @@ fn parse_tasks(text: &str) -> Result<CstRootNode> {
 }
 
 pub(crate) fn terminal_init_command(executable: &Path) -> String {
-    format!("{} thread", executable.display())
+    format!("{} thread --auto", executable.display())
+}
+
+pub(crate) fn thread_auto_enabled(paths: &Paths) -> bool {
+    paths.thread_auto_flag_file.exists()
+}
+
+pub fn thread_auto_enable() -> Result<()> {
+    let paths = Paths::discover()?;
+    let install = load_install_state(&paths.install_state_file)?
+        .ok_or_else(|| setup_guidance(Error::User("zerdr is not set up".to_owned())))?;
+    let expected = terminal_init_command(&install.executable);
+    let expected_fingerprint = fingerprint(&Value::String(expected.clone()));
+    let settings_file = resolve_config_file(&paths.zed_settings_file)?;
+    let original = read_optional_file(&settings_file)?;
+    let text = original
+        .as_deref()
+        .map(std::str::from_utf8)
+        .transpose()
+        .map_err(|error| Error::User(format!("Zed settings file is not UTF-8: {error}")))?
+        .unwrap_or("{}\n")
+        .to_owned();
+    match installed_init_command(&text)? {
+        None => {
+            let updated = insert_init_command(&text, &expected)?;
+            // Ownership is recorded before the settings write: a fingerprint without a
+            // value is harmless, while a value without a fingerprint could never be
+            // cleaned up by uninstall.
+            record_init_command_fingerprint(&paths, &install, &expected_fingerprint)?;
+            backup_before_mutation(&paths, "settings", &original)?;
+            write_checked(&settings_file, original.as_deref(), updated.as_bytes())?;
+            println!("zerdr: installed Zed agent.terminal_init_command {expected:?}");
+        }
+        Some(current) if current == expected => {
+            record_init_command_fingerprint(&paths, &install, &expected_fingerprint)?;
+        }
+        Some(current) => {
+            return Err(Error::User(format!(
+                "Zed agent.terminal_init_command is already set to {current:?}; remove it before enabling thread auto mode"
+            )));
+        }
+    }
+    fs::create_dir_all(&paths.state_dir).map_err(|error| Error::io(&paths.state_dir, error))?;
+    fs::write(&paths.thread_auto_flag_file, b"")
+        .map_err(|error| Error::io(&paths.thread_auto_flag_file, error))?;
+    println!("zerdr: thread auto mode is enabled");
+    Ok(())
+}
+
+pub fn thread_auto_disable() -> Result<()> {
+    let paths = Paths::discover()?;
+    if let Err(error) = fs::remove_file(&paths.thread_auto_flag_file)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(Error::io(&paths.thread_auto_flag_file, error));
+    }
+    println!("zerdr: thread auto mode is disabled");
+    Ok(())
+}
+
+fn record_init_command_fingerprint(
+    paths: &Paths,
+    install: &InstallState,
+    expected: &str,
+) -> Result<()> {
+    if install.terminal_init_command_fingerprint.as_deref() == Some(expected) {
+        return Ok(());
+    }
+    let updated = InstallState {
+        terminal_init_command_fingerprint: Some(expected.to_owned()),
+        ..install.clone()
+    };
+    write_json(&paths.install_state_file, &updated)
+}
+
+fn insert_init_command(text: &str, value: &str) -> Result<String> {
+    let root = CstRootNode::parse(text, &ParseOptions::default())
+        .map_err(|error| Error::User(format!("failed to parse Zed settings JSONC: {error}")))?;
+    if root.value().is_some() && root.object_value().is_none() {
+        return Err(Error::User(
+            "Zed settings file must contain a top-level object".to_owned(),
+        ));
+    }
+    let root_object = root.object_value_or_set();
+    let agent = match root_object.object_value("agent") {
+        Some(agent) => agent,
+        None => {
+            root_object.append("agent", CstInputValue::Object(Vec::new()));
+            root_object
+                .object_value("agent")
+                .expect("the agent object was just appended")
+        }
+    };
+    agent.append(
+        "terminal_init_command",
+        CstInputValue::String(value.to_owned()),
+    );
+    Ok(root.to_string())
 }
 
 /// The `agent.terminal_init_command` currently in a Zed settings document, if any.

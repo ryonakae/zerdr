@@ -212,7 +212,7 @@ zerdr setup | uninstall [--purge] | [--session NAME] doctor
 
 - [x] Task 1: Remove external routing
 - [x] Task 2: Remove pick/next/previous and shrink Zed tasks
-- [ ] Task 3: Auto-mode flag with `--enable`/`--disable`
+- [x] Task 3: Auto-mode flag with `--enable`/`--disable`
 - [ ] Task 4: `--auto` best-effort attach
 - [ ] Task 5: Documentation
 
@@ -390,6 +390,20 @@ on; `--disable` turns it off; setup/uninstall/doctor respect the new ownership.
 **Validation:**
 - Run: `cargo test --test setup_and_doctor --all-features && cargo test --all-targets --all-features`
 - Expected: all tests pass.
+
+**Result:** Done. Enable/disable live in `src/setup.rs` (`thread_auto_enable`/`thread_auto_disable`/
+`thread_auto_enabled`); the flag is `Paths.thread_auto_flag_file` (`<state>/thread-auto`).
+Implementation notes beyond the plan: the fingerprint is recorded in install.json *before*
+the settings write (a fingerprint without a value is harmless; the reverse orphans the
+value); a non-object settings root is rejected; the root-level `--session` (which clap
+conflicts cannot reach) is rejected for `--enable`/`--disable` in dispatch. The `--auto`
+flag also landed here with its disabled-is-a-silent-no-op behavior tested in
+`tests/cli_contract.rs`; the enabled best-effort path is Task 4. Setup no longer opens the
+settings file at all, so the broken-symlink refusal moved to `thread --enable`
+(`thread_enable_refuses_a_broken_settings_symlink`). Validation: full suite green
+(185 tests), fmt clean, clippy `-D warnings` clean. One transient failure of the known
+timing-sensitive `doctor_waits_for_admission_and_preserves_the_new_live_route` under
+first-build parallel load did not reproduce in two subsequent full runs.
 
 ### Task 4: `--auto` best-effort attach
 
