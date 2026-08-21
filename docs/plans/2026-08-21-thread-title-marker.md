@@ -227,9 +227,10 @@ the enrichment note without naming the plugin. Validation greps confirm.
 
 ## Final Validation
 
-- [ ] `cargo fmt --all -- --check` — Expected: no diff
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings
-- [ ] `cargo test --all-targets --all-features` — Expected: all tests pass
+- [x] `cargo fmt --all -- --check` — Expected: no diff — clean
+- [x] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings — clean
+- [x] `cargo test --all-targets --all-features` — Expected: all tests pass — 200 tests green
+      (run at `--test-threads=4`; GitHub CI green on macOS and Ubuntu)
 - [ ] Manual check (user's machine, after `cargo install --path . --locked --force`):
       threads show `[herdr] Pi - ...` / `[herdr] Claude - ...` titles that follow the
       agents' own titles; a fresh shell pane shows `[herdr] <workspace>`; nothing is
@@ -237,6 +238,13 @@ the enrichment note without naming the plugin. Validation greps confirm.
 - [ ] Requirement Coverage に未対応項目がない
 - [ ] 計画と実際の変更内容が整合している
 - [ ] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
+
+**Independent review:** two rounds by a separate reviewer context. Round 1: APPROVED with
+one low correctness note (a prefix-only pi title of exactly "π - " would leave a dangling
+`[herdr] Pi - ` instead of falling back) and one informational process note. The low
+finding was fixed in a3dd936 (`.filter(|detail| !detail.is_empty())` + a test case).
+Round 2: APPROVED, no remaining issues. Implementation commits: 07d4286, c3bf4a2,
+a3dd936 (base 9af1db1), all pushed, CI green.
 
 ## Risks and Open Questions
 
