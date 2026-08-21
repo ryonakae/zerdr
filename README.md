@@ -45,7 +45,7 @@ The action opens the current workspace in Zed once and leaves Zed in front. `zer
 
 Open a terminal thread in Zed's agent panel and run `zerdr thread` inside it. zerdr finds the Herdr workspace for the project you have open — by explicit binding, by Herdr's recorded checkout, or by where the workspace's panes sit, remembering that last match as a binding — and attaches the thread to a free agent there. If every agent is already attached to another thread, it opens a fresh Herdr tab holding a plain shell, the same starting point as creating a tab in Herdr; launch whatever you like there and the sidebar title and notifications follow as soon as Herdr recognizes the agent. Pass `--kind pi` (or set `ZERDR_THREAD_KIND`) to have the fresh tab start an agent immediately instead.
 
-Every start prints one status line saying what the thread is connected to — an attached agent, a fresh Herdr tab, a created workspace, or (with auto mode off) a plain local shell — with the pane and workspace, so a Herdr pane and a local shell are distinguishable at a glance.
+Every start prints one status line saying what the thread is connected to — an attached agent, a fresh Herdr tab, a created workspace, a reattached pane, or (with auto mode off) a plain local shell — with the pane and workspace, so a Herdr pane and a local shell are distinguishable at a glance. A pane zerdr creates also gets one `# zerdr: ...` comment line typed into its shell, so the pane itself says where it came from whether you look at it from Zed or from Herdr.
 
 While attached, zerdr mirrors the Herdr terminal title into the threads sidebar exactly as the agent sets it — the same rendering as running the agent in a plain terminal thread, including Zed promoting a leading spinner glyph to the row icon — and rings the terminal bell when the agent stops working, which is what makes Zed notify you. An empty title falls back to the workspace label so a plain-shell tab still says where it lives. Enable Zed's notifications to see the bell:
 
@@ -58,7 +58,7 @@ While attached, zerdr mirrors the Herdr terminal title into the threads sidebar 
 }
 ```
 
-Because Herdr owns the session, closing a thread or restarting Zed does not stop the agent. Reopen a thread and run `zerdr thread` to attach again, or reach the same agent over SSH with `herdr` from another machine.
+Because Herdr owns the session, closing a thread or restarting Zed does not stop the agent. Reopen a thread and run `zerdr thread` to attach again, or reach the same agent over SSH with `herdr` from another machine. zerdr also remembers which panes its threads were attached to: a new bare thread first takes a free agent, then reattaches a remembered live shell pane, and only then creates a fresh tab — so restarting Zed restores the previous panes instead of piling up tabs. A pane freed by closing its thread is picked up by the next thread the same way.
 
 Attaching is manual by default, so Zed sessions that do not involve Herdr stay untouched. To attach every new terminal thread automatically, turn on thread auto mode:
 

@@ -156,7 +156,7 @@ piles up fresh Herdr tabs.
 
 - [x] Task 1: In-pane banner for created panes
 - [x] Task 2: Pane memory and restore
-- [ ] Task 3: Documentation
+- [x] Task 3: Documentation
 
 ## Tasks
 
@@ -295,6 +295,10 @@ green (200 tests at --test-threads=4), fmt/clippy clean.
 **Validation:**
 - Run: `rg -n "# zerdr|reattach" README.md`
 - Expected: the banner and restore descriptions are present.
+
+**Result:** Done. The status-line paragraph now mentions the banner and the reattached
+outcome; the resume paragraph describes the remembered-pane order (agent → remembered
+pane → fresh tab) and the closed-thread pickup behavior. Validation grep confirms both.
 
 ## Requirement Coverage
 
