@@ -1195,3 +1195,72 @@ fn an_explicit_target_attach_is_remembered() {
         "{panes:?}"
     );
 }
+
+/// The banner must stay one literal comment line: control characters in a workspace
+/// label (or any interpolated part) would otherwise submit real input to the shell.
+#[test]
+fn banner_text_never_contains_control_characters() {
+    let fixture = Fixture::new();
+    let workspaces = serde_json::json!({
+        "result": {"workspaces": [{
+            "workspace_id": "w1",
+            "label": "evil\nlabel",
+            "focused": true,
+            "worktree": {"checkout_path": fixture.repo}
+        }]}
+    });
+    let tab = serde_json::json!({"result": {"root_pane": {"pane_id": "w1:p9"}}});
+
+    let output = fixture
+        .std_thread_command()
+        .arg("thread")
+        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
+        .env("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string())
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let log = fixture.env.read_log();
+    let banner = log
+        .lines()
+        .find(|line| line.contains("pane send-text w1:p9"))
+        .unwrap_or_else(|| panic!("no banner send-text in {log}"));
+    assert!(banner.contains("evil label"), "{log}");
+    assert!(!log.contains("evil\nlabel"), "{log}");
+}
+
+/// The banner lands before the agent starts on the workspace-creation path too.
+#[test]
+fn create_with_a_kind_writes_the_banner_before_the_agent_starts() {
+    let fixture = Fixture::new();
+    let workspace = serde_json::json!({
+        "result": {
+            "workspace": {"workspace_id": "w7", "label": "checkout"},
+            "root_pane": {"pane_id": "w7:p1"}
+        }
+    });
+
+    fixture
+        .thread_command()
+        .args(["thread", "--create", "--kind", "pi"])
+        .env(
+            "ZERDR_TEST_WORKSPACES_JSON",
+            r#"{"result":{"workspaces":[]}}"#,
+        )
+        .env("ZERDR_TEST_WORKSPACE_CREATE_JSON", workspace.to_string())
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .assert()
+        .success();
+
+    let log = fixture.env.read_log();
+    let banner_at = log
+        .find("pane send-text w7:p1")
+        .unwrap_or_else(|| panic!("no banner send-text in {log}"));
+    let start_at = log
+        .find("agent start zed-1 --kind pi --pane w7:p1")
+        .unwrap_or_else(|| panic!("no agent start in {log}"));
+    assert!(banner_at < start_at, "{log}");
+}

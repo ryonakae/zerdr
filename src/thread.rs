@@ -263,6 +263,18 @@ fn resolve_or_create(
     Ok((agent, lease, terminal, Attachment::NewTab))
 }
 
+fn single_line(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
 /// Recording is advisory (R4): a store hiccup must not fail an otherwise good attach.
 fn remember_pane(
     memory: &ThreadPaneMemory,
@@ -280,8 +292,14 @@ fn remember_pane(
 /// also never sent to a pane zerdr did not create, whose input belongs to whatever is
 /// already running there.
 fn send_banner(session: &Session<'_>, pane_id: &str, workspace: &str) {
+    // The banner becomes literal input typed into a live shell, so a control character
+    // smuggled in via a workspace label or directory name (a newline above all) would
+    // submit real commands instead of one comment. Everything interpolated is flattened
+    // to plain printable text first.
+    let pane_id_text = single_line(pane_id);
+    let workspace_text = single_line(workspace);
     let banner = format!(
-        "# zerdr: Herdr pane {pane_id} in workspace {workspace}, opened from a Zed terminal thread"
+        "# zerdr: Herdr pane {pane_id_text} in workspace {workspace_text}, opened from a Zed terminal thread"
     );
     let sent = session
         .herdr
