@@ -183,11 +183,17 @@ fn bare_thread_attaches_a_free_agent_in_the_matching_workspace() {
     );
     assert!(!log.contains("tab create"), "{log}");
     assert!(!log.contains("agent start"), "{log}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains(&format!("{OSC_PREFIX}review")),
-        "{:?}",
-        String::from_utf8_lossy(&output.stdout)
+        stdout.contains(&format!("{OSC_PREFIX}review")),
+        "{stdout:?}"
     );
+    let status = stdout.lines().next().unwrap_or_default();
+    assert!(status.starts_with("zerdr: "), "{stdout:?}");
+    assert!(status.contains("attached"), "{stdout:?}");
+    assert!(status.contains("w1:p1"), "{stdout:?}");
+    assert!(status.contains("checkout"), "{stdout:?}");
+    assert!(!stdout.contains("auto mode"), "{stdout:?}");
 }
 
 #[test]
@@ -240,11 +246,15 @@ fn an_empty_workspace_gets_a_new_tab_with_a_plain_shell() {
         "{log}"
     );
     assert!(!log.contains("agent attach"), "{log}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains(&format!("{OSC_PREFIX}checkout")),
-        "the sidebar shows the workspace label until an agent appears: {:?}",
-        String::from_utf8_lossy(&output.stdout)
+        stdout.contains(&format!("{OSC_PREFIX}checkout")),
+        "the sidebar shows the workspace label until an agent appears: {stdout:?}"
     );
+    let status = stdout.lines().next().unwrap_or_default();
+    assert!(status.starts_with("zerdr: "), "{stdout:?}");
+    assert!(status.contains("new Herdr tab"), "{stdout:?}");
+    assert!(status.contains("w1:p9"), "{stdout:?}");
 }
 
 /// Auto-starting an agent in the fresh tab is opt-in via the flag or the environment.
@@ -340,6 +350,15 @@ fn auto_attaches_a_free_agent_while_the_mode_is_enabled() {
         stdout.contains(&format!("{OSC_PREFIX}review")),
         "{stdout:?}"
     );
+    let status = stdout.lines().next().unwrap_or_default();
+    assert!(status.starts_with("zerdr: "), "{stdout:?}");
+    assert!(status.contains("auto mode is enabled"), "{stdout:?}");
+    assert!(status.contains("w1:p1"), "{stdout:?}");
+    assert!(status.contains("checkout"), "{stdout:?}");
+    assert!(
+        stdout.find(status).unwrap() < stdout.find(OSC_PREFIX).unwrap(),
+        "the status line comes before the first title: {stdout:?}"
+    );
     assert!(String::from_utf8_lossy(&output.stderr).is_empty());
 }
 
@@ -386,6 +405,12 @@ fn auto_without_a_matching_workspace_creates_and_binds_one() {
         .get("default", "w7")
         .unwrap();
     assert_eq!(bound, Some(fixture.repo.clone()));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let status = stdout.lines().next().unwrap_or_default();
+    assert!(status.contains("auto mode is enabled"), "{stdout:?}");
+    assert!(status.contains("created Herdr workspace"), "{stdout:?}");
+    assert!(status.contains("checkout"), "{stdout:?}");
+    assert!(status.contains("w7:p1"), "{stdout:?}");
 }
 
 /// Auto attach stays best-effort where creation cannot help: outside a Git checkout the
@@ -607,6 +632,12 @@ fn an_explicit_target_attaches_without_creating_anything() {
     assert!(log.contains("agent get w1:p1"), "{log}");
     assert!(!log.contains("tab create"), "{log}");
     assert!(!log.contains("agent start"), "{log}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let status = stdout.lines().next().unwrap_or_default();
+    assert!(status.starts_with("zerdr: "), "{stdout:?}");
+    assert!(status.contains("attached"), "{stdout:?}");
+    assert!(status.contains("w1:p1"), "{stdout:?}");
+    assert!(!stdout.contains("auto mode"), "{stdout:?}");
 }
 
 #[test]
@@ -667,8 +698,7 @@ fn an_empty_title_falls_back_to_the_workspace_label() {
     let output = child.wait_with_output().unwrap();
 
     assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .contains(&format!("{OSC_PREFIX}checkout")),
+        String::from_utf8_lossy(&output.stdout).contains(&format!("{OSC_PREFIX}checkout")),
         "{:?}",
         String::from_utf8_lossy(&output.stdout)
     );

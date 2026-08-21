@@ -141,7 +141,7 @@ pane or a plain local shell, nor whether auto mode is on.
 
 - [x] Task 1: Auto-create the workspace on `--auto`
 - [x] Task 2: Native verbatim titles
-- [ ] Task 3: Status lines
+- [x] Task 3: Status lines
 - [ ] Task 4: Documentation
 
 ## Tasks
@@ -262,6 +262,14 @@ mode is on or off.
 **Validation:**
 - Run: `cargo test --test thread_flow --all-features && cargo test --test cli_contract --all-features`
 - Expected: all tests pass.
+
+**Result:** Done. `run` split into a thin wrapper over `run_with_mode(…, auto)`; an
+`Attachment` enum (`Agent` / `NewTab` / `NewWorkspace { label }`) flows from both the
+explicit-`TARGET` arm and `resolve_or_create` to `print_status`, which prints one stdout
+line after the label lookup and before the attach spawn. The created-workspace label
+rides in the enum variant because a static workspace list cannot resolve it. All six
+outcomes asserted; the disabled test was renamed to
+`thread_auto_reports_the_disabled_mode_without_touching_herdr`. Full suite green (191).
 
 ### Task 4: Documentation
 

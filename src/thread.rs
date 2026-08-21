@@ -21,6 +21,13 @@ struct Session<'a> {
     socket: &'a Path,
 }
 
+/// How the pane this thread ended up on was obtained, for the status line.
+enum Attachment {
+    Agent,
+    NewTab,
+    NewWorkspace { label: String },
+}
+
 /// Best-effort attach for the auto-mode `terminal_init_command`. While the mode is on,
 /// a missing workspace is created rather than reported, and any remaining failure
 /// (outside a Git checkout, Herdr unavailable) leaves the thread usable as a plain
@@ -28,9 +35,10 @@ struct Session<'a> {
 pub fn run_auto(session_name: &str) -> Result<()> {
     let paths = Paths::discover()?;
     if !crate::setup::thread_auto_enabled(&paths) {
+        println!("zerdr: thread auto mode is disabled; this is a plain local shell");
         return Ok(());
     }
-    if let Err(error) = run(session_name, None, None, true) {
+    if let Err(error) = run_with_mode(session_name, None, None, true, true) {
         let message = error.to_string().replace('\n', " ");
         eprintln!("zerdr: {message}; starting a plain shell");
     }
@@ -42,6 +50,16 @@ pub fn run(
     target: Option<&str>,
     kind: Option<&str>,
     create: bool,
+) -> Result<()> {
+    run_with_mode(session_name, target, kind, create, false)
+}
+
+fn run_with_mode(
+    session_name: &str,
+    target: Option<&str>,
+    kind: Option<&str>,
+    create: bool,
+    auto: bool,
 ) -> Result<()> {
     let herdr = Herdr::from_env();
     let paths = Paths::discover()?;
@@ -55,13 +73,13 @@ pub fn run(
         socket: &socket,
     };
 
-    let (agent, _lease, terminal) = match target {
+    let (agent, _lease, terminal, attachment) = match target {
         Some(target) => {
             let agent = herdr
                 .agent_get_for(session_name, target)?
                 .ok_or_else(|| Error::User(format!("no Herdr agent matches {target:?}")))?;
             let lease = leases.acquire(session_name, &socket, &agent.pane_id)?;
-            (agent, lease, None)
+            (agent, lease, None, Attachment::Agent)
         }
         None => resolve_or_create(&session, &paths, kind, create)?,
     };
@@ -83,6 +101,7 @@ pub fn run(
         .iter()
         .find(|workspace| workspace.id == agent.workspace_id)
         .map(|workspace| workspace.label.clone());
+    print_status(auto, &attachment, &agent, label.as_deref());
 
     // A fresh pane holds only a shell, which `agent attach` refuses, so it is reached
     // through its terminal instead.
@@ -118,7 +137,7 @@ fn resolve_or_create(
     paths: &Paths,
     kind: Option<&str>,
     create: bool,
-) -> Result<(AgentInfo, ThreadLeaseGuard, Option<String>)> {
+) -> Result<(AgentInfo, ThreadLeaseGuard, Option<String>, Attachment)> {
     let cwd = std::env::current_dir()
         .map_err(|error| Error::User(format!("failed to read the current directory: {error}")))?;
     let root = canonical_git_root(&cwd).map_err(|error| {
@@ -152,13 +171,14 @@ fn resolve_or_create(
                 .herdr
                 .workspace_create_for(session.name, &root, &label)?;
             bindings.bind_if_absent(session.name, &created.workspace_id, &root)?;
-            return start_and_lease(
+            let (agent, lease, terminal) = start_and_lease(
                 session,
                 &created.workspace_id,
                 &created.root_pane_id,
                 kind,
                 &agents,
-            );
+            )?;
+            return Ok((agent, lease, terminal, Attachment::NewWorkspace { label }));
         }
     };
 
@@ -170,13 +190,15 @@ fn resolve_or_create(
         let lease = session
             .leases
             .acquire(session.name, session.socket, &agent.pane_id)?;
-        return Ok((agent.clone(), lease, None));
+        return Ok((agent.clone(), lease, None, Attachment::Agent));
     }
 
     let pane_id = session
         .herdr
         .tab_create_for(session.name, &workspace_id, &root)?;
-    start_and_lease(session, &workspace_id, &pane_id, kind, &agents)
+    let (agent, lease, terminal) =
+        start_and_lease(session, &workspace_id, &pane_id, kind, &agents)?;
+    Ok((agent, lease, terminal, Attachment::NewTab))
 }
 
 /// A fresh pane starts as a plain shell, matching a new Herdr tab; an agent is started
@@ -279,6 +301,38 @@ fn match_workspace(
         }
     }
     Ok(None)
+}
+
+/// One line telling the user what this thread is now connected to, so a plain local
+/// shell and a Herdr pane are distinguishable at a glance. On the auto path the line
+/// also names the mode so `terminal_init_command` runs are self-explanatory.
+fn print_status(auto: bool, attachment: &Attachment, agent: &AgentInfo, label: Option<&str>) {
+    let workspace = label.unwrap_or(&agent.workspace_id);
+    let outcome = match attachment {
+        Attachment::Agent => {
+            let subject = if agent.kind.is_empty() {
+                "agent".to_owned()
+            } else {
+                agent.kind.clone()
+            };
+            format!(
+                "attached to {subject} (pane {}) in Herdr workspace {workspace}",
+                agent.pane_id
+            )
+        }
+        Attachment::NewTab => format!(
+            "opened a new Herdr tab (pane {}) in workspace {workspace}",
+            agent.pane_id
+        ),
+        Attachment::NewWorkspace { label } => {
+            format!("created Herdr workspace {label} (pane {})", agent.pane_id)
+        }
+    };
+    if auto {
+        println!("zerdr: thread auto mode is enabled; {outcome}");
+    } else {
+        println!("zerdr: {outcome}");
+    }
 }
 
 /// Lowest `zed-<n>` that no live agent already answers to. Herdr requires live agent

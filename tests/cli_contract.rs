@@ -304,18 +304,18 @@ fn thread_mode_flags_reject_the_root_session_option() {
 }
 
 #[test]
-fn thread_auto_is_a_silent_no_op_while_the_mode_is_disabled() {
+fn thread_auto_reports_the_disabled_mode_without_touching_herdr() {
     for args in [
         vec!["thread", "--auto"],
         vec!["thread", "--auto", "--session", "work"],
     ] {
         let env = TestEnv::new();
-        env.command()
-            .args(args)
-            .assert()
-            .success()
-            .stdout(predicate::str::is_empty())
-            .stderr(predicate::str::is_empty());
+        let assert = env.command().args(args).assert().success();
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+        assert_eq!(stdout.lines().count(), 1, "{stdout}");
+        assert!(stdout.contains("auto mode"), "{stdout}");
+        assert!(stdout.contains("disabled"), "{stdout}");
+        assert!(assert.get_output().stderr.is_empty());
         assert_eq!(env.read_log(), "");
     }
 }
