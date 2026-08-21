@@ -316,9 +316,10 @@ pane → fresh tab) and the closed-thread pickup behavior. Validation grep confi
 
 ## Final Validation
 
-- [ ] `cargo fmt --all -- --check` — Expected: no diff
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings
-- [ ] `cargo test --all-targets --all-features` — Expected: all tests pass
+- [x] `cargo fmt --all -- --check` — Expected: no diff — clean
+- [x] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings — clean
+- [x] `cargo test --all-targets --all-features` — Expected: all tests pass — 202 tests green
+      (run at `--test-threads=4`; GitHub CI green on HEAD 2e4b45e on macOS and Ubuntu)
 - [ ] Manual check (user's machine, after `cargo install --path . --locked --force`):
       a fresh thread's pane shows the `# zerdr: ...` line (visible from Zed and from
       Herdr); quit Zed with a plain-shell thread attached, reopen the project → the
@@ -326,6 +327,16 @@ pane → fresh tab) and the closed-thread pickup behavior. Validation grep confi
 - [ ] Requirement Coverage に未対応項目がない
 - [ ] 計画と実際の変更内容が整合している
 - [ ] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
+
+**Independent review:** two rounds by a separate reviewer context. Round 1: ISSUES FOUND —
+one medium (control characters in a workspace label or checkout name could turn the
+banner into executed shell input, violating D1) and one low (the banner-before-agent-start
+ordering was untested on the workspace-creation path). Both fixed in 2e4b45e
+(`single_line` flattening of every interpolated banner part + two new tests). Round 2:
+APPROVED, no remaining issues; the reviewer noted the fix also covers escape-sequence
+injection and that the pane-addressing argument correctly stays unflattened.
+Implementation commits: 9068e9d, 147a5bb, e002a07, 2e4b45e (base a850a83), all pushed,
+CI green on HEAD.
 
 ## Risks and Open Questions
 
