@@ -863,7 +863,9 @@ fn status_glyphs_follow_the_herdr_symbol_set() {
 }
 
 /// A glyph run not followed by whitespace is not a prefix, and an alphanumeric lead
-/// (pi's `π`) never is; both fall back to the status glyph.
+/// (pi's `π`) never is; both fall back to the status glyph. So do a glyph with
+/// nothing after it and a run carrying control characters, which must never reach
+/// the emitted OSC payload.
 #[test]
 fn unusable_raw_prefixes_fall_back_to_the_status_glyph() {
     for (kind, raw_title, title, expected) in [
@@ -874,6 +876,8 @@ fn unusable_raw_prefixes_fall_back_to_the_status_glyph() {
             "◐ [herdr] Claude - Thinking",
         ),
         ("pi", "π - review", "π - review", "◐ [herdr] Pi - review"),
+        ("claude", "✳ ", "", "◐ [herdr] Claude - checkout"),
+        ("claude", "\u{1b}\u{7} go", "go", "◐ [herdr] Claude - go"),
     ] {
         let fixture = Fixture::new();
         fixture.agent_with_raw_title(kind, "zed-1", "w1:p1", "w1", "working", raw_title, title);

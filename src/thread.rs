@@ -551,7 +551,9 @@ fn emit_title(last: &mut Option<String>, agent: &AgentInfo, fallback: Option<&st
 /// Mirrors Zed's `terminal_title_prefix`: a leading run of non-whitespace,
 /// non-alphanumeric characters followed by whitespace and a non-empty remainder.
 /// This is how agents like Claude Code animate a spinner in their own titles, so a
-/// matching run is passed through verbatim.
+/// matching run is passed through verbatim. Control characters disqualify the run:
+/// it is re-emitted inside zerdr's own OSC 0 sequence, which a stray ESC or BEL
+/// would corrupt.
 fn title_glyph_prefix(title: &str) -> Option<&str> {
     let mut prefix_end = 0;
     let mut rest = None;
@@ -563,7 +565,7 @@ fn title_glyph_prefix(title: &str) -> Option<&str> {
             rest = Some(&title[index..]);
             break;
         }
-        if character.is_alphanumeric() {
+        if character.is_alphanumeric() || character.is_control() {
             return None;
         }
         prefix_end = index + character.len_utf8();
