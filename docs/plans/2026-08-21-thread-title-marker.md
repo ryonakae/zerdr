@@ -120,7 +120,7 @@ marker moved to the Zed agent panel's thread title instead, and the shell left a
 ## Progress
 
 - [x] Task 1: Title marker and banner removal
-- [ ] Task 2: Documentation
+- [x] Task 2: Documentation
 
 ## Tasks
 
@@ -209,6 +209,10 @@ grep matches those three test lines and nothing else — no banner code remains
 **Validation:**
 - Run: `rg -n '\[herdr\]' README.md && rg -cn '# zerdr:' README.md; true`
 - Expected: the marker format documented, the banner text gone.
+
+**Result:** Done. The banner sentence and the "exactly as the agent sets it" /
+glyph-promotion claim are gone; the title-marker paragraph documents both formats and
+the enrichment note without naming the plugin. Validation greps confirm.
 
 ## Requirement Coverage
 
