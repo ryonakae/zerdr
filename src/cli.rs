@@ -21,24 +21,6 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Fuzzily select a Herdr workspace.
-    Pick {
-        /// Target a named persistent Herdr session.
-        #[arg(long)]
-        session: Option<String>,
-    },
-    /// Focus the next Herdr workspace.
-    Next {
-        /// Target a named persistent Herdr session.
-        #[arg(long)]
-        session: Option<String>,
-    },
-    /// Focus the previous Herdr workspace.
-    Previous {
-        /// Target a named persistent Herdr session.
-        #[arg(long)]
-        session: Option<String>,
-    },
     /// Synchronize Zed to the focused Herdr workspace.
     Sync {
         /// Target a named persistent Herdr session.

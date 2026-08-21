@@ -2,7 +2,6 @@ pub mod cli;
 pub mod doctor;
 pub mod error;
 pub mod herdr;
-pub mod picker;
 pub mod runtime;
 pub mod setup;
 pub mod state;
@@ -37,10 +36,7 @@ pub fn run() -> Result<()> {
     }
 
     let command_session = match &command {
-        Command::Pick { session }
-        | Command::Next { session }
-        | Command::Previous { session }
-        | Command::Sync { session }
+        Command::Sync { session }
         | Command::Bind { session, .. }
         | Command::Unbind { session }
         | Command::Doctor { session }
@@ -57,10 +53,7 @@ pub fn run() -> Result<()> {
     }
     let accepts_session = matches!(
         &command,
-        Command::Pick { .. }
-            | Command::Next { .. }
-            | Command::Previous { .. }
-            | Command::Sync { .. }
+        Command::Sync { .. }
             | Command::Bind { .. }
             | Command::Unbind { .. }
             | Command::Doctor { .. }
@@ -74,15 +67,6 @@ pub fn run() -> Result<()> {
     let explicit_session = command_session.or(cli.session.as_deref());
 
     match &command {
-        Command::Pick { .. } => run_manual(explicit_session, |synchronizer| {
-            synchronizer.pick(explicit_session)
-        }),
-        Command::Next { .. } => run_manual(explicit_session, |synchronizer| {
-            synchronizer.navigate(explicit_session, 1)
-        }),
-        Command::Previous { .. } => run_manual(explicit_session, |synchronizer| {
-            synchronizer.navigate(explicit_session, -1)
-        }),
         Command::Sync { .. } => run_manual(explicit_session, |synchronizer| {
             synchronizer.sync_manual(explicit_session)
         }),

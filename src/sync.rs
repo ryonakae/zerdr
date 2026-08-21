@@ -5,7 +5,6 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::herdr::{Herdr, Workspace};
-use crate::picker;
 use crate::state::{
     BindingStore, DEFAULT_SESSION_NAME, LeaseSet, OperationGuard, Paths, RouteState, RouteStore,
     RouteStrategy, SyncGuard, canonical_git_root,
@@ -95,57 +94,6 @@ impl Synchronizer {
             Ok(()) => Ok(()),
             Err(error) => self.notify_action_error(&session_name, error),
         }
-    }
-
-    pub fn navigate(&self, explicit_session: Option<&str>, direction: isize) -> Result<()> {
-        let selection = self.session_selection(explicit_session)?;
-        let authority =
-            self.acquire_manual_authority(&selection.session_name, &selection.socket)?;
-        let workspaces = self.herdr.workspaces_for(&selection.session_name)?;
-        let current = workspaces
-            .iter()
-            .position(|workspace| workspace.focused)
-            .ok_or_else(|| Error::User("Herdr has no focused workspace".to_owned()))?;
-        if workspaces.is_empty() {
-            return Err(Error::User("Herdr has no workspaces".to_owned()));
-        }
-        let len = workspaces.len() as isize;
-        let target = (current as isize + direction).rem_euclid(len) as usize;
-        self.switch_or_sync(
-            &selection.session_name,
-            &selection.socket,
-            &workspaces[target],
-            authority,
-        )
-    }
-
-    pub fn pick(&self, explicit_session: Option<&str>) -> Result<()> {
-        let selection = self.session_selection(explicit_session)?;
-        let authority =
-            self.acquire_manual_authority(&selection.session_name, &selection.socket)?;
-        let mut workspaces = self.herdr.workspaces_for(&selection.session_name)?;
-        let bindings = BindingStore::new(self.paths.bindings_file.clone()).load()?;
-        for workspace in &mut workspaces {
-            if let Some(root) = bindings
-                .sessions
-                .get(&selection.session_name)
-                .and_then(|session| session.get(&workspace.id))
-            {
-                workspace.checkout_path = Some(root.clone());
-            }
-        }
-        drop(authority);
-        let Some(index) = picker::choose(&workspaces)? else {
-            return Ok(());
-        };
-        let authority =
-            self.acquire_manual_authority(&selection.session_name, &selection.socket)?;
-        self.switch_or_sync(
-            &selection.session_name,
-            &selection.socket,
-            &workspaces[index],
-            authority,
-        )
     }
 
     pub fn bind(&self, session_name: Option<&str>, candidate: Option<&Path>) -> Result<()> {
@@ -471,35 +419,6 @@ impl Synchronizer {
         self.zed.activate_existing(anchor_root)?;
         self.zed.add_to_current(root)?;
         RouteStore::new(self.paths.routes_dir.clone()).promote_for(session_name, socket, root)?;
-        Ok(())
-    }
-
-    fn acquire_manual_authority(&self, session_name: &str, socket: &Path) -> Result<SyncGuard> {
-        let guard = SyncGuard::acquire(&self.paths.sync_locks_dir, socket)?;
-        self.validate_route_authority(session_name, socket)?;
-        Ok(guard)
-    }
-
-    fn validate_route_authority(&self, session_name: &str, socket: &Path) -> Result<()> {
-        self.live_route(session_name, socket)?;
-        Ok(())
-    }
-
-    fn switch_or_sync(
-        &self,
-        session_name: &str,
-        socket: &Path,
-        target: &Workspace,
-        authority: SyncGuard,
-    ) -> Result<()> {
-        self.validate_route_authority(session_name, socket)?;
-        self.root_for_workspace(session_name, target)?;
-        if target.focused {
-            drop(authority);
-            self.sync_session_socket(session_name, socket)?;
-        } else {
-            self.herdr.focus_workspace_for(session_name, &target.id)?;
-        }
         Ok(())
     }
 

@@ -14,13 +14,7 @@ use predicates::prelude::*;
 use sha2::Digest;
 use support::{TestEnv, compatible_plugins_json};
 
-const OWNED_LABELS: [&str; 5] = [
-    "zerdr: Herdr",
-    "zerdr: Pick Workspace",
-    "zerdr: Next Workspace",
-    "zerdr: Previous Workspace",
-    "zerdr: Sync Workspace",
-];
+const OWNED_LABELS: [&str; 1] = ["zerdr: Herdr"];
 
 #[test]
 fn remote_doctor_reports_all_markers_without_processes_locks_or_cleanup() {
@@ -83,12 +77,10 @@ fn setup_is_idempotent_and_installs_exact_plugin_and_tasks_without_config_change
     let first = fs::read_to_string(&tasks_path).unwrap();
     let root = CstRootNode::parse(&first, &ParseOptions::default()).unwrap();
     let values = root.array_value().unwrap().elements();
-    assert_eq!(values.len(), 5);
+    assert_eq!(values.len(), 1);
     for label in OWNED_LABELS {
         assert!(first.contains(label), "{first}");
     }
-    assert!(first.contains(r#""reveal_target": "center""#));
-    assert!(first.contains(r#""ZERDR_TASK_MODE": "1""#));
     assert!(first.contains(r#""args": ["--anchor", "$ZED_WORKTREE_ROOT"]"#));
     assert!(first.contains(r#""allow_concurrent_runs": true"#));
     assert!(first.contains(r#""use_new_terminal": true"#));
@@ -204,7 +196,7 @@ command = [{executable:?}, "sync-from-herdr"]
 }
 
 #[test]
-fn setup_migrates_a_valid_four_task_install_to_five_tasks() {
+fn setup_restores_a_missing_owned_task() {
     let env = TestEnv::new();
     env.command().arg("setup").assert().success();
     let paths = Paths::for_test(env.root.path());
@@ -257,19 +249,16 @@ fn generated_task_command_executes_when_the_binary_path_contains_spaces() {
         .elements()
         .iter()
         .map(|element| element.to_serde_value().unwrap())
-        .find(|task| task["label"] == "zerdr: Pick Workspace")
+        .find(|task| task["label"] == "zerdr: Herdr")
         .unwrap();
     let command = task["command"].as_str().unwrap();
-    let args = task["args"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|value| value.as_str().unwrap())
-        .collect::<Vec<_>>()
-        .join(" ");
+    assert_eq!(
+        task["args"],
+        serde_json::json!(["--anchor", "$ZED_WORKTREE_ROOT"])
+    );
     assert!(
         ProcessCommand::new("sh")
-            .args(["-c", &format!("{command} {args} --help >/dev/null")])
+            .args(["-c", &format!("{command} --help >/dev/null")])
             .status()
             .unwrap()
             .success()
@@ -306,7 +295,7 @@ fn setup_refuses_a_foreign_owned_label_without_changing_original_bytes() {
     let env = TestEnv::new();
     let tasks_path = env.root.path().join("zed/tasks.json");
     fs::create_dir_all(tasks_path.parent().unwrap()).unwrap();
-    let original = "[\n  {\"label\":\"zerdr: Sync Workspace\",\"command\":\"danger\"}\n]\n";
+    let original = "[\n  {\"label\":\"zerdr: Herdr\",\"command\":\"danger\"}\n]\n";
     fs::write(&tasks_path, original).unwrap();
 
     env.command()
@@ -325,14 +314,81 @@ fn uninstall_preserves_an_owned_task_modified_after_setup() {
     env.command().arg("setup").assert().success();
     let tasks_path = env.root.path().join("zed/tasks.json");
     let installed = fs::read_to_string(&tasks_path).unwrap();
-    let modified = installed.replacen(r#""args": ["next"]"#, r#""args": ["hacked"]"#, 1);
+    let modified = installed.replacen(
+        r#""args": ["--anchor", "$ZED_WORKTREE_ROOT"]"#,
+        r#""args": ["hacked"]"#,
+        1,
+    );
     fs::write(&tasks_path, modified).unwrap();
 
     env.command().arg("uninstall").assert().success();
     let remaining = fs::read_to_string(tasks_path).unwrap();
-    assert!(remaining.contains("zerdr: Next Workspace"));
+    assert!(remaining.contains("zerdr: Herdr"));
     assert!(remaining.contains("hacked"));
-    assert!(!remaining.contains("zerdr: Pick Workspace"));
+}
+
+#[test]
+fn setup_removes_stale_owned_tasks_recorded_by_an_older_install() {
+    let env = TestEnv::new();
+    env.command().arg("setup").assert().success();
+    let paths = Paths::for_test(env.root.path());
+    let stale_owned = serde_json::json!({
+        "label": "zerdr: Pick Workspace",
+        "command": "zerdr",
+        "args": ["pick"],
+    });
+    let recorded_next = serde_json::json!({
+        "label": "zerdr: Next Workspace",
+        "command": "zerdr",
+        "args": ["next"],
+    });
+    let modified_next = serde_json::json!({
+        "label": "zerdr: Next Workspace",
+        "command": "zerdr",
+        "args": ["hacked"],
+    });
+    let mut tasks: Vec<serde_json::Value> =
+        serde_json::from_slice(&fs::read(&paths.zed_tasks_file).unwrap()).unwrap();
+    tasks.push(stale_owned.clone());
+    tasks.push(modified_next);
+    fs::write(
+        &paths.zed_tasks_file,
+        serde_json::to_vec_pretty(&tasks).unwrap(),
+    )
+    .unwrap();
+    let mut install: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
+    let fingerprints = install["task_fingerprints"].as_object_mut().unwrap();
+    for task in [&stale_owned, &recorded_next] {
+        let bytes = serde_json::to_vec(task).unwrap();
+        fingerprints.insert(
+            task["label"].as_str().unwrap().to_owned(),
+            hex::encode(sha2::Sha256::digest(&bytes)).into(),
+        );
+    }
+    fs::write(
+        &paths.install_state_file,
+        serde_json::to_vec(&install).unwrap(),
+    )
+    .unwrap();
+
+    let assert = env.command().arg("setup").assert().success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains(r#"preserving modified or foreign Zed task "zerdr: Next Workspace""#),
+        "{stderr}"
+    );
+
+    let remaining = fs::read_to_string(&paths.zed_tasks_file).unwrap();
+    assert!(!remaining.contains("zerdr: Pick Workspace"), "{remaining}");
+    assert!(remaining.contains("zerdr: Next Workspace"), "{remaining}");
+    assert!(remaining.contains("hacked"), "{remaining}");
+    assert_eq!(remaining.matches("zerdr: Herdr").count(), 1, "{remaining}");
+    let install: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
+    let fingerprints = install["task_fingerprints"].as_object().unwrap();
+    assert_eq!(fingerprints.len(), 1, "{fingerprints:?}");
+    assert!(fingerprints.contains_key("zerdr: Herdr"));
 }
 
 #[test]
@@ -1291,7 +1347,11 @@ fn doctor_rejects_a_modified_owned_task_payload() {
     let installed = fs::read_to_string(&paths.zed_tasks_file).unwrap();
     fs::write(
         &paths.zed_tasks_file,
-        installed.replacen(r#""args": ["sync"]"#, r#""args": ["unexpected"]"#, 1),
+        installed.replacen(
+            r#""args": ["--anchor", "$ZED_WORKTREE_ROOT"]"#,
+            r#""args": ["unexpected"]"#,
+            1,
+        ),
     )
     .unwrap();
     let plugins = compatible_plugins_json();

@@ -109,7 +109,7 @@ pub fn doctor(session_name: &str) -> Result<()> {
             Err(error) => report.fail(error.to_string()),
         }
         match inspect_tasks(&paths, install) {
-            Ok(()) => report.pass("all five owned Zed task payloads are valid"),
+            Ok(()) => report.pass("all owned Zed task payloads are valid"),
             Err(error) => report.fail(error.to_string()),
         }
         report_init_command(&paths, install, &mut report);
@@ -267,7 +267,7 @@ fn inspect_static_installation(paths: &Paths, report: &mut Report) {
             Err(error) => report.fail(error.to_string()),
         }
         match inspect_tasks(paths, install) {
-            Ok(()) => report.pass("all five owned Zed task payloads are valid"),
+            Ok(()) => report.pass("all owned Zed task payloads are valid"),
             Err(error) => report.fail(error.to_string()),
         }
         report_init_command(paths, install, report);
@@ -369,7 +369,7 @@ fn inspect_tasks(paths: &Paths, install: &InstallState) -> Result<()> {
     let expected = generated_tasks(&install.executable)?;
     if install.task_fingerprints.len() != owned_labels().len() {
         return Err(Error::User(
-            "zerdr task ownership state does not contain exactly five tasks; run `zerdr setup`"
+            "zerdr task ownership state does not match the owned task list; run `zerdr setup`"
                 .to_owned(),
         ));
     }

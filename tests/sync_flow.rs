@@ -167,9 +167,6 @@ fn every_manual_command_rejects_a_route_owner_mismatch_before_workspace_or_state
     });
 
     for args in [
-        vec!["pick"],
-        vec!["next"],
-        vec!["previous"],
         vec!["sync"],
         vec!["bind", anchor.to_str().unwrap()],
         vec!["unbind"],
@@ -1529,81 +1526,6 @@ fn automatic_event_resolves_an_unbound_workspace_from_snapshot_cwd() {
 }
 
 #[test]
-fn manual_previous_wraps_and_focuses_without_a_direct_zed_call() {
-    let env = TestEnv::new();
-    let socket = env.root.path().join("herdr.sock");
-    fs::write(&socket, "").unwrap();
-    let paths = Paths::for_test(env.root.path());
-    let _lease = authorize(&paths, &socket);
-    let first = git_repo(&env.root.path().join("first-parent"));
-    let second = git_repo(&env.root.path().join("second-parent"));
-    let store = BindingStore::new(paths.bindings_file);
-    store.bind("default", "w1", &first).unwrap();
-    store.bind("default", "w2", &second).unwrap();
-    let sessions = serde_json::json!({
-        "ok": true,
-        "result": {"sessions": [{"name": "default", "socket_path": socket}]}
-    });
-    let workspaces = serde_json::json!({
-        "ok": true,
-        "result": {"workspaces": [
-            {"workspace_id":"w1","label":"first","number":1,"focused":true,"cwd":first},
-            {"workspace_id":"w2","label":"second","number":2,"focused":false,"cwd":second}
-        ]}
-    });
-
-    env.command()
-        .arg("previous")
-        .env("ZED_TERM", "true")
-        .env("TERM_PROGRAM", "zed")
-        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
-        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-        .assert()
-        .success();
-
-    let log = env.read_log();
-    assert!(
-        log.contains("herdr\t--session default workspace focus w2"),
-        "{log}"
-    );
-    assert!(!log.contains("zed\t"), "{log}");
-}
-
-#[test]
-fn manual_next_wraps_from_the_last_workspace_to_the_first() {
-    let env = TestEnv::new();
-    let socket = env.root.path().join("herdr.sock");
-    fs::write(&socket, "").unwrap();
-    let paths = Paths::for_test(env.root.path());
-    let _lease = authorize(&paths, &socket);
-    let first = git_repo(&env.root.path().join("first-parent"));
-    let second = git_repo(&env.root.path().join("second-parent"));
-    let store = BindingStore::new(paths.bindings_file);
-    store.bind("default", "w1", &first).unwrap();
-    store.bind("default", "w2", &second).unwrap();
-    let sessions = serde_json::json!({
-        "sessions":[{"name":"default","running":true,"socket_path":socket}]
-    });
-    let workspaces = serde_json::json!({"result":{"workspaces":[
-        {"workspace_id":"w1","label":"first","number":1,"focused":false,"worktree":{"checkout_path":first}},
-        {"workspace_id":"w2","label":"second","number":2,"focused":true,"worktree":{"checkout_path":second}}
-    ]}});
-
-    env.command()
-        .arg("next")
-        .env("ZED_TERM", "true")
-        .env("TERM_PROGRAM", "zed")
-        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
-        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-        .assert()
-        .success();
-
-    let log = env.read_log();
-    assert!(log.contains("workspace focus w1"), "{log}");
-    assert!(!log.contains("zed\t"), "{log}");
-}
-
-#[test]
 fn manual_bind_normalizes_nested_path_and_synchronizes() {
     let env = TestEnv::new();
     let socket = env.root.path().join("herdr.sock");
@@ -1639,39 +1561,6 @@ fn manual_bind_normalizes_nested_path_and_synchronizes() {
         env.read_log()
             .contains(&format!("zed\t--add {}", repo.display()))
     );
-}
-
-#[test]
-fn picker_cancellation_changes_neither_herdr_nor_zed() {
-    let env = TestEnv::new();
-    let socket = env.root.path().join("herdr.sock");
-    fs::write(&socket, "").unwrap();
-    let paths = Paths::for_test(env.root.path());
-    let _lease = authorize(&paths, &socket);
-    let repo = git_repo(env.root.path());
-    let sessions = serde_json::json!({
-        "sessions": [{"name":"default","running":true,"socket_path":socket}]
-    });
-    let workspaces = serde_json::json!({
-        "result":{"workspaces":[{
-            "workspace_id":"w1","label":"repo","number":1,"focused":true,
-            "worktree":{"checkout_path":repo}
-        }]}
-    });
-
-    env.command()
-        .arg("pick")
-        .env("ZED_TERM", "true")
-        .env("TERM_PROGRAM", "zed")
-        .env("ZERDR_TEST_PICK_INDEX", "cancel")
-        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
-        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-        .assert()
-        .success();
-
-    let log = env.read_log();
-    assert!(!log.contains("workspace focus"), "{log}");
-    assert!(!log.contains("zed\t"), "{log}");
 }
 
 #[test]
@@ -1712,40 +1601,6 @@ fn notified_zed_task_failure_hides_by_returning_success() {
 }
 
 #[test]
-fn duplicate_root_workspaces_remain_distinct_picker_targets() {
-    let env = TestEnv::new();
-    let socket = env.root.path().join("herdr.sock");
-    fs::write(&socket, "").unwrap();
-    let paths = Paths::for_test(env.root.path());
-    let _lease = authorize(&paths, &socket);
-    let repo = git_repo(env.root.path());
-    let store = BindingStore::new(paths.bindings_file);
-    store.bind("default", "w1", &repo).unwrap();
-    store.bind("default", "w2", &repo).unwrap();
-    let sessions = serde_json::json!({
-        "sessions":[{"name":"default","running":true,"socket_path":socket}]
-    });
-    let workspaces = serde_json::json!({"result":{"workspaces":[
-        {"workspace_id":"w1","label":"first","number":1,"focused":true,"worktree":{"checkout_path":repo}},
-        {"workspace_id":"w2","label":"second","number":2,"focused":false,"worktree":{"checkout_path":repo}}
-    ]}});
-
-    env.command()
-        .arg("pick")
-        .env("ZED_TERM", "true")
-        .env("TERM_PROGRAM", "zed")
-        .env("ZERDR_TEST_PICK_INDEX", "1")
-        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
-        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-        .assert()
-        .success();
-
-    let log = env.read_log();
-    assert!(log.contains("workspace focus w2"), "{log}");
-    assert!(!log.contains("zed\t"), "{log}");
-}
-
-#[test]
 fn unbind_removes_only_the_focused_binding_without_calling_zed() {
     let env = TestEnv::new();
     let socket = env.root.path().join("herdr.sock");
@@ -1779,94 +1634,6 @@ fn unbind_removes_only_the_focused_binding_without_calling_zed() {
             .is_none()
     );
     assert!(!env.read_log().contains("zed\t"));
-}
-
-#[test]
-fn invalid_target_preflight_changes_neither_herdr_nor_zed() {
-    let env = TestEnv::new();
-    let socket = env.root.path().join("herdr.sock");
-    fs::write(&socket, "").unwrap();
-    let paths = Paths::for_test(env.root.path());
-    let _lease = authorize(&paths, &socket);
-    let repo = git_repo(env.root.path());
-    BindingStore::new(paths.bindings_file.clone())
-        .bind("default", "w1", &repo)
-        .unwrap();
-    let sessions = serde_json::json!({
-        "sessions":[{"name":"default","running":true,"socket_path":socket}]
-    });
-    let workspaces = serde_json::json!({"result":{"workspaces":[
-        {"workspace_id":"w1","label":"valid","number":1,"focused":true,"worktree":{"checkout_path":repo}},
-        {"workspace_id":"w2","label":"invalid","number":2,"focused":false}
-    ]}});
-
-    env.command()
-        .arg("next")
-        .env("ZED_TERM", "true")
-        .env("TERM_PROGRAM", "zed")
-        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
-        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-        .assert()
-        .failure();
-
-    let log = env.read_log();
-    assert!(!log.contains("workspace focus"), "{log}");
-    assert!(!log.contains("zed\t"), "{log}");
-    assert!(
-        BindingStore::new(paths.bindings_file)
-            .get("default", "w2")
-            .unwrap()
-            .is_none()
-    );
-}
-
-#[test]
-fn picker_rechecks_lease_before_focusing_the_selected_workspace() {
-    let env = TestEnv::new();
-    let socket = env.root.path().join("herdr.sock");
-    fs::write(&socket, "").unwrap();
-    let paths = Paths::for_test(env.root.path());
-    let lease = authorize(&paths, &socket);
-    let first = git_repo(&env.root.path().join("first"));
-    let second = git_repo(&env.root.path().join("second"));
-    let store = BindingStore::new(paths.bindings_file.clone());
-    store.bind("default", "w1", &first).unwrap();
-    let original_bindings = fs::read(&paths.bindings_file).unwrap();
-    let sessions = serde_json::json!({
-        "sessions":[{"name":"default","running":true,"socket_path":socket}]
-    });
-    let workspaces = serde_json::json!({"result":{"workspaces":[
-        {"workspace_id":"w1","label":"first","number":1,"focused":true,"worktree":{"checkout_path":first}},
-        {"workspace_id":"w2","label":"second","number":2,"focused":false,"worktree":{"checkout_path":second}}
-    ]}});
-    let ready = env.root.path().join("picker-ready");
-    let proceed = env.root.path().join("picker-continue");
-    let mut command = env.std_command();
-    command
-        .arg("pick")
-        .env("ZED_TERM", "true")
-        .env("TERM_PROGRAM", "zed")
-        .env("ZERDR_TEST_PICK_INDEX", "1")
-        .env("ZERDR_TEST_PICK_READY", &ready)
-        .env("ZERDR_TEST_PICK_CONTINUE", &proceed)
-        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
-        .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string());
-    let mut child = command.spawn().unwrap();
-    for _ in 0..200 {
-        if ready.exists() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    assert!(ready.exists());
-    drop(lease);
-    fs::write(proceed, "go").unwrap();
-
-    assert!(!child.wait().unwrap().success());
-    let log = env.read_log();
-    assert!(!log.contains("workspace focus"), "{log}");
-    assert!(!log.contains("zed\t"), "{log}");
-    assert_eq!(fs::read(paths.bindings_file).unwrap(), original_bindings);
 }
 
 #[test]

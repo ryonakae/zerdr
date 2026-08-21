@@ -211,7 +211,7 @@ zerdr setup | uninstall [--purge] | [--session NAME] doctor
 ## Progress
 
 - [x] Task 1: Remove external routing
-- [ ] Task 2: Remove pick/next/previous and shrink Zed tasks
+- [x] Task 2: Remove pick/next/previous and shrink Zed tasks
 - [ ] Task 3: Auto-mode flag with `--enable`/`--disable`
 - [ ] Task 4: `--auto` best-effort attach
 - [ ] Task 5: Documentation
@@ -320,6 +320,17 @@ installs exactly one Zed task while cleaning up the four stale owned tasks on up
 **Validation:**
 - Run: `cargo test --all-targets --all-features`
 - Expected: all tests pass, including the new stale-task cleanup tests.
+
+**Result:** Done. Also changed `assets/zed/tasks.json.in` (the four workspace-task entries
+removed; the template feeds `generated_tasks`). Stale cleanup and preserve-modified are
+covered by `setup_removes_stale_owned_tasks_recorded_by_an_older_install`; other tests
+that used removed commands or tasks as vehicles were retargeted to `sync` / the Herdr
+task (`setup_restores_a_missing_owned_task`, `doctor_rejects_a_modified_owned_task_payload`,
+`uninstall_preserves_an_owned_task_modified_after_setup`,
+`generated_task_command_executes_when_the_binary_path_contains_spaces`);
+`invalid_target_preflight_changes_neither_herdr_nor_zed` was deleted because its code path
+(`switch_or_sync` target preflight) only existed for pick/next/previous. Validation: full
+suite green (175 tests), fmt clean, clippy `-D warnings` clean.
 
 ### Task 3: Auto-mode flag with `--enable`/`--disable`
 

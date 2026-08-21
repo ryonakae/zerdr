@@ -15,9 +15,8 @@ fn help_lists_public_commands_and_hides_event_entry_point() {
         .stdout(predicate::str::contains("--mode <MODE>").not())
         .stdout(predicate::str::contains("--anchor <ANCHOR>"))
         .stdout(predicate::str::contains("--focus <FOCUS>").not())
-        .stdout(predicate::str::contains("pick"))
-        .stdout(predicate::str::contains("next"))
-        .stdout(predicate::str::contains("previous"))
+        .stdout(predicate::str::contains("pick").not())
+        .stdout(predicate::str::contains("previous").not())
         .stdout(predicate::str::contains("sync"))
         .stdout(predicate::str::contains("bind"))
         .stdout(predicate::str::contains("unbind"))
@@ -29,8 +28,21 @@ fn help_lists_public_commands_and_hides_event_entry_point() {
 }
 
 #[test]
+fn removed_workspace_subcommands_fail_with_clap_usage() {
+    for command in ["pick", "next", "previous"] {
+        let env = TestEnv::new();
+        env.command()
+            .arg(command)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("unrecognized subcommand"));
+        assert_eq!(env.read_log(), "");
+    }
+}
+
+#[test]
 fn every_manual_command_exposes_the_session_targeting_option() {
-    for command in ["pick", "next", "previous", "sync", "bind", "unbind"] {
+    for command in ["sync", "bind", "unbind"] {
         cargo_bin_cmd!("zerdr")
             .args([command, "--help"])
             .assert()
@@ -75,7 +87,7 @@ fn hidden_plugin_commands_reject_session_targeting() {
 
 #[test]
 fn manual_commands_dispatch_outside_the_zed_terminal_environment() {
-    for command in ["pick", "next", "previous", "sync", "bind", "unbind"] {
+    for command in ["sync", "bind", "unbind"] {
         let env = TestEnv::new();
         env.command()
             .arg(command)
@@ -99,9 +111,6 @@ fn removed_herdr_subcommand_fails_with_clap_usage() {
 #[test]
 fn launch_options_are_rejected_with_every_subcommand_in_either_order() {
     let subcommands = [
-        "pick",
-        "next",
-        "previous",
         "sync",
         "bind",
         "unbind",
@@ -191,9 +200,6 @@ fn every_remote_marker_and_runtime_command_is_rejected_before_any_process() {
     }
     for command in [
         None,
-        Some("pick"),
-        Some("next"),
-        Some("previous"),
         Some("sync"),
         Some("bind"),
         Some("unbind"),

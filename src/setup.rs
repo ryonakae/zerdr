@@ -14,13 +14,7 @@ use crate::error::{Error, Result};
 use crate::herdr::Herdr;
 use crate::state::{LeaseSet, LifecycleGuard, Paths};
 
-const OWNED_LABELS: [&str; 5] = [
-    "zerdr: Herdr",
-    "zerdr: Pick Workspace",
-    "zerdr: Next Workspace",
-    "zerdr: Previous Workspace",
-    "zerdr: Sync Workspace",
-];
+const OWNED_LABELS: [&str; 1] = ["zerdr: Herdr"];
 const INSTALL_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -384,6 +378,7 @@ fn merge_tasks(text: &str, generated: &[Value], previous: Option<&InstallState>)
         .collect::<BTreeMap<_, _>>();
     let mut present = BTreeSet::new();
     let mut remove = Vec::new();
+    let mut stale_preserved = Vec::new();
 
     for element in array.elements() {
         let Some(value) = element.to_serde_value() else {
@@ -393,6 +388,13 @@ fn merge_tasks(text: &str, generated: &[Value], previous: Option<&InstallState>)
             continue;
         };
         let Some(generated_task) = generated_by_label.get(label) else {
+            // A task an older install owned but that is no longer generated is cleaned
+            // up while still byte-owned; a modified copy stays with the user.
+            match previous.and_then(|state| state.task_fingerprints.get(label)) {
+                Some(recorded) if *recorded == fingerprint(&value) => remove.push(element),
+                Some(_) => stale_preserved.push(label.to_owned()),
+                None => {}
+            }
             continue;
         };
         if !present.insert(label.to_owned()) {
@@ -421,6 +423,9 @@ fn merge_tasks(text: &str, generated: &[Value], previous: Option<&InstallState>)
         if !present.contains(label) {
             array.append(value_to_cst(task));
         }
+    }
+    for label in stale_preserved {
+        eprintln!("zerdr: preserving modified or foreign Zed task {label:?}");
     }
     array.ensure_multiline();
     Ok(root.to_string())
