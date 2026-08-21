@@ -4,14 +4,5 @@
     "bindings": {
       "ctrl-alt-t": ["terminal::SendText", "zerdr thread\n"]
     }
-  },
-  {
-    "context": "Workspace",
-    "bindings": {
-      "ctrl-alt-p": ["task::Spawn", { "task_name": "zerdr: Pick Workspace", "reveal_target": "center" }],
-      "ctrl-alt-j": ["task::Spawn", { "task_name": "zerdr: Next Workspace" }],
-      "ctrl-alt-k": ["task::Spawn", { "task_name": "zerdr: Previous Workspace" }],
-      "ctrl-alt-s": ["task::Spawn", { "task_name": "zerdr: Sync Workspace" }]
-    }
   }
 ]

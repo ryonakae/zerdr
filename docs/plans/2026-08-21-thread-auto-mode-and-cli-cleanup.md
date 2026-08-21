@@ -214,7 +214,7 @@ zerdr setup | uninstall [--purge] | [--session NAME] doctor
 - [x] Task 2: Remove pick/next/previous and shrink Zed tasks
 - [x] Task 3: Auto-mode flag with `--enable`/`--disable`
 - [x] Task 4: `--auto` best-effort attach
-- [ ] Task 5: Documentation
+- [x] Task 5: Documentation
 
 ## Tasks
 
@@ -488,6 +488,14 @@ missing herdr binary) are in `tests/thread_flow.rs`. Validation: full suite gree
 **Validation:**
 - Run: `rg -n "pick|previous|--mode|--focus" README.md`
 - Expected: no matches referring to removed zerdr surface (unrelated words allowed).
+
+**Result:** Done. README: Quickstart anchored on the Zed terminal, auto-mode paragraph in
+Terminal threads, reduced command table (with the enable/disable row and the one-task
+setup row), "Routing modes" collapsed into an internal-only "Routing" section, notes
+updated (opt-in automation via `--enable`, reattach-on-restart, wrapper-ownership line
+without the mode sentence). keymap example keeps only the `terminal::SendText` binding.
+`rg "pick|previous|--mode|--focus|external|five" README.md` has no matches. AGENTS.md was
+already updated alongside Tasks 1 and 3.
 
 ## Requirement Coverage
 

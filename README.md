@@ -20,14 +20,14 @@ cargo install --git https://github.com/ryonakae/zerdr --locked
 
 ## Quickstart
 
-Install the Herdr focus hook, Open Zed action, and Zed tasks, then open the default Herdr session with Zed routing enabled:
+Install the Herdr focus hook, Open Zed action, and the Zed task, then open the default Herdr session with Zed routing enabled:
 
 ```bash
 zerdr setup
 zerdr
 ```
 
-Bare `zerdr` opens or attaches the same default persistent session as bare `herdr`. Use `zerdr --session NAME` to open or attach the same named session as `herdr --session NAME`. Run zerdr from the terminal you want to use with Herdr; it routes the focused workspace's checkout to Zed.
+Bare `zerdr` opens or attaches the same default persistent session as bare `herdr`. Use `zerdr --session NAME` to open or attach the same named session as `herdr --session NAME`. Run zerdr from a Zed terminal in the project you consider your anchor (or spawn the installed "zerdr: Herdr" task); selecting a workspace in Herdr then brings its checkout into that Zed window.
 
 To keep normal Herdr workspace switching independent from Zed, do not start the bare wrapper. Add a configurable Herdr keybinding instead:
 
@@ -58,7 +58,13 @@ While attached, zerdr mirrors the agent's name and Herdr terminal title into the
 
 Because Herdr owns the session, closing a thread or restarting Zed does not stop the agent. Reopen a thread and run `zerdr thread` to attach again, or reach the same agent over SSH with `herdr` from another machine.
 
-Attaching is deliberately manual, so Zed sessions that do not involve Herdr stay untouched. If you want every new terminal thread attached automatically, set Zed's `agent.terminal_init_command` to `zerdr thread` yourself; `zerdr setup` prints the exact value and a `terminal::SendText` keybinding example for typing the command with one key.
+Attaching is manual by default, so Zed sessions that do not involve Herdr stay untouched. To attach every new terminal thread automatically, turn on thread auto mode:
+
+```bash
+zerdr thread --enable
+```
+
+The first `--enable` writes `zerdr thread --auto` into Zed's `agent.terminal_init_command` (backing your settings file up and writing through a dotfiles symlink); after that the toggle only flips a flag in zerdr's state directory. While the mode is on, `--auto` attaches each new thread best-effort: when the project has no matching Herdr workspace or Herdr is not running, it prints one line and leaves the thread as a plain local shell. Because Zed restores terminal threads on restart, restored threads reattach to the still-running agents — resume, in effect. `zerdr thread --disable` turns the mode off without touching your Zed settings, and `zerdr doctor` shows the current state. Prefer staying manual? `zerdr setup` prints a `terminal::SendText` keybinding example for typing `zerdr thread` with one key.
 
 Threads only attach to workspaces Herdr already manages. In a checkout without one, `zerdr thread` says so rather than adding a workspace. Run `zerdr thread --create` there when you do want the workspace.
 
@@ -66,28 +72,23 @@ Threads only attach to workspaces Herdr already manages. In a checkout without o
 
 | Command | Description |
 |---|---|
-| `zerdr [--session NAME]` | Open or attach the default or named Herdr session and choose a routing mode from the terminal environment. |
-| `zerdr [--session NAME] pick` | Choose a Herdr workspace with a fuzzy picker. |
-| `zerdr [--session NAME] next` | Focus the next workspace in Herdr display order. |
-| `zerdr [--session NAME] previous` | Focus the previous workspace in Herdr display order. |
+| `zerdr [--session NAME] [--anchor PATH]` | Open or attach the default or named Herdr session with Zed routing. |
 | `zerdr [--session NAME] sync` | Reapply the focused Herdr workspace route to Zed. |
 | `zerdr [--session NAME] bind [PATH]` | Bind the selected workspace to a Git checkout; sync it when a wrapper is live. |
 | `zerdr [--session NAME] unbind` | Remove the selected workspace binding. |
 | `zerdr [--session NAME] thread [TARGET]` | Attach a Zed terminal thread to a Herdr agent or a fresh shell tab; `TARGET` is a pane id or agent name. Add `--kind KIND` to start an agent in the fresh tab, or `--create` to allow creating the workspace. |
-| `zerdr setup` | Install or update the Herdr plugin and five global Zed tasks. |
-| `zerdr uninstall [--purge]` | Remove integration files; `--purge` removes zerdr state too. |
-| `zerdr [--session NAME] doctor` | Check required commands, installed files, bindings, routes, and leases for the selected session. |
+| `zerdr thread --enable` / `--disable` | Toggle thread auto mode; `--enable` installs `zerdr thread --auto` as Zed's `agent.terminal_init_command` once. |
+| `zerdr setup` | Install or update the Herdr plugin and the global "zerdr: Herdr" Zed task. |
+| `zerdr uninstall [--purge]` | Remove integration files, the owned init command, and the auto-mode flag; `--purge` removes zerdr state too. |
+| `zerdr [--session NAME] doctor` | Check required commands, installed files, bindings, routes, leases, and thread auto mode for the selected session. |
 
-Bare `zerdr` accepts `--session NAME`, `--mode auto|internal|external`, `--anchor PATH`, and `--focus terminal|zed`. Omitting `--session` selects Herdr's default session. Launch options other than `--session` cannot accompany a subcommand.
+Bare `zerdr` accepts `--session NAME` and `--anchor PATH`. Omitting `--session` selects Herdr's default session. `--anchor` cannot accompany a subcommand.
 
-`pick`, `next`, `previous`, and `sync` require a live zerdr wrapper for the selected session and use its routing mode. Manual commands use the current Herdr pane when available, otherwise the default session; pass `--session NAME` to target another session. Without a live wrapper for that session, binding changes do not route Zed.
+`sync` requires a live zerdr wrapper for the selected session. Manual commands use the current Herdr pane when available, otherwise the default session; pass `--session NAME` to target another session. Without a live wrapper for that session, binding changes do not route Zed. Workspace switching itself happens in Herdr's own UI.
 
-## Routing modes
+## Routing
 
-- **Internal:** Start zerdr in a Zed terminal whose current directory belongs to the target window. Each workspace change runs `zed --existing ANCHOR` followed by `zed --add TARGET`, then promotes the target checkout to the next anchor. Zed's CLI cannot verify that the starting checkout belongs to that window.
-- **External:** Ghostty, iTerm, and other local terminals route the focused checkout with `zed --existing TARGET`. On macOS, zerdr tries to restore terminal focus after Zed routes the project; focus changes and Spaces can interrupt restoration. Linux leaves Zed in front.
-
-Use `--anchor PATH` to choose the first internal anchor. Use `--focus zed` on macOS to leave Zed in front after external routing.
+Start zerdr in a Zed terminal whose current directory belongs to the target window, or pass `--anchor PATH`. Each workspace change runs `zed --existing ANCHOR` followed by `zed --add TARGET`, then promotes the target checkout to the next anchor. Zed's CLI cannot verify that the starting checkout belongs to that window, and zerdr does not check where it was launched from.
 
 Zed can reuse a window that contains the target project. Its CLI cannot force a new window when no window contains that project.
 
@@ -106,10 +107,10 @@ The one-shot plugin action reuses an applicable live wrapper route. Without a wr
 
 ## Notes
 
-- **Keybindings:** `zerdr setup` adds global Zed tasks and prints optional Herdr and Zed keybindings. It does not edit your Herdr config or Zed keymap.
-- **Terminal thread automation:** setup never writes `agent.terminal_init_command`; automation is opt-in and yours to configure. An init command that an older zerdr installed is migrated away by the next `zerdr setup` or `zerdr uninstall` (with a backup under zerdr's state directory), and `zerdr doctor` reports the setting informationally.
+- **Keybindings:** `zerdr setup` adds the global Zed task and prints optional Herdr and Zed keybindings. It does not edit your Herdr config or Zed keymap.
+- **Terminal thread automation:** `zerdr setup` never writes `agent.terminal_init_command`; automation is opt-in via `zerdr thread --enable`, which records ownership so `zerdr uninstall` can remove the value again (with a backup under zerdr's state directory). `zerdr doctor` reports the mode informationally. With the mode on, restored terminal threads reattach after a Zed restart; turn the mode off if you want a quiet restart.
 - **One thread per agent:** two terminal threads never share an agent. Attaching an agent that already has a thread fails and names the pane.
-- **Wrapper ownership:** Each Herdr session can have one live zerdr wrapper. Stop that session's wrapper before changing its routing mode. Wrappers for different named sessions can coexist.
+- **Wrapper ownership:** Each Herdr session can have one live zerdr wrapper. Wrappers for different named sessions can coexist.
 - **Session lifetime:** Exiting a zerdr client stops synchronization for that wrapper, but the default or named Herdr session remains available to `herdr` and future zerdr clients.
 - **Missing checkouts:** A missing checkout keeps its binding. Restore the checkout, run `zerdr [--session NAME] bind PATH`, or remove it with `zerdr [--session NAME] unbind`.
 - **Uninstall:** `zerdr uninstall` keeps bindings and route state. Stop the live wrapper before running `zerdr uninstall --purge`.
