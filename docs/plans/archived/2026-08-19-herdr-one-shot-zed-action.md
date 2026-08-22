@@ -168,7 +168,7 @@ The root may be resolved before acquiring the socket lock, but route selection a
 - Wrapper leases, routes, and sync locks are already scoped by canonical Herdr socket. Route state remains dedicated to the fixed `zerdr` wrapper session and does not require a schema change.
 - Setup already owns manifest materialization, plugin linking, five Zed tasks, rollback, and printed keymap guidance without editing user keymaps.
 - Doctor currently reports absent wrapper/session as warnings instructing bare `zerdr`, even though no-wrapper plugin-only operation will be valid.
-- The active `docs/plans/2026-08-19-auto-terminal-routing.md` excludes ordinary-client synchronization and keeps bindings fixed to `zerdr`. This plan supersedes only those statements; its wrapper routing and safety contracts remain in force.
+- The `docs/plans/archived/2026-08-19-auto-terminal-routing.md` plan excludes ordinary-client synchronization and keeps bindings fixed to `zerdr`. This plan supersedes only those statements; its wrapper routing and safety contracts remain in force.
 
 ### Assumptions
 

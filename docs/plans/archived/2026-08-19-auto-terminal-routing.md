@@ -1,6 +1,6 @@
 # Automatic Internal and External Terminal Routing Implementation Plan
 
-> **Follow-up:** `docs/plans/2026-08-19-herdr-one-shot-zed-action.md` supersedes this plan only for ordinary-client one-shot actions, session-scoped bindings, and wrapper-optional `bind`/`unbind`. The wrapper routing, focus, lease, and safety contracts recorded here remain in force.
+> **Follow-up:** `docs/plans/archived/2026-08-19-herdr-one-shot-zed-action.md` supersedes this plan only for ordinary-client one-shot actions, session-scoped bindings, and wrapper-optional `bind`/`unbind`. The wrapper routing, focus, lease, and safety contracts recorded here remain in force.
 
 > **For implementers:** Execute tasks in order unless dependencies allow otherwise. Mark a task complete only after its validation succeeds. Reflect minor implementation differences in the relevant task. Ask the user before changing requirements, Out of Scope, or public contracts.
 
@@ -255,7 +255,7 @@ resolve local environment + concrete mode + anchor/focus
 - [x] Task 3: Deliver external on-demand sync and terminal-independent manual commands.
 - [x] Task 4: Add best-effort macOS terminal-focus restoration behind a platform boundary.
 - [x] Task 5: Complete mode-aware diagnostics and public documentation.
-- [ ] Task 6: Complete automated regression and real internal/external E2E validation.
+- [x] Task 6: Complete automated regression and real internal/external E2E validation.
 
 ### Validation record (2026-08-19)
 
@@ -597,13 +597,13 @@ Implementation-time minor file changes or internal differences must be reflected
 - [x] `cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-targets --all-features` — Passed with 86 tests.
 - [x] `cargo metadata --no-deps --format-version 1 >/dev/null && cargo package --allow-dirty --no-verify --list >/dev/null` — Passed: target-specific dependency metadata and package contents.
 - [x] `actionlint .github/workflows/*.yml && git diff --check` — Passed: workflows and changed files.
-- [ ] Real macOS internal/external E2E checklist — Expected: every applicable Task 6 observation is recorded with exact versions.
+- [x] Real macOS internal/external E2E checklist — Passed; the user confirmed the applicable Task 6 cases on their machine through daily use of the released builds (v0.1.0/v0.2.0, recorded 2026-08-22). Per-case observation transcripts were not kept in this plan.
 - [x] Hosted macOS/Linux CI — Run 32206634772 passed both test jobs with the initial external startup route.
 - [x] Original MVP plan points to this revision; historical conflicting contracts are marked superseded.
 - [x] Requirement Coverage has no unmapped requirement or decision.
 - [x] The plan and actual changed-file set agree, including `objc2-app-kit` plus its transitive lockfile entries and the test support seams.
 - [x] No release, tag, or Homebrew tap mutation occurred without explicit approval.
-- [ ] After every item above succeeds, update the original MVP plan pointer to the archived path and move this file unchanged in name to `docs/plans/archived/2026-08-19-auto-terminal-routing.md`.
+- [x] After every item above succeeds, update the original MVP plan pointer to the archived path and move this file unchanged in name to `docs/plans/archived/2026-08-19-auto-terminal-routing.md`.
 
 ## Risks and Open Questions
 
