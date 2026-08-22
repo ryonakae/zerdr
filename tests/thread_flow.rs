@@ -451,9 +451,9 @@ fn auto_without_a_matching_workspace_creates_and_binds_one() {
 }
 
 /// Auto attach stays best-effort where creation cannot help: outside a Git checkout the
-/// thread is left as a plain local shell with a single note.
+/// thread is left silently as a plain local shell.
 #[test]
-fn auto_outside_a_git_checkout_leaves_a_plain_shell_with_one_note() {
+fn auto_outside_a_git_checkout_silently_leaves_a_plain_shell() {
     let fixture = Fixture::new();
     let paths = fixture.paths();
     fs::create_dir_all(&paths.state_dir).unwrap();
@@ -471,10 +471,8 @@ fn auto_outside_a_git_checkout_leaves_a_plain_shell_with_one_note() {
         .unwrap();
 
     assert!(output.status.success(), "{output:?}");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(stderr.lines().count(), 1, "{stderr}");
-    assert!(stderr.starts_with("zerdr: "), "{stderr}");
-    assert!(stderr.contains("starting a plain shell"), "{stderr}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
     let log = fixture.env.read_log();
     assert!(!log.contains("workspace create"), "{log}");
     assert!(!log.contains("tab create"), "{log}");
@@ -501,9 +499,8 @@ fn auto_exits_zero_when_herdr_is_unavailable() {
         .unwrap();
 
     assert!(output.status.success(), "{output:?}");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(stderr.lines().count(), 1, "{stderr}");
-    assert!(stderr.starts_with("zerdr: "), "{stderr}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
 }
 
 /// Herdr only records `worktree.checkout_path` when it detected the checkout at

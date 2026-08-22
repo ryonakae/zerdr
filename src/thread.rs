@@ -37,13 +37,9 @@ enum Attachment {
 pub fn run_auto(session_name: &str) -> Result<()> {
     let paths = Paths::discover()?;
     if !crate::setup::thread_auto_enabled(&paths) {
-        println!("zerdr: thread auto mode is disabled; this is a plain local shell");
         return Ok(());
     }
-    if let Err(error) = run_with_mode(session_name, None, None, true, true) {
-        let message = error.to_string().replace('\n', " ");
-        eprintln!("zerdr: {message}; starting a plain shell");
-    }
+    let _ = run_with_mode(session_name, None, None, true, true);
     Ok(())
 }
 
