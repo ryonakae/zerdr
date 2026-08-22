@@ -27,7 +27,7 @@ Zed's agent panel sidebar shows a live status for plain terminal threads running
 ### Requirements
 
 - **R1:** Titles emitted for agent panes (non-empty `kind`) always begin with a status glyph and one space: `<glyph> [herdr] <Kind> - <detail>` (and `<glyph> [herdr] <Kind> - <fallback>` when the detail falls back). The `[herdr]` marker and everything after it are unchanged from current behavior.
-- **R2:** If the agent's raw terminal title (Herdr `terminal_title`) has a leading prefix per Zed's rule — a run of one or more non-whitespace, non-alphanumeric characters followed by at least one whitespace character and a non-empty remainder — that run is passed through as the glyph, verbatim, followed by a single space. Examples: `⠐ Fix tests` → `⠐`; `✳ Fix` → `✳`; `>>> go` → `>>>`. Non-matches: `π - review` (π is alphanumeric), `✳Thinking` (no whitespace), `Fix tests`, empty/absent raw title.
+- **R2:** If the agent's raw terminal title (Herdr `terminal_title`) has a leading prefix per Zed's rule — a run of one or more non-whitespace, non-alphanumeric characters followed by at least one whitespace character and a non-empty remainder — that run is passed through as the glyph, verbatim, followed by a single space. Examples: `⠐ Fix tests` → `⠐`; `✳ Fix` → `✳`; `>>> go` → `>>>`. Non-matches: `π - review` (π is alphanumeric), `✳Thinking` (no whitespace), `Fix tests`, empty/absent raw title. Tightened during review: a run containing a control character is also disqualified, because the glyph is re-emitted inside zerdr's own OSC 0 sequence, which a stray ESC or BEL would corrupt.
 - **R3:** When R2 does not match, the glyph comes from Herdr's `agent_status` using Herdr's Symbols indicator set: `working` → `◐`, `blocked` → `×`, `done` → `✓`, `idle` → `○`, anything else (including `unknown`) → `·`.
 - **R4:** Plain shell panes (empty `kind`) keep the current glyph-less title `[herdr] <workspace>`.
 - **R5:** Title deduplication compares the full emitted label including the glyph: a glyph-only change (spinner frame advance, status transition with unchanged detail) re-emits the title; an unchanged label does not. Bell emission on working→settled transitions is unchanged.
@@ -65,7 +65,7 @@ Zed's agent panel sidebar shows a live status for plain terminal threads running
 ### Assumptions
 
 - Herdr may omit `terminal_title` for some panes; absence simply means no pass-through (R3 applies). No Herdr version gate is needed because the field is additive and optional.
-- Prefix runs arriving from Herdr titles contain no control characters (they come from already-sanitized terminal titles); zerdr does not re-sanitize beyond the R2 character-class check.
+- Prefix runs arriving from Herdr titles normally contain no control characters; the R2 character-class check nevertheless rejects a run carrying one (review hardening), so a hostile title cannot corrupt the emitted OSC sequence through the glyph. The `<detail>` portion keeps its pre-existing, unsanitized behavior.
 
 ## File Structure
 
@@ -173,14 +173,19 @@ Tasks 1 and 2 ship as one commit: the README paragraph is inseparable from the b
 
 ## Final Validation
 
-- [ ] `cargo test --test thread_flow` — Expected: pass, including new glyph cases
-- [ ] `cargo test --all-targets --all-features` — Expected: pass
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings
-- [ ] `cargo fmt --all -- --check` — Expected: no diff
-- [ ] Manual check: run `zerdr thread` in a Zed terminal thread against a Herdr pane running Claude Code and one running pi; the Zed sidebar row icon shows the claude spinner frames / `✳`, and `◐`/`○` for pi as it works and settles
-- [ ] Requirement Coverage has no unaddressed rows
-- [ ] The plan matches the actual changes
-- [ ] After all of the above succeed, move this plan unchanged to `docs/plans/archived/`
+- [x] `cargo test --test thread_flow` — Expected: pass, including new glyph cases — passed (38 tests)
+- [x] `cargo test --all-targets --all-features` — Expected: pass — passed (204 tests, 0 failures)
+- [x] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings — clean
+- [x] `cargo fmt --all -- --check` — Expected: no diff — clean
+- [x] Manual check: run `zerdr thread` in a Zed terminal thread against a Herdr pane running Claude Code and one running pi; the Zed sidebar row icon shows the claude spinner frames / `✳`, and `◐`/`○` for pi as it works and settles — confirmed by the user (first attempt ran a stale `~/.cargo/bin/zerdr` built before this change; after `cargo install --path . --locked` and opening a fresh thread, the glyphs display as specified, and the settle notification still shows the blue dot)
+- [x] Requirement Coverage has no unaddressed rows
+- [x] The plan matches the actual changes
+- [x] After all of the above succeed, move this plan unchanged to `docs/plans/archived/`
+
+## Implementation Record
+
+- Commits: `a7e9f6a` feat(thread): lead thread titles with a status glyph (Tasks 1+2 and this plan); `1b70332` fix(thread): disqualify control characters from the title glyph run (review fix). Both pushed.
+- Independent review (fresh-context reviewer, against this plan and `git diff 20cbadb..a7e9f6a`): no blocking/high findings. Two low findings — control characters could pass through the glyph run into the OSC payload, and the empty-remainder abort branch of `title_glyph_prefix` lacked a dedicated test — both fixed in `1b70332` (guard on `char::is_control()`, two new rows in `unusable_raw_prefixes_fall_back_to_the_status_glyph`). Re-review verdict: resolved, no new issues; `is_control()` (category Cc) cannot reject a legitimate visible glyph.
 
 ## Risks and Open Questions
 
