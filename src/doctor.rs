@@ -333,8 +333,7 @@ fn report_thread_auto(paths: &Paths, install: &InstallState, report: &mut Report
         return;
     }
     let expected = terminal_init_command(&install.executable);
-    let not_set =
-        "auto mode is enabled but Zed terminal_init_command is not set; run `zerdr setup auto enable`";
+    let not_set = "auto mode is enabled but Zed terminal_init_command is not set; run `zerdr setup auto enable`";
     let text = match fs::read_to_string(&paths.zed_settings_file) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

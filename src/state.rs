@@ -407,7 +407,9 @@ pub fn is_linked_worktree(root: &Path) -> Result<bool> {
         } else {
             root.join(path)
         };
-        absolute.canonicalize().map_err(|error| Error::io(dir, error))
+        absolute
+            .canonicalize()
+            .map_err(|error| Error::io(dir, error))
     };
     Ok(resolve(git_dir)? != resolve(common_dir)?)
 }
