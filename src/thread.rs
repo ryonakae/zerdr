@@ -37,6 +37,11 @@ enum Attachment {
 pub fn run_auto(session_name: &str) -> Result<()> {
     let paths = Paths::discover()?;
     if !crate::setup::thread_auto_enabled(&paths) {
+        // The init command keeps firing after `setup auto disable`, and a silent exit
+        // there is indistinguishable from a bug, so the no-op explains itself.
+        println!(
+            "zerdr: auto mode is disabled; run `zerdr connect` to attach this thread to a Herdr pane, or run `zerdr setup auto enable` to attach new threads automatically"
+        );
         return Ok(());
     }
     let _ = run_with_mode(session_name, None, None, true, true);

@@ -357,15 +357,21 @@ fn connect_auto_rejects_attach_options() {
     }
 }
 
+/// With the mode disabled but the init command still installed, every new thread runs
+/// `connect --auto`; a silent exit there reads as a bug, so the run explains itself and
+/// still exits zero without touching Herdr.
 #[test]
-fn connect_auto_is_silent_when_disabled_without_touching_herdr() {
+fn connect_auto_explains_itself_when_disabled_without_touching_herdr() {
     for args in [
         vec!["connect", "--auto"],
         vec!["connect", "--auto", "--session", "work"],
     ] {
         let env = TestEnv::new();
         let assert = env.command().args(args).assert().success();
-        assert!(assert.get_output().stdout.is_empty());
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+        assert!(stdout.contains("auto mode is disabled"), "{stdout:?}");
+        assert!(stdout.contains("zerdr connect"), "{stdout:?}");
+        assert!(stdout.contains("zerdr setup auto enable"), "{stdout:?}");
         assert!(assert.get_output().stderr.is_empty());
         assert_eq!(env.read_log(), "");
     }
