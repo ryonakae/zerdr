@@ -400,6 +400,35 @@ fn a_bare_thread_without_a_matching_workspace_explains_the_create_flag() {
     assert!(!fixture.env.read_log().contains("workspace create"));
 }
 
+/// In an unmatched linked worktree the refusal explains what `--create` would do there:
+/// open the worktree as a Herdr workspace, not just "make one".
+#[test]
+fn a_bare_thread_in_a_worktree_explains_worktree_registration() {
+    let fixture = Fixture::new();
+    let worktree = fixture.linked_worktree("feature");
+
+    fixture
+        .thread_command()
+        .current_dir(&worktree)
+        .arg("connect")
+        .env(
+            "ZERDR_TEST_WORKSPACES_JSON",
+            r#"{"result":{"workspaces":[]}}"#,
+        )
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "open this Git worktree as a Herdr workspace",
+        ))
+        .stderr(predicate::str::contains("zerdr connect --create"))
+        .stderr(predicate::str::contains("zerdr workspace bind"))
+        .stderr(predicate::str::contains(worktree.display().to_string()));
+
+    let log = fixture.env.read_log();
+    assert!(!log.contains("workspace create"), "{log}");
+    assert!(!log.contains("worktree open"), "{log}");
+}
+
 /// With auto mode enabled, `--auto` behaves exactly like a manual `zerdr connect`.
 #[test]
 fn auto_attaches_a_free_agent_while_the_mode_is_enabled() {

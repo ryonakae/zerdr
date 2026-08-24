@@ -235,10 +235,20 @@ fn resolve_or_create(
         Some(workspace_id) => workspace_id,
         None => {
             if !create {
-                return Err(Error::User(format!(
-                    "no Herdr workspace matches {}; bind an existing workspace with `zerdr workspace bind` or run `zerdr connect --create` to make one",
-                    root.display()
-                )));
+                // In a linked worktree the refusal names what `--create` does there, so
+                // the user knows registration (not a plain workspace) is one flag away.
+                let message = if is_linked_worktree(&root).unwrap_or(false) {
+                    format!(
+                        "no Herdr workspace matches {}; run `zerdr connect --create` to open this Git worktree as a Herdr workspace, or bind one with `zerdr workspace bind`",
+                        root.display()
+                    )
+                } else {
+                    format!(
+                        "no Herdr workspace matches {}; bind an existing workspace with `zerdr workspace bind` or run `zerdr connect --create` to make one",
+                        root.display()
+                    )
+                };
+                return Err(Error::User(message));
             }
             let label = root.file_name().map_or_else(
                 || root.display().to_string(),
