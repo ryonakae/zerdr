@@ -1,14 +1,18 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
+use signal_hook::iterator::Signals;
 
 use crate::error::{Error, Result};
 use crate::herdr::{AgentInfo, Herdr, ManagedChild, SignalForwarder, Workspace};
 use crate::state::{
     BindingStore, DEFAULT_SESSION_NAME, OperationGuard, Paths, ThreadLeaseGuard, ThreadLeaseSet,
-    ThreadPaneMemory, canonical_git_root, linked_worktree_parent,
+    ThreadPaneMemory, canonical_git_root, linked_worktree_parent, thread_detach_active,
 };
 
 const DEFAULT_POLL_MS: u64 = 1_000;
@@ -81,7 +85,7 @@ fn run_with_mode(
     };
     let memory = ThreadPaneMemory::new(paths.thread_memory_dir.clone());
 
-    let (agent, _lease, terminal, attachment) = match target {
+    let (agent, lease, terminal, attachment) = match target {
         Some(target) => {
             let agent = herdr
                 .agent_get_for(session_name, target)?
@@ -99,10 +103,15 @@ fn run_with_mode(
 
     // Without the workspace list there is no way to tell whether this workspace is
     // already focused, and focusing it blindly would re-fire `workspace.focused` and pull
-    // Zed forward under follow mode. Skipping the focus is the harmless direction.
+    // Zed forward under follow mode. Skipping the focus is the harmless direction. While
+    // detach mode is on, the focus is deferred to the first attach instead: it would
+    // move the shared session focus under a user working from another client.
+    let start_detached = thread_detach_active(&paths);
     let workspaces = match herdr.workspaces_for(session_name) {
         Ok(workspaces) => {
-            focus_workspace(&herdr, session_name, &agent.workspace_id, &workspaces);
+            if !start_detached {
+                focus_workspace(&herdr, session_name, &agent.workspace_id, &workspaces);
+            }
             workspaces
         }
         Err(error) => {
@@ -116,30 +125,157 @@ fn run_with_mode(
         .map(|workspace| workspace.label.clone());
     print_status(auto, &attachment, &agent, label.as_deref());
 
-    // A fresh pane holds only a shell, which `agent attach` refuses, so it is reached
-    // through its terminal instead.
-    let mut child = ManagedChild::new(match terminal.as_deref() {
-        Some(terminal_id) => herdr.spawn_terminal_attach_for(session_name, terminal_id)?,
-        None => herdr.spawn_agent_attach_for(session_name, &agent.pane_id)?,
-    });
-    let _signals = SignalForwarder::new(child.id())?;
+    let pane_id = agent.pane_id.clone();
+    let workspace_id = agent.workspace_id.clone();
+    let detached = Arc::new(AtomicBool::new(start_detached));
     let monitor = Monitor::start(
         herdr.clone(),
         session_name.to_owned(),
-        agent.pane_id.clone(),
+        pane_id.clone(),
         label,
         agent,
+        Arc::clone(&detached),
     );
-
-    let status = child
-        .wait()
-        .map_err(|error| Error::User(format!("failed to wait for the Herdr agent: {error}")))?;
+    let outcome = attach_cycle(
+        &herdr,
+        &paths,
+        session_name,
+        &pane_id,
+        &workspace_id,
+        terminal.as_deref(),
+        &lease,
+        &detached,
+        start_detached,
+    );
     monitor.stop();
-    if status.success() {
-        Ok(())
-    } else {
-        Err(Error::ChildExit(status.code().unwrap_or(1)))
+    match outcome? {
+        CycleOutcome::ChildExit(status) if status.success() => Ok(()),
+        CycleOutcome::ChildExit(status) => Err(Error::ChildExit(status.code().unwrap_or(1))),
+        CycleOutcome::PaneGone | CycleOutcome::Interrupted => Ok(()),
     }
+}
+
+const DETACHED_NOTICE: &str = "zerdr: detached from Herdr; run `zerdr attach` to reconnect";
+
+/// How the attach cycle ended. A child exiting on its own keeps the pre-detach exit
+/// contract; the other ends are graceful and carry no exit status.
+enum CycleOutcome {
+    ChildExit(std::process::ExitStatus),
+    PaneGone,
+    Interrupted,
+}
+
+/// Drives the attach child across `zerdr detach`/`zerdr attach` transitions. While a
+/// child is attached its exit ends the thread as before; when the detach flag appears
+/// the child is terminated gracefully (SIGTERM, so the Herdr client restores the
+/// terminal modes) and the thread waits, lease held, until the flag clears. Reattaching
+/// always goes through the pane's current terminal id, so it works whether or not an
+/// agent still runs there; a pane that no longer resolves ends the thread gracefully.
+#[allow(clippy::too_many_arguments)]
+fn attach_cycle(
+    herdr: &Herdr,
+    paths: &Paths,
+    session_name: &str,
+    pane_id: &str,
+    workspace_id: &str,
+    initial_terminal: Option<&str>,
+    lease: &ThreadLeaseGuard,
+    detached: &AtomicBool,
+    start_detached: bool,
+) -> Result<CycleOutcome> {
+    let interval = cycle_interval();
+    let mut focus_pending = start_detached;
+    let mut child = if start_detached {
+        println!("{DETACHED_NOTICE}");
+        lease.mark_detached()?;
+        None
+    } else {
+        // A fresh pane holds only a shell, which `agent attach` refuses, so it is
+        // reached through its terminal instead.
+        Some(ManagedChild::new(match initial_terminal {
+            Some(terminal_id) => herdr.spawn_terminal_attach_for(session_name, terminal_id)?,
+            None => herdr.spawn_agent_attach_for(session_name, pane_id)?,
+        }))
+    };
+
+    loop {
+        match child.take() {
+            Some(mut managed) => {
+                let _signals = SignalForwarder::new(managed.id())?;
+                loop {
+                    if let Some(status) = managed.try_wait().map_err(|error| {
+                        Error::User(format!("failed to wait for the Herdr agent: {error}"))
+                    })? {
+                        return Ok(CycleOutcome::ChildExit(status));
+                    }
+                    if thread_detach_active(paths) {
+                        detached.store(true, Ordering::SeqCst);
+                        managed.terminate_gracefully();
+                        println!("{DETACHED_NOTICE}");
+                        lease.mark_detached()?;
+                        break;
+                    }
+                    thread::sleep(interval);
+                }
+            }
+            None => {
+                // Without a child there is nothing forwarding signals, and the default
+                // disposition would skip the guard cleanup, so watch them here.
+                let mut signals =
+                    Signals::new([SIGINT, SIGTERM, SIGHUP]).map_err(|error| {
+                        Error::User(format!("failed to register signal handlers: {error}"))
+                    })?;
+                loop {
+                    if signals.pending().next().is_some() {
+                        return Ok(CycleOutcome::Interrupted);
+                    }
+                    if !thread_detach_active(paths) {
+                        break;
+                    }
+                    thread::sleep(interval);
+                }
+                if focus_pending {
+                    match herdr.workspaces_for(session_name) {
+                        Ok(workspaces) => {
+                            focus_workspace(herdr, session_name, workspace_id, &workspaces);
+                        }
+                        Err(error) => eprintln!(
+                            "zerdr: could not read Herdr workspaces, leaving focus alone: {error}"
+                        ),
+                    }
+                    focus_pending = false;
+                }
+                let terminal_id = match herdr.pane_terminal_for(session_name, pane_id) {
+                    Ok(terminal_id) => terminal_id,
+                    Err(_) => {
+                        println!(
+                            "zerdr: Herdr pane {pane_id} is gone; closing this thread connection"
+                        );
+                        return Ok(CycleOutcome::PaneGone);
+                    }
+                };
+                let spawned =
+                    ManagedChild::new(herdr.spawn_terminal_attach_for(session_name, &terminal_id)?);
+                lease.clear_detached()?;
+                detached.store(false, Ordering::SeqCst);
+                child = Some(spawned);
+            }
+        }
+    }
+}
+
+/// The attach cycle's own poll: fast enough that quitting the attach (ctrl+b q)
+/// returns the terminal promptly, still trivial in cost (a stat and a try_wait).
+/// Deliberately not `ZERDR_THREAD_POLL_MS`: that tunes the title monitor, and a
+/// slow monitor must never delay the exit after the attach child ends.
+fn cycle_interval() -> Duration {
+    const DEFAULT_CYCLE_POLL_MS: u64 = 50;
+    Duration::from_millis(
+        std::env::var("ZERDR_THREAD_CYCLE_POLL_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_CYCLE_POLL_MS),
+    )
 }
 
 /// Resolves the session socket, starting a headless server for a not-running
@@ -535,6 +671,7 @@ impl Monitor {
         pane_id: String,
         fallback_label: Option<String>,
         initial: AgentInfo,
+        detached: Arc<AtomicBool>,
     ) -> Self {
         let stop = Arc::new((Mutex::new(false), Condvar::new()));
         let interval = Duration::from_millis(
@@ -548,15 +685,25 @@ impl Monitor {
             let workspace_id = initial.workspace_id.clone();
             let mut last_label = None;
             let mut last_status = initial.status.clone();
-            emit_title(&mut last_label, &initial, fallback_label.as_deref());
+            emit_title(
+                &mut last_label,
+                &initial,
+                fallback_label.as_deref(),
+                detached.load(Ordering::SeqCst),
+            );
             // Waiting on the condvar rather than sleeping keeps detaching immediate: the
             // agent exits, `stop` wakes this thread, and zerdr does not linger for a
             // whole poll interval before returning the terminal to Zed.
             while !wait_for_stop(&worker_stop, interval) {
+                // The title keeps following the agent while detached so the sidebar
+                // stays informative, but the settle bell stays quiet: nothing is
+                // attached, so there is nothing to call the user back to.
+                let is_detached = detached.load(Ordering::SeqCst);
                 match herdr.agent_get_for(&session_name, &pane_id) {
                     Ok(Some(agent)) => {
-                        emit_title(&mut last_label, &agent, fallback_label.as_deref());
-                        if last_status == "working"
+                        emit_title(&mut last_label, &agent, fallback_label.as_deref(), is_detached);
+                        if !is_detached
+                            && last_status == "working"
                             && SETTLED_STATES.contains(&agent.status.as_str())
                         {
                             emit(b"\x07");
@@ -569,8 +716,8 @@ impl Monitor {
                     // the thread, so the bell still rings.
                     Ok(None) => {
                         let shell = AgentInfo::shell(&pane_id, &workspace_id);
-                        emit_title(&mut last_label, &shell, fallback_label.as_deref());
-                        if last_status == "working" {
+                        emit_title(&mut last_label, &shell, fallback_label.as_deref(), is_detached);
+                        if !is_detached && last_status == "working" {
                             emit(b"\x07");
                         }
                         last_status = shell.status;
@@ -618,10 +765,12 @@ fn wait_for_stop(stop: &(Mutex<bool>, Condvar), interval: Duration) -> bool {
 /// carries a `[herdr]` marker followed by a friendly agent name and the agent's own
 /// (live) title. An empty title falls back to the workspace label so a plain-shell
 /// tab still says where it lives. Agent titles lead with a status glyph, which Zed
-/// promotes into the thread's sidebar row icon.
-fn emit_title(last: &mut Option<String>, agent: &AgentInfo, fallback: Option<&str>) {
+/// promotes into the thread's sidebar row icon. While detached the marker becomes
+/// `[herdr⏸]`, so a thread that will not take input is visibly different.
+fn emit_title(last: &mut Option<String>, agent: &AgentInfo, fallback: Option<&str>, detached: bool) {
+    let marker = if detached { "[herdr\u{23f8}]" } else { "[herdr]" };
     let label = if agent.kind.is_empty() {
-        format!("[herdr] {}", fallback.unwrap_or(&agent.workspace_id))
+        format!("{marker} {}", fallback.unwrap_or(&agent.workspace_id))
     } else {
         let glyph = agent
             .raw_title
@@ -635,7 +784,7 @@ fn emit_title(last: &mut Option<String>, agent: &AgentInfo, fallback: Option<&st
             .filter(|detail| !detail.is_empty())
             .or(fallback)
             .unwrap_or(&agent.workspace_id);
-        format!("{glyph} [herdr] {} - {detail}", display_kind(&agent.kind))
+        format!("{glyph} {marker} {} - {detail}", display_kind(&agent.kind))
     };
     if last.as_deref() == Some(label.as_str()) {
         return;

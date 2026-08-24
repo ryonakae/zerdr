@@ -42,7 +42,7 @@ CI runs these checks on macOS and Ubuntu. Platform-specific behavior needs cover
 - `src/runtime.rs` resolves local versus remote execution and the wrapper anchor.
 - `src/herdr.rs` wraps Herdr JSON commands and owns the child process lifecycle.
 - `src/sync.rs` maps focused workspaces to Git roots and routes them into Zed.
-- `src/thread.rs` backs `zerdr connect`: it resolves and attaches Zed terminal threads to Herdr agents, starts a not-running named session headless and registers linked worktrees via `herdr worktree open` under `--create`, and mirrors agent titles and bells into the threads sidebar.
+- `src/thread.rs` backs `zerdr connect`: it resolves and attaches Zed terminal threads to Herdr agents, starts a not-running named session headless and registers linked worktrees via `herdr worktree open` under `--create`, mirrors agent titles and bells into the threads sidebar, and suspends/resumes the attach while the detach flag is set (`zerdr detach`/`zerdr attach`), keeping the lease and the title (with a `[herdr⏸]` marker, bell muted) alive in between.
 - `src/state.rs` owns bindings, route schemas, leases, locks, and atomic persistence.
 - `src/setup.rs` merges the Herdr plugin and Zed tasks into user configuration, and owns auto mode: `zerdr setup auto enable` installs `agent.terminal_init_command` with a recorded fingerprint that setup preserves and uninstall consumes.
 - `src/doctor.rs` checks capabilities, installation state, bindings, routes, and leases.

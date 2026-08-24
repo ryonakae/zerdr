@@ -143,7 +143,9 @@ if [ "$1" = "--session" ] && [ "$3" = "pane" ] && [ "$4" = "get" ]; then
     done
   fi
   if [ -n "$found" ]; then
-    printf '{"result":{"type":"pane_info","pane":%s}\n' "$found" | sed 's/}$/,"terminal_id":"term-'"$5"'"}}/'
+    # Real Herdr reports terminal_id inside the pane object, so inject it there.
+    found=$(printf '%s' "$found" | sed 's/}$/,"terminal_id":"term-'"$5"'"}/')
+    printf '{"result":{"type":"pane_info","pane":%s}}\n' "$found"
   else
     printf '{"result":{"type":"pane_info","pane":{"pane_id":"%s","terminal_id":"term-%s"}}}\n' "$5" "$5"
   fi

@@ -105,7 +105,7 @@ The user needs a way to suspend every thread attach before working from the phon
 ## Progress
 
 - [x] Task 1: State layer — detach flag, lease markers, suspend scan
-- [ ] Task 2: Connect suspend/resume cycle
+- [x] Task 2: Connect suspend/resume cycle
 - [ ] Task 3: `zerdr detach` / `zerdr attach` commands
 - [ ] Task 4: README documentation
 
@@ -181,6 +181,8 @@ The user needs a way to suspend every thread attach before working from the phon
 **Validation:**
 - Run: `cargo test --test thread_flow`
 - Expected: full pass, no flaky timing (waits use files/pids, not fixed sleeps).
+
+**Result:** Done. `attach_cycle` in `thread.rs` implements the state machine; `ManagedChild::terminate_gracefully` (SIGTERM) added in `herdr.rs`. Two deviations from the notes, both behavior-preserving: (1) the cycle polls on its own `ZERDR_THREAD_CYCLE_POLL_MS` (default 50 ms) instead of reusing `ZERDR_THREAD_POLL_MS` — the existing `detaching_does_not_wait_for_the_next_poll` test sets the monitor poll to 30 s and requires child exit to end connect promptly, so the two intervals must be independent; (2) `tests/support/mod.rs` fake `pane get` had a latent bug injecting `terminal_id` outside the pane object (real Herdr reports it inside `result.pane`) — fixed, which is what the first reattach exercised. Validation: `cargo test --test thread_flow` → 55 passed (5 new).
 
 ### Task 3: `zerdr detach` / `zerdr attach` commands
 

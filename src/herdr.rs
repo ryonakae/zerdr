@@ -632,6 +632,17 @@ impl ManagedChild {
             self.running = false;
         }
     }
+
+    /// SIGTERM rather than the SIGKILL of [`Self::terminate`]: a Herdr attach client
+    /// restores the host terminal's modes (alternate screen, mouse, keyboard
+    /// protocol) only when it can handle the signal.
+    pub(crate) fn terminate_gracefully(&mut self) {
+        if self.running {
+            let _ = kill(Pid::from_raw(self.child.id() as i32), Signal::SIGTERM);
+            let _ = self.child.wait();
+            self.running = false;
+        }
+    }
 }
 
 impl Drop for ManagedChild {
