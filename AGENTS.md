@@ -66,6 +66,7 @@ CI runs these checks on macOS and Ubuntu. Platform-specific behavior needs cover
 
 - Do not run `zerdr setup install`, `zerdr setup uninstall`, or local `zerdr setup doctor` against the developer's real environment during automated validation. They can modify Herdr plugins, global Zed tasks, or zerdr state.
 - Integration tests that invoke Herdr, Zed, or environment-facing commands must use `TestEnv`, which sets `ZERDR_TEST_ROOT` and points zerdr at fake binaries. Pure state tests may use `tempfile` directly.
+- In monitor tests driven by `ZERDR_TEST_AGENT_GET_SEQ`, wait on the fake's sequence counter with `wait_for_sequence` before detaching. Fixed sleeps race the poll loop and fail under parallel load.
 - Keep the shared fake `herdr` on `PATH` free of per-invocation setup. Wrapper tests budget roughly two seconds for a multi-process dance, so even one extra command that runs on every call makes them fail under parallel load. Bake per-test configuration into a private fake with `TestEnv::baked_herdr` instead.
 - `zerdr setup uninstall --purge` recursively removes zerdr state and data after checking live leases. Cover purge changes with isolated tests.
 - Do not create release tags, GitHub releases, or Homebrew tap commits as part of normal development. `.github/workflows/release.yml` owns publication.

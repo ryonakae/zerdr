@@ -211,6 +211,23 @@ fn write_sequence(directory: &Path, responses: &[&str]) {
     }
 }
 
+/// Waits until the fake herdr has served `count` `agent get` polls. The monitor emits
+/// for poll N before starting poll N+1, so `count` = sequence length + 1 guarantees
+/// every entry has been observed and emitted; a fixed sleep cannot, under load.
+fn wait_for_sequence(directory: &Path, count: u64) {
+    for _ in 0..400 {
+        let served = fs::read_to_string(directory.join("counter"))
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        if served >= count {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("timed out waiting for {count} agent get polls");
+}
+
 fn agent_response(status: &str, title: &str) -> String {
     agent_response_of_kind("pi", status, title, title)
 }
@@ -899,7 +916,7 @@ fn titles_are_emitted_once_per_change_and_a_bell_marks_settling() {
         .unwrap();
     wait_for_log(&fixture.env, "agent attach w1:p1");
     // Let the sequence drain so the settling transition is observed before detaching.
-    thread::sleep(Duration::from_millis(300));
+    wait_for_sequence(&sequence, 4);
     fixture.release_attach();
     let output = child.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1009,7 +1026,7 @@ fn a_raw_title_glyph_passes_through_and_frame_changes_reemit() {
         .spawn()
         .unwrap();
     wait_for_log(&fixture.env, "agent attach w1:p1");
-    thread::sleep(Duration::from_millis(300));
+    wait_for_sequence(&sequence, 3);
     fixture.release_attach();
     let output = child.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1109,7 +1126,7 @@ fn a_status_transition_reemits_the_title_with_the_new_glyph() {
         .spawn()
         .unwrap();
     wait_for_log(&fixture.env, "agent attach w1:p1");
-    thread::sleep(Duration::from_millis(300));
+    wait_for_sequence(&sequence, 3);
     fixture.release_attach();
     let output = child.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1141,11 +1158,7 @@ fn a_failing_poll_leaves_the_attached_agent_and_the_last_title_alone() {
     let sequence = fixture.env.root.path().join("agent-get-seq");
     write_sequence(
         &sequence,
-        &[
-            "EXIT:1\n",
-            &serde_json::json!({"result": {"type": "agent_info"}}).to_string(),
-            &agent_response("idle", "steady title"),
-        ],
+        &["EXIT:1\n", &agent_response("idle", "steady title")],
     );
 
     let child = fixture
@@ -1155,7 +1168,7 @@ fn a_failing_poll_leaves_the_attached_agent_and_the_last_title_alone() {
         .spawn()
         .unwrap();
     wait_for_log(&fixture.env, "agent attach w1:p1");
-    thread::sleep(Duration::from_millis(300));
+    wait_for_sequence(&sequence, 3);
     fixture.release_attach();
     let output = child.wait_with_output().unwrap();
 
@@ -1170,6 +1183,108 @@ fn a_failing_poll_leaves_the_attached_agent_and_the_last_title_alone() {
         String::from_utf8_lossy(&output.stderr),
         "",
         "polling failures must stay silent"
+    );
+}
+
+/// `agent get` answering without an agent is definitive, unlike a failed poll: the
+/// agent was quit and the pane is a plain shell again. The sidebar reverts to the
+/// workspace label, and quitting mid-work settles the thread, so the bell still
+/// rings — once, not on every subsequent agentless poll.
+#[test]
+fn a_quit_agent_reverts_the_title_to_the_workspace_label_and_bells_once() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "working", "in flight");
+    let sequence = fixture.env.root.path().join("agent-get-seq");
+    write_sequence(
+        &sequence,
+        &[
+            &agent_response("working", "in flight"),
+            &serde_json::json!({"result": {"type": "agent_info"}}).to_string(),
+        ],
+    );
+
+    let child = fixture
+        .std_thread_command()
+        .arg("connect")
+        .env("ZERDR_TEST_AGENT_GET_SEQ", &sequence)
+        .spawn()
+        .unwrap();
+    wait_for_log(&fixture.env, "agent attach w1:p1");
+    wait_for_sequence(&sequence, 3);
+    fixture.release_attach();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        stdout.matches(OSC_PREFIX).count(),
+        2,
+        "the agent title once, then the shell fallback once: {stdout:?}"
+    );
+    assert!(
+        stdout.contains(&format!("{OSC_PREFIX}◐ [herdr] Pi - in flight")),
+        "{stdout:?}"
+    );
+    assert!(
+        stdout.contains(&format!("{OSC_PREFIX}[herdr] checkout\u{7}")),
+        "the fallback carries no glyph and no agent detail: {stdout:?}"
+    );
+    assert_eq!(
+        stdout.matches('\u{7}').count(),
+        3,
+        "two OSC terminators plus exactly one settle bell: {stdout:?}"
+    );
+}
+
+/// An agent gone from `idle` is not a settle, so no bell rings; and the monitor keeps
+/// polling after the revert, so an agent started later in the same pane retakes the
+/// sidebar title.
+#[test]
+fn a_vanished_idle_agent_reverts_silently_and_a_restart_retakes_the_title() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "first run");
+    let sequence = fixture.env.root.path().join("agent-get-seq");
+    write_sequence(
+        &sequence,
+        &[
+            &agent_response("idle", "first run"),
+            &serde_json::json!({"result": {"type": "agent_info"}}).to_string(),
+            &agent_response("working", "second run"),
+        ],
+    );
+
+    let child = fixture
+        .std_thread_command()
+        .arg("connect")
+        .env("ZERDR_TEST_AGENT_GET_SEQ", &sequence)
+        .spawn()
+        .unwrap();
+    wait_for_log(&fixture.env, "agent attach w1:p1");
+    wait_for_sequence(&sequence, 4);
+    fixture.release_attach();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        stdout.matches(OSC_PREFIX).count(),
+        3,
+        "agent title, shell fallback, then the restarted agent: {stdout:?}"
+    );
+    assert!(
+        stdout.contains(&format!("{OSC_PREFIX}○ [herdr] Pi - first run")),
+        "{stdout:?}"
+    );
+    assert!(
+        stdout.contains(&format!("{OSC_PREFIX}[herdr] checkout\u{7}")),
+        "{stdout:?}"
+    );
+    assert!(
+        stdout.contains(&format!("{OSC_PREFIX}◐ [herdr] Pi - second run")),
+        "{stdout:?}"
+    );
+    assert_eq!(
+        stdout.matches('\u{7}').count(),
+        3,
+        "three OSC terminators and no bell: {stdout:?}"
     );
 }
 

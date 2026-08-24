@@ -42,6 +42,21 @@ pub struct AgentInfo {
     pub raw_title: Option<String>,
 }
 
+impl AgentInfo {
+    /// A pane holding only a shell, presented like an agentless Herdr tab.
+    pub fn shell(pane_id: &str, workspace_id: &str) -> Self {
+        Self {
+            kind: String::new(),
+            name: None,
+            status: "unknown".to_owned(),
+            pane_id: pane_id.to_owned(),
+            workspace_id: workspace_id.to_owned(),
+            title: None,
+            raw_title: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CreatedWorkspace {
     pub workspace_id: String,

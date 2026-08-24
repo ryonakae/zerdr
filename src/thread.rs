@@ -11,7 +11,7 @@ use crate::state::{
     ThreadPaneMemory, canonical_git_root, linked_worktree_parent,
 };
 
-const DEFAULT_POLL_MS: u64 = 2_000;
+const DEFAULT_POLL_MS: u64 = 1_000;
 const SETTLED_STATES: [&str; 3] = ["idle", "done", "blocked"];
 
 /// The one Herdr session this thread talks to, resolved once up front.
@@ -332,15 +332,7 @@ fn resolve_or_create(
             .leases
             .acquire(session.name, session.socket, &pane_id)?;
         remember_pane(memory, session, &workspace_id, &pane_id);
-        let shell = AgentInfo {
-            kind: String::new(),
-            name: None,
-            status: "unknown".to_owned(),
-            pane_id,
-            workspace_id: workspace_id.clone(),
-            title: None,
-            raw_title: None,
-        };
+        let shell = AgentInfo::shell(&pane_id, &workspace_id);
         return Ok((shell, lease, Some(terminal_id), Attachment::Remembered));
     }
 
@@ -382,15 +374,7 @@ fn start_and_lease(
         let lease = session
             .leases
             .acquire(session.name, session.socket, pane_id)?;
-        let shell = AgentInfo {
-            kind: String::new(),
-            name: None,
-            status: "unknown".to_owned(),
-            pane_id: pane_id.to_owned(),
-            workspace_id: workspace_id.to_owned(),
-            title: None,
-            raw_title: None,
-        };
+        let shell = AgentInfo::shell(pane_id, workspace_id);
         return Ok((shell, lease, Some(terminal_id)));
     };
     let name = generate_agent_name(live_agents);
@@ -561,6 +545,7 @@ impl Monitor {
         );
         let worker_stop = Arc::clone(&stop);
         let handle = thread::spawn(move || {
+            let workspace_id = initial.workspace_id.clone();
             let mut last_label = None;
             let mut last_status = initial.status.clone();
             emit_title(&mut last_label, &initial, fallback_label.as_deref());
@@ -568,16 +553,32 @@ impl Monitor {
             // agent exits, `stop` wakes this thread, and zerdr does not linger for a
             // whole poll interval before returning the terminal to Zed.
             while !wait_for_stop(&worker_stop, interval) {
-                // A failed poll must never disturb the attached agent, so keep the last
-                // known state and try again on the next tick.
-                let Ok(Some(agent)) = herdr.agent_get_for(&session_name, &pane_id) else {
-                    continue;
-                };
-                emit_title(&mut last_label, &agent, fallback_label.as_deref());
-                if last_status == "working" && SETTLED_STATES.contains(&agent.status.as_str()) {
-                    emit(b"\x07");
+                match herdr.agent_get_for(&session_name, &pane_id) {
+                    Ok(Some(agent)) => {
+                        emit_title(&mut last_label, &agent, fallback_label.as_deref());
+                        if last_status == "working"
+                            && SETTLED_STATES.contains(&agent.status.as_str())
+                        {
+                            emit(b"\x07");
+                        }
+                        last_status = agent.status;
+                    }
+                    // An answer without an agent is definitive, unlike a failed poll:
+                    // the agent was quit and the pane is a plain shell again, so the
+                    // sidebar reverts to the workspace label. Quitting mid-work settles
+                    // the thread, so the bell still rings.
+                    Ok(None) => {
+                        let shell = AgentInfo::shell(&pane_id, &workspace_id);
+                        emit_title(&mut last_label, &shell, fallback_label.as_deref());
+                        if last_status == "working" {
+                            emit(b"\x07");
+                        }
+                        last_status = shell.status;
+                    }
+                    // A failed poll must never disturb the attached agent, so keep the
+                    // last known state and try again on the next tick.
+                    Err(_) => {}
                 }
-                last_status = agent.status;
             }
         });
         Self {
