@@ -50,6 +50,20 @@ fn bare_invocations_show_their_subcommands() {
     assert_usage_lists(&["setup"], &["install", "uninstall", "doctor", "auto"]);
 }
 
+/// The auto toggle reads `enable`/`disable`; the old `on`/`off` spellings are gone
+/// without aliases, so clap teaches the new values on a stale invocation.
+#[test]
+fn setup_auto_takes_enable_or_disable_not_on_off() {
+    for state in ["on", "off"] {
+        let env = TestEnv::new();
+        env.command()
+            .args(["setup", "auto", state])
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("possible values: enable, disable"));
+    }
+}
+
 #[test]
 fn old_top_level_spellings_fail_with_clap_usage() {
     for command in ["thread", "sync", "bind", "unbind", "doctor", "uninstall"] {
@@ -140,7 +154,7 @@ fn sessionless_setup_commands_reject_session_targeting() {
     let commands: [&[&str]; 3] = [
         &["setup", "install"],
         &["setup", "uninstall"],
-        &["setup", "auto", "on"],
+        &["setup", "auto", "enable"],
     ];
     for command in commands {
         for session_first in [true, false] {
@@ -271,7 +285,7 @@ fn every_remote_marker_and_runtime_command_is_rejected_before_any_process() {
         &["workspace", "unbind"],
         &["setup", "install"],
         &["setup", "uninstall"],
-        &["setup", "auto", "on"],
+        &["setup", "auto", "enable"],
         &["sync-from-herdr"],
         &["open-from-herdr"],
     ];

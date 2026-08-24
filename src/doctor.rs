@@ -328,13 +328,13 @@ fn inspect_manifest(paths: &Paths, install: &InstallState) -> Result<()> {
 fn report_thread_auto(paths: &Paths, install: &InstallState, report: &mut Report) {
     if !paths.thread_auto_flag_file.exists() {
         report.pass(
-            "auto mode is disabled; attach manually with `zerdr connect` or run `zerdr setup auto on`",
+            "auto mode is disabled; attach manually with `zerdr connect` or run `zerdr setup auto enable`",
         );
         return;
     }
     let expected = terminal_init_command(&install.executable);
     let not_set =
-        "auto mode is enabled but Zed terminal_init_command is not set; run `zerdr setup auto on`";
+        "auto mode is enabled but Zed terminal_init_command is not set; run `zerdr setup auto enable`";
     let text = match fs::read_to_string(&paths.zed_settings_file) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -356,7 +356,7 @@ fn report_thread_auto(paths: &Paths, install: &InstallState, report: &mut Report
             ));
         }
         Ok(Some(current)) => report.warn(format!(
-            "auto mode is enabled but Zed terminal_init_command is set to {current:?}; clear it and run `zerdr setup auto on`"
+            "auto mode is enabled but Zed terminal_init_command is set to {current:?}; clear it and run `zerdr setup auto enable`"
         )),
         Ok(None) => report.warn(not_set),
         Err(error) => report.warn(format!("could not inspect the Zed settings file: {error}")),

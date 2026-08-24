@@ -1416,7 +1416,7 @@ fn setup_leaves_zed_settings_alone_and_prints_the_thread_hint() {
         .assert()
         .success()
         .stdout(predicate::str::contains("zerdr connect"))
-        .stdout(predicate::str::contains("zerdr setup auto on"));
+        .stdout(predicate::str::contains("zerdr setup auto enable"));
 
     assert!(
         !paths.zed_settings_file.exists(),
@@ -1443,7 +1443,7 @@ fn thread_enable_requires_setup_first() {
     let paths = Paths::for_test(env.root.path());
 
     env.command()
-        .args(["setup", "auto", "on"])
+        .args(["setup", "auto", "enable"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("run `zerdr setup install`"));
@@ -1465,7 +1465,7 @@ fn thread_enable_installs_the_init_command_and_is_idempotent() {
     .unwrap();
 
     env.command()
-        .args(["setup", "auto", "on"])
+        .args(["setup", "auto", "enable"])
         .assert()
         .success()
         .stdout(predicate::str::contains("auto mode is enabled"));
@@ -1497,7 +1497,7 @@ fn thread_enable_installs_the_init_command_and_is_idempotent() {
     );
 
     env.command()
-        .args(["setup", "auto", "on"])
+        .args(["setup", "auto", "enable"])
         .assert()
         .success();
     assert_eq!(
@@ -1520,7 +1520,7 @@ fn thread_enable_adopts_a_manually_set_matching_value() {
     fs::write(&paths.zed_settings_file, &original).unwrap();
 
     env.command()
-        .args(["setup", "auto", "on"])
+        .args(["setup", "auto", "enable"])
         .assert()
         .success();
 
@@ -1547,7 +1547,7 @@ fn thread_enable_refuses_a_foreign_init_command() {
     fs::write(&paths.zed_settings_file, original).unwrap();
 
     env.command()
-        .args(["setup", "auto", "on"])
+        .args(["setup", "auto", "enable"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("already set"));
@@ -1571,7 +1571,7 @@ fn thread_enable_refuses_a_non_object_settings_root() {
     fs::write(&paths.zed_settings_file, "[]\n").unwrap();
 
     env.command()
-        .args(["setup", "auto", "on"])
+        .args(["setup", "auto", "enable"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("top-level object"));
@@ -1592,13 +1592,13 @@ fn thread_disable_removes_only_the_flag() {
     let paths = Paths::for_test(env.root.path());
     env.command().args(["setup", "install"]).assert().success();
     env.command()
-        .args(["setup", "auto", "on"])
+        .args(["setup", "auto", "enable"])
         .assert()
         .success();
     let settings = fs::read_to_string(&paths.zed_settings_file).unwrap();
 
     env.command()
-        .args(["setup", "auto", "off"])
+        .args(["setup", "auto", "disable"])
         .assert()
         .success()
         .stdout(predicate::str::contains("auto mode is disabled"));
@@ -1611,7 +1611,7 @@ fn thread_disable_removes_only_the_flag() {
     );
 
     env.command()
-        .args(["setup", "auto", "off"])
+        .args(["setup", "auto", "disable"])
         .assert()
         .success();
 }
@@ -1622,7 +1622,7 @@ fn setup_after_enable_preserves_the_init_command_and_fingerprint() {
     let paths = Paths::for_test(env.root.path());
     env.command().args(["setup", "install"]).assert().success();
     env.command()
-        .args(["setup", "auto", "on"])
+        .args(["setup", "auto", "enable"])
         .assert()
         .success();
     let settings = fs::read_to_string(&paths.zed_settings_file).unwrap();
@@ -1648,7 +1648,7 @@ fn uninstall_after_enable_removes_the_init_command_and_flag() {
     let paths = Paths::for_test(env.root.path());
     env.command().args(["setup", "install"]).assert().success();
     env.command()
-        .args(["setup", "auto", "on"])
+        .args(["setup", "auto", "enable"])
         .assert()
         .success();
 
@@ -1836,7 +1836,7 @@ fn install_state_with_a_legacy_fingerprint_still_loads() {
 }
 
 /// Zed configuration is commonly a symlink into a dotfiles checkout. Setup and
-/// `setup auto on` must operate on the real files so the symlinks survive and the
+/// `setup auto enable` must operate on the real files so the symlinks survive and the
 /// dotfiles copies stay the source of truth.
 #[test]
 fn setup_and_thread_enable_write_through_symlinked_zed_configuration() {
@@ -1854,7 +1854,7 @@ fn setup_and_thread_enable_write_through_symlinked_zed_configuration() {
 
     env.command().args(["setup", "install"]).assert().success();
     env.command()
-        .args(["setup", "auto", "on"])
+        .args(["setup", "auto", "enable"])
         .assert()
         .success();
 
@@ -1881,7 +1881,7 @@ fn setup_and_thread_enable_write_through_symlinked_zed_configuration() {
 }
 
 /// A symlink with no target is a broken configuration, not something to write through.
-/// Setup no longer opens the settings file, so only `setup auto on` refuses it.
+/// Setup no longer opens the settings file, so only `setup auto enable` refuses it.
 #[test]
 fn thread_enable_refuses_a_broken_settings_symlink() {
     let env = TestEnv::new();
@@ -1895,7 +1895,7 @@ fn thread_enable_refuses_a_broken_settings_symlink() {
     env.command().args(["setup", "install"]).assert().success();
 
     env.command()
-        .args(["setup", "auto", "on"])
+        .args(["setup", "auto", "enable"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("broken symlink"));

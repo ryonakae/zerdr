@@ -85,13 +85,13 @@ pub enum SetupCommand {
     Doctor,
     /// Toggle auto mode, installing Zed's terminal_init_command once.
     Auto {
-        /// Turn auto mode on or off; off leaves Zed settings as they are.
+        /// Enable or disable auto mode; disable leaves Zed settings as they are.
         state: AutoState,
     },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum AutoState {
-    On,
-    Off,
+    Enable,
+    Disable,
 }

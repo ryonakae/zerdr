@@ -23,7 +23,7 @@ pub(crate) struct InstallState {
     pub(crate) executable: PathBuf,
     pub(crate) task_fingerprints: BTreeMap<String, String>,
     /// Present while zerdr owns Zed's `agent.terminal_init_command`, recorded by
-    /// `zerdr setup auto on` and consumed by uninstall.
+    /// `zerdr setup auto enable` and consumed by uninstall.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) terminal_init_command_fingerprint: Option<String>,
 }
@@ -205,7 +205,7 @@ pub fn setup() -> Result<()> {
             .iter()
             .map(|task| (task_label(task).unwrap().to_owned(), fingerprint(task)))
             .collect(),
-        // Ownership recorded by `zerdr setup auto on` must survive rerunning setup,
+        // Ownership recorded by `zerdr setup auto enable` must survive rerunning setup,
         // or uninstall could no longer clean the settings value up.
         terminal_init_command_fingerprint: old_install
             .as_ref()
@@ -244,7 +244,7 @@ pub fn setup() -> Result<()> {
 
     println!("zerdr setup install complete");
     println!(
-        "Attach a Zed terminal thread to Herdr by running `zerdr connect` inside it.\nOptional automation: run `zerdr setup auto on` to attach every new terminal thread automatically."
+        "Attach a Zed terminal thread to Herdr by running `zerdr connect` inside it.\nOptional automation: run `zerdr setup auto enable` to attach every new terminal thread automatically."
     );
     println!(
         "Add this Herdr keybinding manually if desired:\n{}",

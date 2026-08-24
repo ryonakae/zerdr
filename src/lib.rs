@@ -90,10 +90,10 @@ pub fn run() -> Result<()> {
                 None => doctor::doctor(explicit_session.unwrap_or(DEFAULT_SESSION_NAME)),
             },
             SetupCommand::Auto {
-                state: AutoState::On,
+                state: AutoState::Enable,
             } => setup::thread_auto_enable(),
             SetupCommand::Auto {
-                state: AutoState::Off,
+                state: AutoState::Disable,
             } => setup::thread_auto_disable(),
         },
         Command::SyncFromHerdr => sync::Synchronizer::from_env()?.event(),
