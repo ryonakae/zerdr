@@ -1451,15 +1451,20 @@ fn connect_without_create_names_the_missing_session_and_starts_nothing() {
 /// `connect --create`.
 #[test]
 fn create_never_starts_the_default_session() {
-    let fixture = Fixture::new();
-    fixture
-        .thread_command()
-        .args(["connect", "--create"])
-        .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
-        .assert()
-        .code(1)
-        .stderr(predicate::str::contains("zerdr start"));
-    assert!(!fixture.env.read_log().contains(" server"));
+    for args in [
+        vec!["connect", "--create"],
+        vec!["connect", "--create", "--session", "default"],
+    ] {
+        let fixture = Fixture::new();
+        fixture
+            .thread_command()
+            .args(args)
+            .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("zerdr start"));
+        assert!(!fixture.env.read_log().contains(" server"));
+    }
 }
 
 /// The auto path is best-effort and must never spawn a session server: a

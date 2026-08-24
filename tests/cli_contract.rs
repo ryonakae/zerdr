@@ -125,6 +125,17 @@ fn session_option_is_accepted_only_once() {
 }
 
 #[test]
+fn a_positional_behind_the_options_marker_is_not_counted_as_a_session_flag() {
+    let env = TestEnv::new();
+    // TARGET is literally "--session", escaped with `--`: one genuine flag.
+    env.command()
+        .args(["--session", "work", "connect", "--", "--session"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--session may be specified only once").not());
+}
+
+#[test]
 fn sessionless_setup_commands_reject_session_targeting() {
     let commands: [&[&str]; 3] = [
         &["setup", "install"],
@@ -252,12 +263,15 @@ fn every_remote_marker_and_runtime_command_is_rejected_before_any_process() {
             .stderr(predicate::str::contains(marker));
         assert_eq!(env.read_log(), "");
     }
-    let commands: [&[&str]; 7] = [
+    let commands: [&[&str]; 10] = [
         &["connect"],
         &["start"],
         &["workspace", "sync"],
+        &["workspace", "bind"],
+        &["workspace", "unbind"],
         &["setup", "install"],
         &["setup", "uninstall"],
+        &["setup", "auto", "on"],
         &["sync-from-herdr"],
         &["open-from-herdr"],
     ];

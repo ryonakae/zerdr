@@ -102,11 +102,12 @@ pub fn run() -> Result<()> {
 }
 
 /// Counts `--session` occurrences in the raw arguments. Runs only after a
-/// successful parse, so every counted token is a flag clap accepted (no
-/// positional in this CLI can legally carry a leading `--`).
+/// successful parse, so every counted token is a flag clap accepted; tokens
+/// behind the first bare `--` are positionals and are not counted.
 fn session_flag_occurrences() -> usize {
     std::env::args()
         .skip(1)
+        .take_while(|argument| argument != "--")
         .filter(|argument| argument == "--session" || argument.starts_with("--session="))
         .count()
 }
