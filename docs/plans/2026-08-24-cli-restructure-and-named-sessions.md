@@ -124,7 +124,7 @@ Named-session headless start (`connect --create`):
 
 - [x] Task 1: CLI restructure (tree, dispatch, strings, assets, all test renames)
 - [x] Task 2: Named-session headless start on `connect --create`
-- [ ] Task 3: Documentation (README, AGENTS.md) and final sweep
+- [x] Task 3: Documentation (README, AGENTS.md) and final sweep
 
 ## Tasks
 
@@ -251,6 +251,8 @@ Named-session headless start (`connect --create`):
 - Expected: no matches.
 - Run: `cargo run --locked -- --help`
 - Expected: help lists `connect`, `start`, `workspace`, `setup` and matches the README table.
+
+**Result (2026-08-24):** README rewritten for the new tree (Quickstart uses `setup install` + `start`, auto-mode section uses `setup auto on|off`, new "Named sessions" subsection documents headless start, explicit-stop ownership, and the no-sync caveat); AGENTS.md repository-map and safety lines updated. Sweep clean across README.md, AGENTS.md, src, assets, tests; `--help` matches the README table.
 
 ## Requirement Coverage
 

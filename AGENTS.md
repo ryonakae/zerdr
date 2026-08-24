@@ -42,9 +42,9 @@ CI runs these checks on macOS and Ubuntu. Platform-specific behavior needs cover
 - `src/runtime.rs` resolves local versus remote execution and the wrapper anchor.
 - `src/herdr.rs` wraps Herdr JSON commands and owns the child process lifecycle.
 - `src/sync.rs` maps focused workspaces to Git roots and routes them into Zed.
-- `src/thread.rs` resolves and attaches Zed terminal threads to Herdr agents, and mirrors agent titles and bells into the threads sidebar.
+- `src/thread.rs` backs `zerdr connect`: it resolves and attaches Zed terminal threads to Herdr agents, starts a not-running named session headless under `--create`, and mirrors agent titles and bells into the threads sidebar.
 - `src/state.rs` owns bindings, route schemas, leases, locks, and atomic persistence.
-- `src/setup.rs` merges the Herdr plugin and Zed tasks into user configuration, and owns thread auto mode: `zerdr thread --enable` installs `agent.terminal_init_command` with a recorded fingerprint that setup preserves and uninstall consumes.
+- `src/setup.rs` merges the Herdr plugin and Zed tasks into user configuration, and owns auto mode: `zerdr setup auto on` installs `agent.terminal_init_command` with a recorded fingerprint that setup preserves and uninstall consumes.
 - `src/doctor.rs` checks capabilities, installation state, bindings, routes, and leases.
 - `src/zed.rs` wraps the Zed CLI.
 - `assets/herdr/` and `assets/zed/` contain templates embedded by `setup`.
@@ -64,10 +64,10 @@ CI runs these checks on macOS and Ubuntu. Platform-specific behavior needs cover
 
 ## Safety and workflow
 
-- Do not run `zerdr setup`, `zerdr uninstall`, or local `zerdr doctor` against the developer's real environment during automated validation. They can modify Herdr plugins, global Zed tasks, or zerdr state.
+- Do not run `zerdr setup install`, `zerdr setup uninstall`, or local `zerdr setup doctor` against the developer's real environment during automated validation. They can modify Herdr plugins, global Zed tasks, or zerdr state.
 - Integration tests that invoke Herdr, Zed, or environment-facing commands must use `TestEnv`, which sets `ZERDR_TEST_ROOT` and points zerdr at fake binaries. Pure state tests may use `tempfile` directly.
 - Keep the shared fake `herdr` on `PATH` free of per-invocation setup. Wrapper tests budget roughly two seconds for a multi-process dance, so even one extra command that runs on every call makes them fail under parallel load. Bake per-test configuration into a private fake with `TestEnv::baked_herdr` instead.
-- `zerdr uninstall --purge` recursively removes zerdr state and data after checking live leases. Cover purge changes with isolated tests.
+- `zerdr setup uninstall --purge` recursively removes zerdr state and data after checking live leases. Cover purge changes with isolated tests.
 - Do not create release tags, GitHub releases, or Homebrew tap commits as part of normal development. `.github/workflows/release.yml` owns publication.
 - Do not edit `target/`; Cargo generates it.
 - Keep `README.md` focused on people installing and using zerdr. Put maintainer commands and repository structure here.
