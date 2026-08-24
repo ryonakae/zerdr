@@ -1366,3 +1366,179 @@ fn an_explicit_target_attach_is_remembered() {
         "{panes:?}"
     );
 }
+
+/// `--create` also covers the session: a not-running named session is started
+/// headless, and only then does the normal workspace create/attach flow run.
+#[test]
+fn create_starts_a_not_running_named_session_headless() {
+    let fixture = Fixture::new();
+    let sessions_file = fixture.env.root.path().join("sessions-live.json");
+    let work_socket = fixture.env.root.path().join("work.sock");
+    fs::write(&work_socket, "").unwrap();
+    let started = serde_json::json!({
+        "sessions": [
+            {"name": "default", "running": true, "socket_path": fixture.socket},
+            {"name": "work", "running": true, "socket_path": work_socket}
+        ]
+    });
+    let workspace = serde_json::json!({
+        "result": {
+            "workspace": {"workspace_id": "w7", "label": "checkout"},
+            "root_pane": {"pane_id": "w7:p1"}
+        }
+    });
+
+    let output = fixture
+        .std_thread_command()
+        .args(["connect", "--create", "--session", "work"])
+        .env("ZERDR_TEST_SESSIONS_FILE", &sessions_file)
+        .env("ZERDR_TEST_SESSIONS_STARTED_JSON", started.to_string())
+        .env(
+            "ZERDR_TEST_WORKSPACES_JSON",
+            r#"{"result":{"workspaces":[]}}"#,
+        )
+        .env("ZERDR_TEST_WORKSPACE_CREATE_JSON", workspace.to_string())
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let log = fixture.env.read_log();
+    let server = log.find("herdr\t--session work server").expect(&log);
+    let workspaces = log
+        .find("herdr\t--session work workspace list")
+        .expect(&log);
+    assert!(server < workspaces, "{log}");
+    assert!(
+        log.contains("--session work workspace create --cwd"),
+        "{log}"
+    );
+    assert!(log.contains("terminal attach term-w7:p1"), "{log}");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("started Herdr session work"), "{stdout:?}");
+    assert!(stdout.contains("created Herdr workspace"), "{stdout:?}");
+
+    let paths = fixture.paths();
+    let bound = BindingStore::new(paths.bindings_file.clone())
+        .get("work", "w7")
+        .unwrap();
+    assert_eq!(bound, Some(fixture.repo.clone()));
+    // Sessions started by connect get no route: sync stays inert until a
+    // `zerdr start` wrapper attaches.
+    assert!(!paths.routes_dir.exists());
+}
+
+/// Without `--create`, a not-running named session stays an error that points
+/// at `--create`, and no server process is spawned.
+#[test]
+fn connect_without_create_names_the_missing_session_and_starts_nothing() {
+    let fixture = Fixture::new();
+    fixture
+        .thread_command()
+        .args(["connect", "--session", "work"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "zerdr connect --create --session work",
+        ));
+    assert!(!fixture.env.read_log().contains(" server"));
+}
+
+/// The default session is only ever started by `zerdr start`, never by
+/// `connect --create`.
+#[test]
+fn create_never_starts_the_default_session() {
+    let fixture = Fixture::new();
+    fixture
+        .thread_command()
+        .args(["connect", "--create"])
+        .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("zerdr start"));
+    assert!(!fixture.env.read_log().contains(" server"));
+}
+
+/// The auto path is best-effort and must never spawn a session server: a
+/// not-running session degrades silently to a plain local shell.
+#[test]
+fn auto_never_starts_a_session_server() {
+    let fixture = Fixture::new();
+    let paths = fixture.paths();
+    fs::create_dir_all(&paths.state_dir).unwrap();
+    fs::write(&paths.thread_auto_flag_file, b"").unwrap();
+    let sessions_file = fixture.env.root.path().join("sessions-live.json");
+
+    let assert = fixture
+        .thread_command()
+        .args(["connect", "--auto", "--session", "work"])
+        .env("ZERDR_TEST_SESSIONS_FILE", &sessions_file)
+        .env("ZERDR_TEST_SESSIONS_STARTED_JSON", fixture.sessions())
+        .assert()
+        .success();
+    assert!(assert.get_output().stdout.is_empty());
+    assert!(!fixture.env.read_log().contains(" server"));
+}
+
+/// A server that never registers its session fails the attach with a timeout
+/// naming the session instead of hanging.
+#[test]
+fn server_readiness_timeout_fails_with_the_session_name() {
+    let fixture = Fixture::new();
+    let sessions_file = fixture.env.root.path().join("sessions-live.json");
+
+    fixture
+        .thread_command()
+        .args(["connect", "--create", "--session", "work"])
+        .env("ZERDR_TEST_SESSIONS_FILE", &sessions_file)
+        .env("ZERDR_READY_TIMEOUT_MS", "200")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("timed out"))
+        .stderr(predicate::str::contains("work"));
+    assert!(
+        fixture
+            .env
+            .read_log()
+            .contains("herdr\t--session work server")
+    );
+}
+
+/// `--create` against an already-running named session must not spawn a
+/// second server; the existing attach flow runs unchanged.
+#[test]
+fn create_with_a_running_named_session_does_not_start_a_server() {
+    let fixture = Fixture::new();
+    let work_socket = fixture.env.root.path().join("work.sock");
+    fs::write(&work_socket, "").unwrap();
+    let sessions = serde_json::json!({
+        "sessions": [
+            {"name": "default", "running": true, "socket_path": fixture.socket},
+            {"name": "work", "running": true, "socket_path": work_socket}
+        ]
+    });
+
+    let output = fixture
+        .std_thread_command()
+        .args(["connect", "--create", "--session", "work"])
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .env(
+            "ZERDR_TEST_PANE_COUNTER_FILE",
+            fixture.env.root.path().join("pane-counter"),
+        )
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let log = fixture.env.read_log();
+    assert!(!log.contains(" server"), "{log}");
+    assert!(log.contains("--session work tab create"), "{log}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("started Herdr session"), "{stdout:?}");
+}

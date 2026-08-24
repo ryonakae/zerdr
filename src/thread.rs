@@ -1,14 +1,14 @@
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::error::{Error, Result};
 use crate::herdr::{AgentInfo, Herdr, ManagedChild, SignalForwarder, Workspace};
 use crate::state::{
-    BindingStore, OperationGuard, Paths, ThreadLeaseGuard, ThreadLeaseSet, ThreadPaneMemory,
-    canonical_git_root,
+    BindingStore, DEFAULT_SESSION_NAME, OperationGuard, Paths, ThreadLeaseGuard, ThreadLeaseSet,
+    ThreadPaneMemory, canonical_git_root,
 };
 
 const DEFAULT_POLL_MS: u64 = 2_000;
@@ -61,8 +61,12 @@ fn run_with_mode(
 ) -> Result<()> {
     let herdr = Herdr::from_env();
     let paths = Paths::discover()?;
-    let socket = herdr.session_socket_for(session_name)?;
     let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
+    let (socket, started_session) =
+        resolve_session_socket(&herdr, &leases, session_name, create, auto)?;
+    if started_session {
+        println!("zerdr: started Herdr session {session_name}");
+    }
 
     let session = Session {
         herdr: &herdr,
@@ -130,6 +134,74 @@ fn run_with_mode(
         Ok(())
     } else {
         Err(Error::ChildExit(status.code().unwrap_or(1)))
+    }
+}
+
+/// Resolves the session socket, starting a headless server for a not-running
+/// named session when `--create` allows it. The default session is only ever
+/// started by `zerdr start` (which sets up routing and sync), and the auto
+/// path never spawns servers: a best-effort init command must not create
+/// background processes. Returns whether this call started the session.
+fn resolve_session_socket(
+    herdr: &Herdr,
+    leases: &ThreadLeaseSet,
+    session_name: &str,
+    create: bool,
+    auto: bool,
+) -> Result<(PathBuf, bool)> {
+    if let Some(socket) = herdr.session_socket_if_running(session_name)? {
+        return Ok((socket, false));
+    }
+    if session_name == DEFAULT_SESSION_NAME {
+        return Err(Error::User(
+            "the default Herdr session is not running; launch it with `zerdr start`".to_owned(),
+        ));
+    }
+    if !create || auto {
+        return Err(Error::User(format!(
+            "Herdr session {session_name:?} is not running; run `zerdr connect --create --session {session_name}` to start it"
+        )));
+    }
+
+    // Two connects racing on the same missing session must not spawn two
+    // servers, so the start sequence is serialized per session name and the
+    // session list is re-checked under the lock.
+    let _serialize = OperationGuard::acquire(&leases.session_start_lock_path(session_name))?;
+    if let Some(socket) = herdr.session_socket_if_running(session_name)? {
+        return Ok((socket, false));
+    }
+    let mut server = herdr.spawn_server_detached_for(session_name)?;
+    let timeout_ms = std::env::var("ZERDR_READY_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(5_000);
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        if let Some(socket) = herdr.session_socket_if_running(session_name)? {
+            return Ok((socket, true));
+        }
+        match server.try_wait() {
+            Ok(Some(status)) => {
+                return Err(Error::User(format!(
+                    "the Herdr server for session {session_name:?} exited with status {} before its socket appeared",
+                    status.code().unwrap_or(1)
+                )));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return Err(Error::User(format!(
+                    "failed to wait for the Herdr session server: {error}"
+                )));
+            }
+        }
+        if Instant::now() >= deadline {
+            let _ = server.kill();
+            let _ = server.wait();
+            return Err(Error::User(format!(
+                "timed out waiting for the {session_name} Herdr session socket"
+            )));
+        }
+        thread::sleep(Duration::from_millis(25));
     }
 }
 

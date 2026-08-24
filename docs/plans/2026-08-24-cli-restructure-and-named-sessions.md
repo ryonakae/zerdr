@@ -123,7 +123,7 @@ Named-session headless start (`connect --create`):
 ## Progress
 
 - [x] Task 1: CLI restructure (tree, dispatch, strings, assets, all test renames)
-- [ ] Task 2: Named-session headless start on `connect --create`
+- [x] Task 2: Named-session headless start on `connect --create`
 - [ ] Task 3: Documentation (README, AGENTS.md) and final sweep
 
 ## Tasks
@@ -217,6 +217,12 @@ Named-session headless start (`connect --create`):
 - Expected: all pass, including the six new cases.
 - Run: `cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-targets --all-features`
 - Expected: all pass.
+
+**Result (2026-08-24):** Implemented and validated; thread_flow passes 44 tests (6 new), full suite/fmt/clippy clean. Notes:
+- The start lock lives at `ThreadLeaseSet::session_start_lock_path` (`session-start-<hash>.lock` under the thread-leases root, hashed by session name).
+- `Herdr::spawn_server_detached_for` uses `CommandExt::process_group(0)` with null stdio; on readiness timeout the child is killed and reaped, on success it is intentionally leaked.
+- Contract messages as implemented: not-running named session without `--create` → `Herdr session "NAME" is not running; run \`zerdr connect --create --session NAME\` to start it`; default session → `the default Herdr session is not running; launch it with \`zerdr start\``; timeout → `timed out waiting for the NAME Herdr session socket`; start line → `zerdr: started Herdr session NAME`.
+- The fake herdr gained a `--session NAME server` handler (writes `$ZERDR_TEST_SESSIONS_STARTED_JSON` to `$ZERDR_TEST_SESSIONS_FILE`, then sleeps `$ZERDR_TEST_SERVER_SLEEP`, default 5s) and a file-backed `session list` source, both env-guarded so the shared fake stays cheap.
 
 ### Task 3: Documentation and final sweep
 

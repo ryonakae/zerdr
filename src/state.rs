@@ -1086,6 +1086,16 @@ impl ThreadLeaseSet {
         scope.push(session_name);
         self.root.join(path_hash(Path::new(&scope)))
     }
+
+    /// Lock serializing the headless start of one named session. Keyed by
+    /// session name alone: the socket this session will answer on does not
+    /// exist yet.
+    pub fn session_start_lock_path(&self, session_name: &str) -> PathBuf {
+        self.root.join(format!(
+            "session-start-{}.lock",
+            path_hash(Path::new(session_name))
+        ))
+    }
 }
 
 const THREAD_PANE_SCHEMA_VERSION: u32 = 1;
