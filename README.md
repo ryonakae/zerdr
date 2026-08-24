@@ -62,15 +62,15 @@ Agent titles also lead with a status glyph, which Zed shows as the thread's row 
 
 Because Herdr owns the session, closing a thread or restarting Zed does not stop the agent. Reopen a thread and run `zerdr connect` to attach again, or reach the same agent over SSH with `herdr` from another machine. zerdr also remembers which panes its threads were attached to: a new bare thread first takes a free agent, then reattaches a remembered live shell pane, and only then creates a fresh tab — so restarting Zed restores the previous panes instead of piling up tabs. A pane freed by closing its thread is picked up by the next thread the same way.
 
-Attaching is manual by default, so Zed sessions that do not involve Herdr stay untouched. To attach every new terminal thread automatically, turn on auto mode:
+Attaching is manual by default, so Zed sessions that do not involve Herdr stay untouched. To attach every new terminal thread automatically, enable auto mode:
 
 ```bash
-zerdr setup auto on
+zerdr setup auto enable
 ```
 
-The first `on` writes `zerdr connect --auto` into Zed's `agent.terminal_init_command` (backing your settings file up and writing through a dotfiles symlink); after that the toggle only flips a flag in zerdr's state directory. While the mode is on, each new thread attaches best-effort: a project without a matching Herdr workspace gets one created and bound automatically, and when that cannot help — outside a Git checkout, or Herdr is not running — it silently leaves the thread as a plain local shell. Because Zed restores terminal threads on restart, restored threads reattach to the still-running agents — resume, in effect — and can likewise create workspaces for restored projects. `zerdr setup auto off` turns the mode off without touching your Zed settings, and `zerdr setup doctor` shows the current state. Prefer staying manual? `zerdr setup install` prints a `terminal::SendText` keybinding example for typing `zerdr connect` with one key.
+The first `enable` writes `zerdr connect --auto` into Zed's `agent.terminal_init_command` (backing your settings file up and writing through a dotfiles symlink); after that the toggle only flips a flag in zerdr's state directory. While the mode is enabled, each new thread attaches best-effort: a project without a matching Herdr workspace gets one created and bound automatically — registered via `herdr worktree open` when it is a linked worktree — and when that cannot help — outside a Git checkout, or Herdr is not running — it silently leaves the thread as a plain local shell. Because Zed restores terminal threads on restart, restored threads reattach to the still-running agents — resume, in effect — and can likewise create workspaces for restored projects. `zerdr setup auto disable` turns the mode off without touching your Zed settings; while disabled, each new thread prints one line saying the mode is off and how to attach manually or re-enable it. `zerdr setup doctor` shows the current state. Prefer staying manual? `zerdr setup install` prints a `terminal::SendText` keybinding example for typing `zerdr connect` with one key.
 
-Manual `zerdr connect` only attaches to workspaces Herdr already manages. In a checkout without one, it says so rather than adding a workspace; run `zerdr connect --create` there when you do want the workspace.
+Manual `zerdr connect` only attaches to workspaces Herdr already manages. In a checkout without one, it says so rather than adding a workspace; run `zerdr connect --create` there when you do want the workspace. When that checkout is a linked Git worktree — made by `git worktree add`, Worktrunk, Herdr itself, or any other tool — `--create` registers it with `herdr worktree open`, so the new workspace carries its checkout provenance and `herdr worktree list` and `herdr worktree remove` manage it like one Herdr created. zerdr never creates or removes worktrees itself, and if the registration fails it reports Herdr's error rather than falling back to a plain workspace. After you delete a worktree externally, `zerdr setup doctor` points out the leftover binding and suggests `herdr worktree remove`.
 
 To select text with the mouse while attached, hold Shift and drag: the Herdr client enables mouse reporting, and Shift is Zed's built-in escape hatch for native selection (fixed for the no-prior-selection case in Zed v1.16.1).
 
@@ -92,7 +92,7 @@ zerdr never stops a session it started: close the thread and the agents keep run
 | `zerdr setup install` | Install or update the Herdr plugin and the global "zerdr: Herdr" Zed task. |
 | `zerdr setup uninstall [--purge]` | Remove integration files, the owned init command, and the auto-mode flag; `--purge` removes zerdr state too. |
 | `zerdr setup doctor [--session NAME]` | Check required commands, installed files, bindings, routes, leases, and auto mode for the selected session. |
-| `zerdr setup auto on\|off` | Toggle auto mode; the first `on` installs `zerdr connect --auto` as Zed's `agent.terminal_init_command`. |
+| `zerdr setup auto enable\|disable` | Toggle auto mode; the first `enable` installs `zerdr connect --auto` as Zed's `agent.terminal_init_command`. |
 
 Bare `zerdr`, `zerdr workspace`, and `zerdr setup` print their subcommands. `--session NAME` is accepted before or after the subcommand, at most once; omitting it selects Herdr's default session.
 
@@ -120,7 +120,7 @@ The one-shot plugin action reuses an applicable live wrapper route. Without a wr
 ## Notes
 
 - **Keybindings:** `zerdr setup install` adds the global Zed task and prints optional Herdr and Zed keybindings. It does not edit your Herdr config or Zed keymap.
-- **Terminal thread automation:** `zerdr setup install` never writes `agent.terminal_init_command`; automation is opt-in via `zerdr setup auto on`, which records ownership so `zerdr setup uninstall` can remove the value again (with a backup under zerdr's state directory). `zerdr setup doctor` reports the mode informationally. With the mode on, restored terminal threads reattach after a Zed restart; turn the mode off if you want a quiet restart.
+- **Terminal thread automation:** `zerdr setup install` never writes `agent.terminal_init_command`; automation is opt-in via `zerdr setup auto enable`, which records ownership so `zerdr setup uninstall` can remove the value again (with a backup under zerdr's state directory). `zerdr setup doctor` reports the mode informationally. With the mode enabled, restored terminal threads reattach after a Zed restart; disable the mode if you want a quiet restart.
 - **One thread per agent:** two terminal threads never share an agent. Attaching an agent that already has a thread fails and names the pane.
 - **Wrapper ownership:** Each Herdr session can have one live zerdr wrapper. Wrappers for different named sessions can coexist.
 - **Session lifetime:** Exiting a zerdr client stops synchronization for that wrapper, but the default or named Herdr session remains available to `herdr` and future zerdr clients. Sessions started by `zerdr connect --create` follow the same rule: only an explicit `herdr session stop` ends them.
