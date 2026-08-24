@@ -714,9 +714,13 @@ fn create_registers_a_linked_worktree_via_worktree_open() {
     assert!(output.status.success(), "{output:?}");
 
     let log = fixture.env.read_log();
+    // Herdr resolves worktree actions from the repo parent, so the open must anchor
+    // there explicitly; ambient context (process cwd, caller env) is not enough in a
+    // Zed terminal.
     assert!(
         log.contains(&format!(
-            "herdr\t--session default worktree open --path {} --no-focus",
+            "herdr\t--session default worktree open --cwd {} --path {} --no-focus",
+            fixture.repo.display(),
             worktree.display()
         )),
         "{log}"
@@ -769,7 +773,10 @@ fn auto_in_a_linked_worktree_creates_via_worktree_open() {
     assert!(String::from_utf8_lossy(&output.stderr).is_empty());
 
     let log = fixture.env.read_log();
-    assert!(log.contains("worktree open --path"), "{log}");
+    assert!(
+        log.contains(&format!("worktree open --cwd {}", fixture.repo.display())),
+        "{log}"
+    );
     assert!(!log.contains("workspace create"), "{log}");
     let bound = BindingStore::new(paths.bindings_file)
         .get("default", "w8")

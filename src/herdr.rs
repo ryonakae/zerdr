@@ -149,11 +149,14 @@ impl Herdr {
         parse_created_workspace(&value, "workspace create")
     }
 
-    /// Register an existing linked worktree as a worktree-backed workspace. No label is
-    /// passed: Herdr derives one from the checkout's branch.
+    /// Register an existing linked worktree as a worktree-backed workspace. Herdr
+    /// resolves worktree actions from the repo parent, so the primary checkout is
+    /// passed as the anchor; ambient context is not available from a Zed terminal.
+    /// No label is passed: Herdr derives one from the checkout's branch.
     pub fn worktree_open_for(
         &self,
         session_name: &str,
+        parent: &std::path::Path,
         path: &std::path::Path,
     ) -> Result<CreatedWorkspace> {
         let value = self.session_json_output_for(
@@ -161,6 +164,8 @@ impl Herdr {
             [
                 OsStr::new("worktree"),
                 OsStr::new("open"),
+                OsStr::new("--cwd"),
+                parent.as_os_str(),
                 OsStr::new("--path"),
                 path.as_os_str(),
                 OsStr::new("--no-focus"),

@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 use crate::herdr::{AgentInfo, Herdr, ManagedChild, SignalForwarder, Workspace};
 use crate::state::{
     BindingStore, DEFAULT_SESSION_NAME, OperationGuard, Paths, ThreadLeaseGuard, ThreadLeaseSet,
-    ThreadPaneMemory, canonical_git_root, is_linked_worktree,
+    ThreadPaneMemory, canonical_git_root, linked_worktree_parent,
 };
 
 const DEFAULT_POLL_MS: u64 = 2_000;
@@ -242,7 +242,8 @@ fn resolve_or_create(
             if !create {
                 // In a linked worktree the refusal names what `--create` does there, so
                 // the user knows registration (not a plain workspace) is one flag away.
-                let message = if is_linked_worktree(&root).unwrap_or(false) {
+                let message = if linked_worktree_parent(&root).is_ok_and(|parent| parent.is_some())
+                {
                     format!(
                         "no Herdr workspace matches {}; run `zerdr connect --create` to open this Git worktree as a Herdr workspace, or bind one with `zerdr workspace bind`",
                         root.display()
@@ -263,8 +264,10 @@ fn resolve_or_create(
             // list`/`remove` manage it like one Herdr created itself; on failure nothing
             // is created — a plain-workspace fallback would hide the very inconsistency
             // this registration removes.
-            let created = if is_linked_worktree(&root)? {
-                session.herdr.worktree_open_for(session.name, &root)?
+            let created = if let Some(parent) = linked_worktree_parent(&root)? {
+                session
+                    .herdr
+                    .worktree_open_for(session.name, &parent, &root)?
             } else {
                 session
                     .herdr

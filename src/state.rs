@@ -374,13 +374,15 @@ pub fn canonical_git_root(candidate: &Path) -> Result<PathBuf> {
         .map_err(|error| Error::io(candidate, error))
 }
 
-/// Whether `root` is a linked Git worktree rather than a primary checkout, detected
-/// tool-agnostically: the two directories differ exactly for linked worktrees.
-pub fn is_linked_worktree(root: &Path) -> Result<bool> {
+/// The primary checkout root when `root` is a linked Git worktree, `None` when `root`
+/// is the primary checkout itself. Detection is tool-agnostic, and the parent is what
+/// Herdr's worktree actions must be anchored to. `git worktree list` always names the
+/// primary checkout first.
+pub fn linked_worktree_parent(root: &Path) -> Result<Option<PathBuf>> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["rev-parse", "--git-dir", "--git-common-dir"])
+        .args(["worktree", "list", "--porcelain"])
         .output()
         .map_err(|error| Error::User(format!("failed to run git: {error}")))?;
     if !output.status.success() {
@@ -391,27 +393,22 @@ pub fn is_linked_worktree(root: &Path) -> Result<bool> {
         )));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut lines = stdout.lines();
-    let (Some(git_dir), Some(common_dir)) = (lines.next(), lines.next()) else {
+    let Some(primary) = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("worktree "))
+    else {
         return Err(Error::User(format!(
-            "git rev-parse returned no directories for {}",
+            "git worktree list returned no checkouts for {}",
             root.display()
         )));
     };
-    // Either line may be relative (plain `.git` in a primary checkout) and unresolved,
-    // so both are anchored to the root and canonicalized before comparing.
-    let resolve = |dir: &str| {
-        let path = Path::new(dir);
-        let absolute = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            root.join(path)
-        };
-        absolute
-            .canonicalize()
-            .map_err(|error| Error::io(dir, error))
-    };
-    Ok(resolve(git_dir)? != resolve(common_dir)?)
+    let primary = PathBuf::from(primary)
+        .canonicalize()
+        .map_err(|error| Error::io(primary, error))?;
+    let root = root
+        .canonicalize()
+        .map_err(|error| Error::io(root, error))?;
+    Ok((primary != root).then_some(primary))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
