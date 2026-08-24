@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 use zerdr::state::{
-    BindingStore, LeaseSet, LifecycleGuard, Paths, RouteStore, SyncGuard, ThreadLeaseSet,
-    ThreadPaneMemory,
+    BindingStore, LeaseSet, LifecycleGuard, Paths, RouteStore, SyncGuard, ThreadLeaseScan,
+    ThreadLeaseSet, ThreadPaneMemory, thread_detach_active, thread_detach_clear,
+    thread_detach_set,
 };
 
 fn git_repo() -> (TempDir, std::path::PathBuf) {
@@ -492,6 +493,115 @@ fn thread_leases_are_scoped_by_session_and_socket() {
         leases.leased_panes("default", &second_socket).unwrap(),
         BTreeSet::from(["w1:p1".to_owned()])
     );
+}
+
+#[test]
+fn thread_detach_flag_round_trips() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+
+    assert!(!thread_detach_active(&paths));
+    thread_detach_set(&paths).unwrap();
+    assert!(thread_detach_active(&paths));
+    thread_detach_set(&paths).unwrap();
+    thread_detach_clear(&paths).unwrap();
+    assert!(!thread_detach_active(&paths));
+    thread_detach_clear(&paths).unwrap();
+}
+
+#[test]
+fn lease_detach_marker_follows_the_guard() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let socket = state.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
+
+    let guard = leases.acquire("default", &socket, "w1:p1").unwrap();
+    let marker = guard.path().with_extension("detached");
+    assert!(!marker.exists());
+
+    guard.mark_detached().unwrap();
+    assert!(marker.exists());
+    guard.clear_detached().unwrap();
+    assert!(!marker.exists());
+
+    guard.mark_detached().unwrap();
+    let lease_path = guard.path().to_path_buf();
+    drop(guard);
+    assert!(!marker.exists(), "drop removes the marker");
+    assert!(!lease_path.exists(), "drop removes the lease");
+}
+
+#[test]
+fn suspend_scan_counts_live_leases_and_their_markers() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let first_socket = state.path().join("first.sock");
+    let second_socket = state.path().join("second.sock");
+    fs::write(&first_socket, "").unwrap();
+    fs::write(&second_socket, "").unwrap();
+    let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
+
+    assert_eq!(leases.scan_all().unwrap(), ThreadLeaseScan::default());
+
+    // Two live leases across different sessions and sockets are all in scope.
+    let first = leases.acquire("default", &first_socket, "w1:p1").unwrap();
+    let second = leases.acquire("work", &second_socket, "w2:p1").unwrap();
+    assert_eq!(
+        leases.scan_all().unwrap(),
+        ThreadLeaseScan {
+            live: 2,
+            detached: 0
+        }
+    );
+
+    first.mark_detached().unwrap();
+    assert_eq!(
+        leases.scan_all().unwrap(),
+        ThreadLeaseScan {
+            live: 2,
+            detached: 1
+        }
+    );
+
+    second.mark_detached().unwrap();
+    assert_eq!(
+        leases.scan_all().unwrap(),
+        ThreadLeaseScan {
+            live: 2,
+            detached: 2
+        }
+    );
+}
+
+#[test]
+fn suspend_scan_removes_stale_records_and_orphan_markers() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let socket = state.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
+
+    // Reproduce a SIGKILLed detached thread: a valid record whose lock is free,
+    // plus its marker.
+    let guard = leases.acquire("default", &socket, "w1:p1").unwrap();
+    guard.mark_detached().unwrap();
+    let lease_path = guard.path().to_path_buf();
+    let marker_path = lease_path.with_extension("detached");
+    let record = fs::read(&lease_path).unwrap();
+    drop(guard);
+    fs::write(&lease_path, &record).unwrap();
+    fs::write(&marker_path, b"").unwrap();
+
+    // An orphan marker without any lease record is also cleaned up.
+    let orphan = lease_path.parent().unwrap().join("orphan.detached");
+    fs::write(&orphan, b"").unwrap();
+
+    assert_eq!(leases.scan_all().unwrap(), ThreadLeaseScan::default());
+    assert!(!lease_path.exists());
+    assert!(!marker_path.exists());
+    assert!(!orphan.exists());
 }
 
 #[test]

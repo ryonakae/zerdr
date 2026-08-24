@@ -35,6 +35,7 @@ pub struct Paths {
     pub zed_lock_file: PathBuf,
     pub install_state_file: PathBuf,
     pub thread_auto_flag_file: PathBuf,
+    pub thread_detach_flag_file: PathBuf,
     pub plugin_dir: PathBuf,
     pub zed_tasks_file: PathBuf,
     pub zed_settings_file: PathBuf,
@@ -98,6 +99,7 @@ impl Paths {
             zed_lock_file,
             install_state_file: state_dir.join("install.json"),
             thread_auto_flag_file: state_dir.join("thread-auto"),
+            thread_detach_flag_file: state_dir.join("thread-detach"),
             plugin_dir: data_dir.join("plugin-v1"),
             zed_tasks_file,
             zed_settings_file,
@@ -982,6 +984,41 @@ pub struct ThreadLeaseRecord {
     pub created_unix_ms: u128,
 }
 
+const DETACH_MARKER_EXTENSION: &str = "detached";
+
+/// Result of a [`ThreadLeaseSet::scan_all`] pass over every session scope.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ThreadLeaseScan {
+    /// Leases whose lock is currently held by a live thread connect.
+    pub live: usize,
+    /// Live leases whose connect has confirmed it is detached.
+    pub detached: usize,
+}
+
+/// Whether `zerdr detach` mode is on. While on, no thread connect may hold a
+/// direct attach to a Herdr pane.
+pub fn thread_detach_active(paths: &Paths) -> bool {
+    paths.thread_detach_flag_file.exists()
+}
+
+pub fn thread_detach_set(paths: &Paths) -> Result<()> {
+    let flag = &paths.thread_detach_flag_file;
+    if let Some(parent) = flag.parent() {
+        fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
+    }
+    fs::write(flag, b"").map_err(|error| Error::io(flag, error))
+}
+
+pub fn thread_detach_clear(paths: &Paths) -> Result<()> {
+    let flag = &paths.thread_detach_flag_file;
+    if let Err(error) = fs::remove_file(flag)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(Error::io(flag, error));
+    }
+    Ok(())
+}
+
 /// Per-pane leases that stop two bare `zerdr connect` invocations from attaching to the
 /// same Herdr agent. Unlike [`LeaseSet`] a scope holds many live leases at once, so the
 /// lease identity includes the pane and each pane maps to exactly one file.
@@ -1106,6 +1143,56 @@ impl ThreadLeaseSet {
             }
         }
         Ok(leased)
+    }
+
+    /// Counts live leases across every session and socket scope, and how many of
+    /// them carry a detach marker. `zerdr detach`/`zerdr attach` poll this to wait
+    /// for the connects to confirm. Stale records (lock free) and orphan markers
+    /// are removed on the way, extending the `leased_panes` cleanup convention.
+    pub fn scan_all(&self) -> Result<ThreadLeaseScan> {
+        let mut scan = ThreadLeaseScan::default();
+        if !self.root.exists() {
+            return Ok(scan);
+        }
+        for entry in fs::read_dir(&self.root).map_err(|error| Error::io(&self.root, error))? {
+            let scope = entry.map_err(|error| Error::io(&self.root, error))?.path();
+            if !scope.is_dir() {
+                continue;
+            }
+            for entry in fs::read_dir(&scope).map_err(|error| Error::io(&scope, error))? {
+                let path = entry.map_err(|error| Error::io(&scope, error))?.path();
+                match path.extension().and_then(|value| value.to_str()) {
+                    Some("json") => {}
+                    Some(DETACH_MARKER_EXTENSION) => {
+                        if !path.with_extension("json").exists() {
+                            let _ = fs::remove_file(&path);
+                        }
+                        continue;
+                    }
+                    _ => continue,
+                }
+                let file = match OpenOptions::new().read(true).write(true).open(&path) {
+                    Ok(file) => file,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(Error::io(&path, error)),
+                };
+                match FileExt::try_lock_exclusive(&file) {
+                    Ok(()) => {
+                        let _ = FileExt::unlock(&file);
+                        let _ = fs::remove_file(path.with_extension(DETACH_MARKER_EXTENSION));
+                        let _ = fs::remove_file(&path);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        scan.live += 1;
+                        if path.with_extension(DETACH_MARKER_EXTENSION).exists() {
+                            scan.detached += 1;
+                        }
+                    }
+                    Err(error) => return Err(Error::io(&path, error)),
+                }
+            }
+        }
+        Ok(scan)
     }
 
     /// Lock guarding resolve-then-acquire for one session, so concurrent threads on
@@ -1244,11 +1331,34 @@ impl ThreadLeaseGuard {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Flags this thread as detached for `zerdr detach` observers. A sidecar file
+    /// rather than a record field: readers only probe existence, so a concurrent
+    /// rewrite can never expose a torn record.
+    pub fn mark_detached(&self) -> Result<()> {
+        let marker = self.marker_path();
+        fs::write(&marker, b"").map_err(|error| Error::io(&marker, error))
+    }
+
+    pub fn clear_detached(&self) -> Result<()> {
+        let marker = self.marker_path();
+        if let Err(error) = fs::remove_file(&marker)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(Error::io(&marker, error));
+        }
+        Ok(())
+    }
+
+    fn marker_path(&self) -> PathBuf {
+        self.path.with_extension(DETACH_MARKER_EXTENSION)
+    }
 }
 
 impl Drop for ThreadLeaseGuard {
     fn drop(&mut self) {
         if let Some(file) = self.file.take() {
+            let _ = fs::remove_file(self.marker_path());
             let _ = fs::remove_file(&self.path);
             let _ = FileExt::unlock(&file);
         }
