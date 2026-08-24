@@ -4,32 +4,55 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use support::TestEnv;
 
+/// Bare invocations print help-like output; clap routes it to stdout or stderr
+/// depending on the trigger, so the contract is checked on the combined output.
+fn assert_usage_lists(args: &[&str], expected: &[&str]) {
+    let env = TestEnv::new();
+    let assert = env.command().args(args).assert().failure();
+    let output = assert.get_output();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for name in expected {
+        assert!(
+            combined.contains(name),
+            "expected {args:?} output to mention {name:?}:\n{combined}"
+        );
+    }
+    assert_eq!(env.read_log(), "");
+}
+
 #[test]
-fn help_lists_public_commands_and_hides_event_entry_point() {
+fn help_lists_public_commands_and_hides_plugin_entry_points() {
     cargo_bin_cmd!("zerdr")
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("  herdr").not())
-        .stdout(predicate::str::contains("--session <SESSION>"))
-        .stdout(predicate::str::contains("--mode <MODE>").not())
-        .stdout(predicate::str::contains("--anchor <ANCHOR>"))
-        .stdout(predicate::str::contains("--focus <FOCUS>").not())
-        .stdout(predicate::str::contains("pick").not())
-        .stdout(predicate::str::contains("previous").not())
-        .stdout(predicate::str::contains("sync"))
-        .stdout(predicate::str::contains("bind"))
-        .stdout(predicate::str::contains("unbind"))
+        .stdout(predicate::str::contains("connect"))
+        .stdout(predicate::str::contains("start"))
+        .stdout(predicate::str::contains("workspace"))
         .stdout(predicate::str::contains("setup"))
-        .stdout(predicate::str::contains("uninstall"))
-        .stdout(predicate::str::contains("doctor"))
+        .stdout(predicate::str::contains("--session <SESSION>"))
+        .stdout(predicate::str::contains("--anchor").not())
+        .stdout(predicate::str::contains("  thread").not())
+        .stdout(predicate::str::contains("  uninstall").not())
+        .stdout(predicate::str::contains("  doctor").not())
         .stdout(predicate::str::contains("sync-from-herdr").not())
         .stdout(predicate::str::contains("open-from-herdr").not());
 }
 
 #[test]
-fn removed_workspace_subcommands_fail_with_clap_usage() {
-    for command in ["pick", "next", "previous"] {
+fn bare_invocations_show_their_subcommands() {
+    assert_usage_lists(&[], &["connect", "start", "workspace", "setup"]);
+    assert_usage_lists(&["workspace"], &["bind", "unbind", "sync"]);
+    assert_usage_lists(&["setup"], &["install", "uninstall", "doctor", "auto"]);
+}
+
+#[test]
+fn old_top_level_spellings_fail_with_clap_usage() {
+    for command in ["thread", "sync", "bind", "unbind", "doctor", "uninstall"] {
         let env = TestEnv::new();
         env.command()
             .arg(command)
@@ -41,10 +64,23 @@ fn removed_workspace_subcommands_fail_with_clap_usage() {
 }
 
 #[test]
-fn every_manual_command_exposes_the_session_targeting_option() {
-    for command in ["sync", "bind", "unbind"] {
+fn setup_no_longer_installs_without_a_subcommand() {
+    let env = TestEnv::new();
+    env.command().arg("setup").assert().failure();
+    assert_eq!(env.read_log(), "");
+}
+
+#[test]
+fn session_commands_expose_the_global_session_option() {
+    for args in [
+        vec!["connect", "--help"],
+        vec!["start", "--help"],
+        vec!["workspace", "bind", "--help"],
+        vec!["workspace", "unbind", "--help"],
+        vec!["workspace", "sync", "--help"],
+    ] {
         cargo_bin_cmd!("zerdr")
-            .args([command, "--help"])
+            .args(args)
             .assert()
             .success()
             .stdout(predicate::str::contains("--session <SESSION>"));
@@ -52,20 +88,67 @@ fn every_manual_command_exposes_the_session_targeting_option() {
 }
 
 #[test]
-fn setup_and_uninstall_reject_session_targeting() {
-    for command in ["setup", "uninstall"] {
-        cargo_bin_cmd!("zerdr")
-            .args([command, "--help"])
+fn session_option_is_accepted_before_and_after_the_subcommand() {
+    for args in [
+        vec!["--session", "work", "connect"],
+        vec!["connect", "--session", "work"],
+    ] {
+        let env = TestEnv::new();
+        // The fake herdr serves an empty session list, so dispatch fails later
+        // at runtime; the contract here is that clap accepted the flag.
+        env.command()
+            .args(args)
             .assert()
-            .success()
-            .stdout(predicate::str::contains("--session").not());
+            .failure()
+            .stderr(predicate::str::contains("unexpected argument").not())
+            .stderr(predicate::str::contains("unrecognized subcommand").not());
+    }
+}
 
-        for args in [
-            vec![command, "--session", "work"],
-            vec!["--session", "work", command],
-        ] {
+#[test]
+fn session_option_is_accepted_only_once() {
+    for args in [
+        vec!["--session", "work", "connect", "--session", "work"],
+        vec!["connect", "--session", "a", "--session", "b"],
+        vec!["--session", "a", "workspace", "sync", "--session", "b"],
+    ] {
+        let env = TestEnv::new();
+        env.command()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "--session may be specified only once",
+            ));
+        assert_eq!(env.read_log(), "");
+    }
+}
+
+#[test]
+fn sessionless_setup_commands_reject_session_targeting() {
+    let commands: [&[&str]; 3] = [
+        &["setup", "install"],
+        &["setup", "uninstall"],
+        &["setup", "auto", "on"],
+    ];
+    for command in commands {
+        for session_first in [true, false] {
             let env = TestEnv::new();
-            env.command().args(args).assert().failure();
+            let mut args: Vec<&str> = Vec::new();
+            if session_first {
+                args.extend_from_slice(&["--session", "work"]);
+                args.extend_from_slice(command);
+            } else {
+                args.extend_from_slice(command);
+                args.extend_from_slice(&["--session", "work"]);
+            }
+            env.command()
+                .args(args)
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains(
+                    "--session cannot be used with this command",
+                ));
             assert_eq!(env.read_log(), "");
         }
     }
@@ -86,11 +169,11 @@ fn hidden_plugin_commands_reject_session_targeting() {
 }
 
 #[test]
-fn manual_commands_dispatch_outside_the_zed_terminal_environment() {
+fn workspace_commands_dispatch_outside_the_zed_terminal_environment() {
     for command in ["sync", "bind", "unbind"] {
         let env = TestEnv::new();
         env.command()
-            .arg(command)
+            .args(["workspace", command])
             .env_remove("ZED_TERM")
             .env_remove("TERM_PROGRAM")
             .assert()
@@ -100,51 +183,19 @@ fn manual_commands_dispatch_outside_the_zed_terminal_environment() {
 }
 
 #[test]
-fn removed_herdr_subcommand_fails_with_clap_usage() {
-    cargo_bin_cmd!("zerdr")
-        .arg("herdr")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("unrecognized subcommand"));
-}
-
-#[test]
-fn launch_options_are_rejected_with_every_subcommand_in_either_order() {
-    let subcommands = [
-        "sync",
-        "bind",
-        "unbind",
-        "setup",
-        "uninstall",
-        "doctor",
-        "sync-from-herdr",
-        "open-from-herdr",
+fn anchor_is_rejected_everywhere_but_start() {
+    let commands: [&[&str]; 4] = [
+        &[],
+        &["connect"],
+        &["workspace", "sync"],
+        &["setup", "install"],
     ];
-    let options: [&[&str]; 1] = [&["--anchor", "."]];
-    for subcommand in subcommands {
-        for option in options {
-            let env = TestEnv::new();
-            let mut before = option.to_vec();
-            before.push(subcommand);
-            env.command().args(before).assert().failure();
-            let mut after = vec![subcommand];
-            after.extend_from_slice(option);
-            env.command().args(after).assert().failure();
-            assert_eq!(env.read_log(), "");
-        }
-    }
-}
-
-#[test]
-fn removed_mode_and_focus_flags_fail_as_unknown_arguments() {
-    for option in [
-        ["--mode", "internal"],
-        ["--mode", "external"],
-        ["--focus", "zed"],
-    ] {
+    for command in commands {
         let env = TestEnv::new();
+        let mut args = command.to_vec();
+        args.extend_from_slice(&["--anchor", "."]);
         env.command()
-            .args(option)
+            .args(args)
             .assert()
             .code(2)
             .stderr(predicate::str::contains("unexpected argument"));
@@ -153,12 +204,13 @@ fn removed_mode_and_focus_flags_fail_as_unknown_arguments() {
 }
 
 #[test]
-fn internal_launch_rejects_a_non_git_anchor_before_spawning_a_child() {
+fn start_rejects_a_non_git_anchor_before_spawning_a_child() {
     let env = TestEnv::new();
     let anchor = env.root.path().join("not-a-repository");
     std::fs::create_dir_all(&anchor).unwrap();
 
     env.command()
+        .arg("start")
         .arg("--anchor")
         .arg(&anchor)
         .assert()
@@ -183,6 +235,7 @@ fn every_remote_marker_and_runtime_command_is_rejected_before_any_process() {
     ] {
         let env = TestEnv::new();
         env.command()
+            .arg("start")
             .env(marker, "detected")
             .assert()
             .failure()
@@ -192,28 +245,26 @@ fn every_remote_marker_and_runtime_command_is_rejected_before_any_process() {
     for marker in ["/.dockerenv", "/run/.containerenv"] {
         let env = TestEnv::new();
         env.command()
+            .arg("start")
             .env("ZERDR_TEST_REMOTE_MARKERS", marker)
             .assert()
             .failure()
             .stderr(predicate::str::contains(marker));
         assert_eq!(env.read_log(), "");
     }
-    for command in [
-        None,
-        Some("sync"),
-        Some("bind"),
-        Some("unbind"),
-        Some("setup"),
-        Some("uninstall"),
-        Some("sync-from-herdr"),
-        Some("open-from-herdr"),
-    ] {
+    let commands: [&[&str]; 7] = [
+        &["connect"],
+        &["start"],
+        &["workspace", "sync"],
+        &["setup", "install"],
+        &["setup", "uninstall"],
+        &["sync-from-herdr"],
+        &["open-from-herdr"],
+    ];
+    for command in commands {
         let env = TestEnv::new();
-        let mut invocation = env.command();
-        if let Some(command) = command {
-            invocation.arg(command);
-        }
-        invocation
+        env.command()
+            .args(command)
             .env("SSH_CONNECTION", "client server")
             .assert()
             .failure()
@@ -232,30 +283,24 @@ fn unknown_commands_fail_with_clap_usage() {
 }
 
 #[test]
-fn thread_exposes_session_kind_and_create_options() {
+fn connect_exposes_kind_and_create_and_hides_auto() {
     cargo_bin_cmd!("zerdr")
-        .args(["thread", "--help"])
+        .args(["connect", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("--session <SESSION>"))
         .stdout(predicate::str::contains("--kind <KIND>"))
         .stdout(predicate::str::contains("--create"))
-        .stdout(predicate::str::contains("--auto"))
-        .stdout(predicate::str::contains("--enable"))
-        .stdout(predicate::str::contains("--disable"))
-        .stdout(predicate::str::contains("[TARGET]"));
-    cargo_bin_cmd!("zerdr")
-        .arg("--help")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("thread"));
+        .stdout(predicate::str::contains("[TARGET]"))
+        .stdout(predicate::str::contains("--auto").not())
+        .stdout(predicate::str::contains("--enable").not())
+        .stdout(predicate::str::contains("--disable").not());
 }
 
 #[test]
-fn thread_rejects_auto_start_options_alongside_an_explicit_target() {
+fn connect_rejects_creation_options_alongside_an_explicit_target() {
     for extra in [vec!["--kind", "pi"], vec!["--create"]] {
         let env = TestEnv::new();
-        let mut args = vec!["thread", "wM:p8"];
+        let mut args = vec!["connect", "wM:p8"];
         args.extend(extra);
         env.command()
             .args(args)
@@ -267,15 +312,11 @@ fn thread_rejects_auto_start_options_alongside_an_explicit_target() {
 }
 
 #[test]
-fn thread_mode_flags_are_mutually_exclusive_and_reject_attach_options() {
-    let conflicting: [&[&str]; 7] = [
-        &["thread", "--enable", "--disable"],
-        &["thread", "--enable", "--auto"],
-        &["thread", "--disable", "--auto"],
-        &["thread", "--enable", "wM:p8"],
-        &["thread", "--enable", "--session", "work"],
-        &["thread", "--auto", "--kind", "pi"],
-        &["thread", "--auto", "wM:p8"],
+fn connect_auto_rejects_attach_options() {
+    let conflicting: [&[&str]; 3] = [
+        &["connect", "--auto", "--kind", "pi"],
+        &["connect", "--auto", "--create"],
+        &["connect", "--auto", "wM:p8"],
     ];
     for args in conflicting {
         let env = TestEnv::new();
@@ -289,25 +330,10 @@ fn thread_mode_flags_are_mutually_exclusive_and_reject_attach_options() {
 }
 
 #[test]
-fn thread_mode_flags_reject_the_root_session_option() {
-    for flag in ["--enable", "--disable"] {
-        let env = TestEnv::new();
-        env.command()
-            .args(["--session", "work", "thread", flag])
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains(
-                "--session cannot be used when toggling thread auto mode",
-            ));
-        assert_eq!(env.read_log(), "");
-    }
-}
-
-#[test]
-fn thread_auto_is_silent_when_disabled_without_touching_herdr() {
+fn connect_auto_is_silent_when_disabled_without_touching_herdr() {
     for args in [
-        vec!["thread", "--auto"],
-        vec!["thread", "--auto", "--session", "work"],
+        vec!["connect", "--auto"],
+        vec!["connect", "--auto", "--session", "work"],
     ] {
         let env = TestEnv::new();
         let assert = env.command().args(args).assert().success();
@@ -318,11 +344,15 @@ fn thread_auto_is_silent_when_disabled_without_touching_herdr() {
 }
 
 #[test]
-fn thread_accepts_session_targeting_only_once() {
+fn setup_auto_requires_an_explicit_state() {
+    let env = TestEnv::new();
+    env.command().args(["setup", "auto"]).assert().code(2);
+    assert_eq!(env.read_log(), "");
+
     let env = TestEnv::new();
     env.command()
-        .args(["--session", "work", "thread", "--session", "work"])
+        .args(["setup", "auto", "maybe"])
         .assert()
-        .failure();
+        .code(2);
     assert_eq!(env.read_log(), "");
 }

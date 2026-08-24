@@ -199,7 +199,7 @@ fn bare_thread_attaches_a_free_agent_in_the_matching_workspace() {
     fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
     let paths = fixture.paths();
 
-    let child = fixture.std_thread_command().arg("thread").spawn().unwrap();
+    let child = fixture.std_thread_command().arg("connect").spawn().unwrap();
     wait_for_log(&fixture.env, "agent attach w1:p1");
     assert_eq!(count_leases(&paths), 1);
 
@@ -235,9 +235,9 @@ fn a_second_thread_picks_a_different_agent_pane() {
     fixture.agent("zed-1", "w1:p1", "w1", "idle", "first");
     fixture.agent("zed-2", "w1:p2", "w1", "idle", "second");
 
-    let mut first = fixture.std_thread_command().arg("thread").spawn().unwrap();
+    let mut first = fixture.std_thread_command().arg("connect").spawn().unwrap();
     wait_for_log(&fixture.env, "agent attach w1:p");
-    let mut second = fixture.std_thread_command().arg("thread").spawn().unwrap();
+    let mut second = fixture.std_thread_command().arg("connect").spawn().unwrap();
     wait_for_log(&fixture.env, "agent attach w1:p2");
 
     fixture.release_attach();
@@ -258,7 +258,7 @@ fn an_empty_workspace_gets_a_new_tab_with_a_plain_shell() {
 
     let output = fixture
         .std_thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string())
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
         .spawn()
@@ -306,7 +306,7 @@ fn auto_start_kind_comes_from_the_flag_then_the_environment() {
         let tab = serde_json::json!({"result": {"root_pane": {"pane_id": "w1:p9"}}});
         let mut command = fixture.thread_command();
         command
-            .arg("thread")
+            .arg("connect")
             .env("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string())
             .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "");
         if let Some(flag) = flag {
@@ -333,7 +333,7 @@ fn generated_agent_names_skip_live_names() {
 
     fixture
         .thread_command()
-        .args(["thread", "--kind", "pi"])
+        .args(["connect", "--kind", "pi"])
         .env("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string())
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
         .assert()
@@ -349,21 +349,21 @@ fn a_bare_thread_without_a_matching_workspace_explains_the_create_flag() {
 
     fixture
         .thread_command()
-        .arg("thread")
+        .arg("connect")
         .env(
             "ZERDR_TEST_WORKSPACES_JSON",
             r#"{"result":{"workspaces":[]}}"#,
         )
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("zerdr bind"))
-        .stderr(predicate::str::contains("zerdr thread --create"))
+        .stderr(predicate::str::contains("zerdr workspace bind"))
+        .stderr(predicate::str::contains("zerdr connect --create"))
         .stderr(predicate::str::contains(fixture.repo.display().to_string()));
 
     assert!(!fixture.env.read_log().contains("workspace create"));
 }
 
-/// With auto mode enabled, `--auto` behaves exactly like a manual `zerdr thread`.
+/// With auto mode enabled, `--auto` behaves exactly like a manual `zerdr connect`.
 #[test]
 fn auto_attaches_a_free_agent_while_the_mode_is_enabled() {
     let fixture = Fixture::new();
@@ -374,7 +374,7 @@ fn auto_attaches_a_free_agent_while_the_mode_is_enabled() {
 
     let child = fixture
         .std_thread_command()
-        .args(["thread", "--auto"])
+        .args(["connect", "--auto"])
         .spawn()
         .unwrap();
     wait_for_log(&fixture.env, "agent attach w1:p1");
@@ -416,7 +416,7 @@ fn auto_without_a_matching_workspace_creates_and_binds_one() {
 
     let output = fixture
         .std_thread_command()
-        .args(["thread", "--auto"])
+        .args(["connect", "--auto"])
         .env(
             "ZERDR_TEST_WORKSPACES_JSON",
             r#"{"result":{"workspaces":[]}}"#,
@@ -463,7 +463,7 @@ fn auto_outside_a_git_checkout_silently_leaves_a_plain_shell() {
 
     let output = fixture
         .std_thread_command()
-        .args(["thread", "--auto"])
+        .args(["connect", "--auto"])
         .current_dir(&plain_dir)
         .spawn()
         .unwrap()
@@ -488,7 +488,7 @@ fn auto_exits_zero_when_herdr_is_unavailable() {
 
     let output = fixture
         .std_thread_command()
-        .args(["thread", "--auto"])
+        .args(["connect", "--auto"])
         .env(
             "ZERDR_HERDR_BIN",
             fixture.env.root.path().join("missing-herdr"),
@@ -521,7 +521,7 @@ fn a_workspace_without_checkout_metadata_matches_by_pane_cwd_and_is_bound() {
 
     fixture
         .thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
         .assert()
@@ -565,7 +565,7 @@ fn a_workspace_bound_elsewhere_is_not_matched_by_cwd() {
 
     fixture
         .thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
         .assert()
         .code(1)
@@ -584,7 +584,7 @@ fn create_makes_the_workspace_binds_it_and_starts_an_agent() {
 
     let output = fixture
         .std_thread_command()
-        .args(["thread", "--create"])
+        .args(["connect", "--create"])
         .env(
             "ZERDR_TEST_WORKSPACES_JSON",
             r#"{"result":{"workspaces":[]}}"#,
@@ -630,7 +630,7 @@ fn concurrent_bare_threads_each_get_their_own_tab() {
         children.push(
             fixture
                 .std_thread_command()
-                .arg("thread")
+                .arg("connect")
                 .env("ZERDR_TEST_PANE_COUNTER_FILE", &counter)
                 .spawn()
                 .unwrap(),
@@ -661,7 +661,7 @@ fn an_explicit_target_attaches_without_creating_anything() {
 
     let child = fixture
         .std_thread_command()
-        .args(["thread", "w1:p1"])
+        .args(["connect", "w1:p1"])
         .env("ZERDR_TEST_AGENT_GET_JSON", agent)
         .spawn()
         .unwrap();
@@ -698,7 +698,7 @@ fn titles_are_emitted_once_per_change_and_a_bell_marks_settling() {
 
     let child = fixture
         .std_thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_AGENT_GET_SEQ", &sequence)
         .spawn()
         .unwrap();
@@ -734,7 +734,7 @@ fn an_empty_title_falls_back_to_the_workspace_label() {
     let fixture = Fixture::new();
     fixture.agent("zed-1", "w1:p1", "w1", "idle", "");
 
-    let child = fixture.std_thread_command().arg("thread").spawn().unwrap();
+    let child = fixture.std_thread_command().arg("connect").spawn().unwrap();
     wait_for_log(&fixture.env, "agent attach w1:p1");
     fixture.release_attach();
     let output = child.wait_with_output().unwrap();
@@ -770,7 +770,7 @@ fn titles_carry_the_herdr_marker_and_kind_display_names() {
         let fixture = Fixture::new();
         fixture.agent_of_kind(kind, "zed-1", "w1:p1", "w1", "idle", title);
 
-        let child = fixture.std_thread_command().arg("thread").spawn().unwrap();
+        let child = fixture.std_thread_command().arg("connect").spawn().unwrap();
         wait_for_log(&fixture.env, "agent attach w1:p1");
         fixture.release_attach();
         let output = child.wait_with_output().unwrap();
@@ -809,7 +809,7 @@ fn a_raw_title_glyph_passes_through_and_frame_changes_reemit() {
 
     let child = fixture
         .std_thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_AGENT_GET_SEQ", &sequence)
         .spawn()
         .unwrap();
@@ -846,7 +846,7 @@ fn status_glyphs_follow_the_herdr_symbol_set() {
         let fixture = Fixture::new();
         fixture.agent("zed-1", "w1:p1", "w1", status, "review the diff");
 
-        let child = fixture.std_thread_command().arg("thread").spawn().unwrap();
+        let child = fixture.std_thread_command().arg("connect").spawn().unwrap();
         wait_for_log(&fixture.env, "agent attach w1:p1");
         fixture.release_attach();
         let output = child.wait_with_output().unwrap();
@@ -879,7 +879,7 @@ fn unusable_raw_prefixes_fall_back_to_the_status_glyph() {
         let fixture = Fixture::new();
         fixture.agent_with_raw_title(kind, "zed-1", "w1:p1", "w1", "working", raw_title, title);
 
-        let child = fixture.std_thread_command().arg("thread").spawn().unwrap();
+        let child = fixture.std_thread_command().arg("connect").spawn().unwrap();
         wait_for_log(&fixture.env, "agent attach w1:p1");
         fixture.release_attach();
         let output = child.wait_with_output().unwrap();
@@ -909,7 +909,7 @@ fn a_status_transition_reemits_the_title_with_the_new_glyph() {
 
     let child = fixture
         .std_thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_AGENT_GET_SEQ", &sequence)
         .spawn()
         .unwrap();
@@ -955,7 +955,7 @@ fn a_failing_poll_leaves_the_attached_agent_and_the_last_title_alone() {
 
     let child = fixture
         .std_thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_AGENT_GET_SEQ", &sequence)
         .spawn()
         .unwrap();
@@ -988,7 +988,7 @@ fn detaching_does_not_wait_for_the_next_poll() {
     let started = std::time::Instant::now();
     fixture
         .thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_THREAD_POLL_MS", "30000")
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
         .assert()
@@ -1010,7 +1010,7 @@ fn an_unreadable_workspace_list_leaves_herdr_focus_untouched() {
 
     let output = fixture
         .std_thread_command()
-        .args(["thread", "w1:p1"])
+        .args(["connect", "w1:p1"])
         .env("ZERDR_TEST_WORKSPACES_JSON", "")
         .env("ZERDR_TEST_AGENT_GET_JSON", agent)
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
@@ -1056,7 +1056,7 @@ fn the_attach_exit_status_is_propagated() {
 
     fixture
         .thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
         .env("ZERDR_TEST_ATTACH_EXIT", "3")
         .assert()
@@ -1071,7 +1071,7 @@ fn an_unfocused_workspace_is_focused_exactly_once() {
 
         fixture
             .thread_command()
-            .arg("thread")
+            .arg("connect")
             .env("ZERDR_TEST_WORKSPACES_JSON", fixture.workspaces(focused))
             .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
             .assert()
@@ -1089,7 +1089,7 @@ fn a_missing_session_is_reported_without_starting_herdr() {
 
     fixture
         .thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
         .assert()
         .code(1)
@@ -1109,7 +1109,7 @@ fn a_non_git_directory_is_reported_with_the_target_hint() {
     let mut command = fixture.thread_command();
     command
         .current_dir(&outside)
-        .arg("thread")
+        .arg("connect")
         .assert()
         .code(1)
         .stderr(predicate::str::contains("Herdr pane id"));
@@ -1121,7 +1121,7 @@ fn remote_environments_are_rejected_before_touching_herdr() {
 
     fixture
         .thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("SSH_CONNECTION", "10.0.0.1 22 10.0.0.2 22")
         .assert()
         .failure();
@@ -1136,7 +1136,7 @@ fn thread_runs_without_the_plugin_or_install_state() {
 
     fixture
         .thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_PLUGINS_JSON", r#"{"result":{"plugins":[]}}"#)
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
         .assert()
@@ -1160,7 +1160,7 @@ fn a_restored_thread_reattaches_the_remembered_shell_pane() {
     for _ in 0..2 {
         let output = fixture
             .std_thread_command()
-            .arg("thread")
+            .arg("connect")
             .env("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string())
             .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
             .spawn()
@@ -1202,7 +1202,7 @@ fn reattach_prefers_the_most_recently_attached_pane() {
 
     let first = fixture
         .std_thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_PANE_COUNTER_FILE", &counter)
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", &first_release)
         .spawn()
@@ -1210,7 +1210,7 @@ fn reattach_prefers_the_most_recently_attached_pane() {
     wait_for_log(&fixture.env, "terminal attach term-w1:p1");
     let second = fixture
         .std_thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_PANE_COUNTER_FILE", &counter)
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", &second_release)
         .spawn()
@@ -1223,7 +1223,7 @@ fn reattach_prefers_the_most_recently_attached_pane() {
 
     let output = fixture
         .std_thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_PANE_COUNTER_FILE", &counter)
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
         .spawn()
@@ -1249,7 +1249,7 @@ fn a_dead_remembered_pane_is_pruned_and_a_new_tab_is_created() {
     let first_tab = serde_json::json!({"result": {"root_pane": {"pane_id": "w1:p9"}}});
     let output = fixture
         .std_thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_TAB_CREATE_JSON", first_tab.to_string())
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
         .spawn()
@@ -1261,7 +1261,7 @@ fn a_dead_remembered_pane_is_pruned_and_a_new_tab_is_created() {
     let second_tab = serde_json::json!({"result": {"root_pane": {"pane_id": "w1:p10"}}});
     let output = fixture
         .std_thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_TAB_CREATE_JSON", second_tab.to_string())
         .env("ZERDR_TEST_PANE_GET_MISSING_IDS", "w1:p9")
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
@@ -1292,7 +1292,7 @@ fn a_free_agent_still_wins_over_a_remembered_shell_pane() {
     let tab = serde_json::json!({"result": {"root_pane": {"pane_id": "w1:p9"}}});
     let output = fixture
         .std_thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string())
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
         .spawn()
@@ -1302,7 +1302,7 @@ fn a_free_agent_still_wins_over_a_remembered_shell_pane() {
     assert!(output.status.success(), "{output:?}");
 
     fixture.agent("zed-1", "w1:p1", "w1", "idle", "ready");
-    let child = fixture.std_thread_command().arg("thread").spawn().unwrap();
+    let child = fixture.std_thread_command().arg("connect").spawn().unwrap();
     wait_for_log(&fixture.env, "agent attach w1:p1");
     fixture.release_attach();
     assert!(child.wait_with_output().unwrap().status.success());
@@ -1327,7 +1327,7 @@ fn a_pane_remembered_for_another_workspace_is_not_considered() {
 
     let output = fixture
         .std_thread_command()
-        .arg("thread")
+        .arg("connect")
         .env("ZERDR_TEST_TAB_CREATE_JSON", tab.to_string())
         .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
         .spawn()
@@ -1350,7 +1350,7 @@ fn an_explicit_target_attach_is_remembered() {
 
     let child = fixture
         .std_thread_command()
-        .args(["thread", "w1:p1"])
+        .args(["connect", "w1:p1"])
         .env("ZERDR_TEST_AGENT_GET_JSON", agent)
         .spawn()
         .unwrap();

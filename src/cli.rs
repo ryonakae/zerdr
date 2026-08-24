@@ -1,70 +1,80 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(
     name = "zerdr",
     version,
-    about = "Keep a Herdr session aligned with Zed"
+    about = "Keep a Herdr session aligned with Zed",
+    arg_required_else_help = true
 )]
 pub struct Cli {
-    /// Use or create a named persistent Herdr session.
-    #[arg(long)]
-    pub session: Option<String>,
-    /// Git project already open in the target Zed window.
-    #[arg(long)]
-    pub anchor: Option<PathBuf>,
+    /// Target a named persistent Herdr session.
+    //
+    // clap accepts a global flag once before and once after the subcommand,
+    // so occurrences are collected and the once-only rule is enforced in
+    // the dispatcher.
+    #[arg(long, global = true, value_name = "SESSION")]
+    pub session: Vec<String>,
     #[command(subcommand)]
-    pub command: Option<Command>,
+    pub command: Command,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Synchronize Zed to the focused Herdr workspace.
-    Sync {
-        /// Target a named persistent Herdr session.
-        #[arg(long)]
-        session: Option<String>,
-    },
-    /// Bind the selected workspace to a Git checkout.
-    Bind {
-        /// Target a named persistent Herdr session.
-        #[arg(long)]
-        session: Option<String>,
-        path: Option<PathBuf>,
-    },
-    /// Remove the selected workspace binding.
-    Unbind {
-        /// Target a named persistent Herdr session.
-        #[arg(long)]
-        session: Option<String>,
-    },
-    /// Attach a Zed terminal thread to a Herdr agent.
-    Thread {
+    /// Connect this Zed terminal thread to a Herdr pane.
+    Connect {
         /// Herdr pane id or unique live agent name to attach to.
         target: Option<String>,
-        /// Target a named persistent Herdr session.
-        #[arg(long)]
-        session: Option<String>,
         /// Start an agent of this kind in a fresh pane instead of a plain shell.
         #[arg(long, conflicts_with = "target")]
         kind: Option<String>,
-        /// Create the Herdr workspace when none matches this Git checkout.
+        /// Create the Herdr session and workspace when they are missing.
         #[arg(long, conflicts_with = "target")]
         create: bool,
-        /// Attach best-effort, and only while thread auto mode is enabled.
-        #[arg(long, conflicts_with_all = ["target", "kind", "create"])]
+        /// Attach best-effort, and only while auto mode is enabled.
+        #[arg(long, hide = true, conflicts_with_all = ["target", "kind", "create"])]
         auto: bool,
-        /// Turn on thread auto mode, installing Zed's terminal_init_command once.
-        #[arg(long, conflicts_with_all = ["target", "kind", "create", "session", "auto"])]
-        enable: bool,
-        /// Turn off thread auto mode; Zed settings are left as they are.
-        #[arg(long, conflicts_with_all = ["target", "kind", "create", "session", "auto", "enable"])]
-        disable: bool,
     },
+    /// Launch Herdr wrapped with Zed focus sync.
+    Start {
+        /// Git project already open in the target Zed window.
+        #[arg(long)]
+        anchor: Option<PathBuf>,
+    },
+    /// Manage the selected Herdr workspace's Zed integration.
+    #[command(arg_required_else_help = true)]
+    Workspace {
+        #[command(subcommand)]
+        command: WorkspaceCommand,
+    },
+    /// Install, diagnose, or remove the Herdr and Zed integration.
+    #[command(arg_required_else_help = true)]
+    Setup {
+        #[command(subcommand)]
+        command: SetupCommand,
+    },
+    #[command(hide = true)]
+    SyncFromHerdr,
+    #[command(hide = true)]
+    OpenFromHerdr,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WorkspaceCommand {
+    /// Bind the selected workspace to a Git checkout.
+    Bind { path: Option<PathBuf> },
+    /// Remove the selected workspace binding.
+    Unbind,
+    /// Synchronize Zed to the focused Herdr workspace.
+    Sync,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SetupCommand {
     /// Install the Herdr plugin and Zed tasks.
-    Setup,
+    Install,
     /// Remove the Herdr plugin and Zed tasks.
     Uninstall {
         /// Also remove zerdr state after verifying there are no live leases.
@@ -72,13 +82,16 @@ pub enum Command {
         purge: bool,
     },
     /// Diagnose zerdr, Herdr, and Zed integration.
-    Doctor {
-        /// Target a named persistent Herdr session.
-        #[arg(long)]
-        session: Option<String>,
+    Doctor,
+    /// Toggle auto mode, installing Zed's terminal_init_command once.
+    Auto {
+        /// Turn auto mode on or off; off leaves Zed settings as they are.
+        state: AutoState,
     },
-    #[command(hide = true)]
-    SyncFromHerdr,
-    #[command(hide = true)]
-    OpenFromHerdr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AutoState {
+    On,
+    Off,
 }

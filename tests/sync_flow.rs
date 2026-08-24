@@ -127,7 +127,7 @@ fn manual_sync_targets_the_explicit_named_session() {
     }]}});
 
     env.command()
-        .args(["--session", "work", "sync"])
+        .args(["--session", "work", "workspace", "sync"])
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
         .assert()
@@ -167,9 +167,9 @@ fn every_manual_command_rejects_a_route_owner_mismatch_before_workspace_or_state
     });
 
     for args in [
-        vec!["sync"],
-        vec!["bind", anchor.to_str().unwrap()],
-        vec!["unbind"],
+        vec!["workspace", "sync"],
+        vec!["workspace", "bind", anchor.to_str().unwrap()],
+        vec!["workspace", "unbind"],
     ] {
         fs::write(&env.log, "").unwrap();
         env.command()
@@ -1559,7 +1559,7 @@ fn manual_bind_normalizes_nested_path_and_synchronizes() {
     });
 
     env.command()
-        .args(["bind", nested.to_str().unwrap()])
+        .args(["workspace", "bind", nested.to_str().unwrap()])
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
@@ -1597,7 +1597,7 @@ fn notified_zed_task_failure_hides_by_returning_success() {
     });
 
     env.command()
-        .arg("sync")
+        .args(["workspace", "sync"])
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
         .env("ZERDR_TASK_MODE", "1")
@@ -1631,7 +1631,7 @@ fn unbind_removes_only_the_focused_binding_without_calling_zed() {
     }]}});
 
     env.command()
-        .arg("unbind")
+        .args(["workspace", "unbind"])
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
@@ -1664,7 +1664,7 @@ fn bind_explicit_session_without_wrapper_targets_that_sessions_focus_and_skips_z
     }]}});
 
     env.command()
-        .args(["bind", "--session", "default"])
+        .args(["workspace", "bind", "--session", "default"])
         .arg(&nested)
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env("ZERDR_TEST_WORKSPACES_DEFAULT_JSON", workspaces.to_string())
@@ -1696,7 +1696,7 @@ fn complete_pane_context_targets_the_injected_workspace_without_reading_focus() 
     });
 
     env.command()
-        .arg("bind")
+        .args(["workspace", "bind"])
         .arg(&repo)
         .env("HERDR_SOCKET_PATH", &socket)
         .env("HERDR_WORKSPACE_ID", "w-injected")
@@ -1725,7 +1725,7 @@ fn implicit_named_pane_context_receives_manual_command_errors() {
     });
 
     env.command()
-        .arg("sync")
+        .args(["workspace", "sync"])
         .env("HERDR_SOCKET_PATH", &socket)
         .env("HERDR_WORKSPACE_ID", "w1")
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
@@ -1760,7 +1760,7 @@ fn partial_pane_context_fails_before_binding_or_zed() {
                 "w-partial".to_owned()
             };
             let mut invocation = env.command();
-            invocation.arg(command);
+            invocation.args(["workspace", command]);
             if command == "bind" {
                 invocation.arg(env.root.path());
             }
@@ -1798,7 +1798,7 @@ fn explicit_session_wins_over_complete_pane_context() {
     }]}});
 
     env.command()
-        .args(["bind", "--session", "default"])
+        .args(["workspace", "bind", "--session", "default"])
         .arg(&repo)
         .env("HERDR_SOCKET_PATH", &zerdr_socket)
         .env("HERDR_WORKSPACE_ID", "w-pane")
@@ -1837,7 +1837,7 @@ fn unbind_explicit_session_without_wrapper_removes_only_that_mapping_and_skips_z
     }]}});
 
     env.command()
-        .args(["unbind", "--session", "default"])
+        .args(["workspace", "unbind", "--session", "default"])
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env("ZERDR_TEST_WORKSPACES_DEFAULT_JSON", workspaces.to_string())
         .assert()
@@ -1871,7 +1871,7 @@ fn multiple_live_wrappers_block_bind_before_binding_or_zed_changes() {
     });
 
     env.command()
-        .arg("bind")
+        .args(["workspace", "bind"])
         .arg(&target)
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .assert()
@@ -1909,7 +1909,7 @@ fn malformed_live_route_blocks_bind_before_binding_or_zed_changes() {
     });
 
     env.command()
-        .arg("bind")
+        .args(["workspace", "bind"])
         .arg(&target)
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .assert()
@@ -1945,7 +1945,7 @@ fn bind_rechecks_a_live_wrapper_after_workspace_resolution_before_routing() {
     let proceed = env.root.path().join("workspace-list-continue");
     let mut command = env.std_command();
     command
-        .arg("bind")
+        .args(["workspace", "bind"])
         .arg(&target)
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
@@ -1993,7 +1993,7 @@ fn follow_sync_uses_the_default_binding_when_workspace_ids_overlap_sessions() {
     }]}});
 
     env.command()
-        .arg("sync")
+        .args(["workspace", "sync"])
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
         .assert()
@@ -2018,7 +2018,7 @@ fn zed_task_without_a_live_lease_leaves_actionable_terminal_error() {
     });
 
     env.command()
-        .arg("sync")
+        .args(["workspace", "sync"])
         .env("ZED_TERM", "true")
         .env("TERM_PROGRAM", "zed")
         .env("ZERDR_TASK_MODE", "1")

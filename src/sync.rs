@@ -157,7 +157,7 @@ impl Synchronizer {
         if let Some(root) = store.get(session_name, &workspace.id)? {
             if !root.exists() {
                 return Err(Error::User(format!(
-                    "binding for {} points to missing path {}; run `zerdr bind PATH`",
+                    "binding for {} points to missing path {}; run `zerdr workspace bind PATH`",
                     workspace.id,
                     root.display()
                 )));
@@ -179,7 +179,7 @@ impl Synchronizer {
             discovered_cwd = self.herdr.workspace_cwd(session_name, workspace)?;
             discovered_cwd.as_deref().ok_or_else(|| {
                 Error::User(format!(
-                    "workspace {} has no checkout path or working directory; run `zerdr bind PATH`",
+                    "workspace {} has no checkout path or working directory; run `zerdr workspace bind PATH`",
                     workspace.id
                 ))
             })?
@@ -298,7 +298,7 @@ impl Synchronizer {
         if let Some(root) = store.get(session_name, &context.workspace_id)? {
             if !root.exists() {
                 return Err(Error::User(format!(
-                    "binding for {} points to missing path {}; run `zerdr bind PATH`",
+                    "binding for {} points to missing path {}; run `zerdr workspace bind PATH`",
                     context.workspace_id,
                     root.display()
                 )));
@@ -320,7 +320,7 @@ impl Synchronizer {
             .or(context.workspace_cwd.as_deref())
             .ok_or_else(|| {
                 Error::User(format!(
-                    "workspace {} has no checkout path or working directory; run `zerdr bind PATH`",
+                    "workspace {} has no checkout path or working directory; run `zerdr workspace bind PATH`",
                     context.workspace_id
                 ))
             })?;

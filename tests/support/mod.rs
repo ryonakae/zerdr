@@ -335,7 +335,7 @@ fi
     }
 
     pub fn prepare_launcher(&self) {
-        self.command().arg("setup").assert().success();
+        self.command().args(["setup", "install"]).assert().success();
         fs::write(&self.log, "").unwrap();
     }
 

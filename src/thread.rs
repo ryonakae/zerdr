@@ -147,7 +147,7 @@ fn resolve_or_create(
         .map_err(|error| Error::User(format!("failed to read the current directory: {error}")))?;
     let root = canonical_git_root(&cwd).map_err(|error| {
         Error::User(format!(
-            "{error}; run `zerdr thread` from a Git checkout or pass a Herdr pane id"
+            "{error}; run `zerdr connect` from a Git checkout or pass a Herdr pane id"
         ))
     })?;
 
@@ -164,7 +164,7 @@ fn resolve_or_create(
         None => {
             if !create {
                 return Err(Error::User(format!(
-                    "no Herdr workspace matches {}; bind an existing workspace with `zerdr bind` or run `zerdr thread --create` to make one",
+                    "no Herdr workspace matches {}; bind an existing workspace with `zerdr workspace bind` or run `zerdr connect --create` to make one",
                     root.display()
                 )));
             }
@@ -400,7 +400,7 @@ fn print_status(auto: bool, attachment: &Attachment, agent: &AgentInfo, label: O
         }
     };
     if auto {
-        println!("zerdr: thread auto mode is enabled; {outcome}");
+        println!("zerdr: auto mode is enabled; {outcome}");
     } else {
         println!("zerdr: {outcome}");
     }

@@ -2,7 +2,7 @@
   {
     "context": "Terminal",
     "bindings": {
-      "ctrl-alt-t": ["terminal::SendText", "zerdr thread\n"]
+      "ctrl-alt-t": ["terminal::SendText", "zerdr connect\n"]
     }
   }
 ]

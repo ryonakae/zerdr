@@ -29,7 +29,7 @@ fn remote_doctor_reports_all_markers_without_processes_locks_or_cleanup() {
 
     let assert = env
         .command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("WSL_INTEROP", "socket")
         .env("SSH_CLIENT", "client")
         .env("container", "podman")
@@ -66,7 +66,7 @@ fn setup_is_idempotent_and_installs_exact_plugin_and_tasks_without_config_change
     fs::create_dir_all(herdr_config.parent().unwrap()).unwrap();
     fs::write(&herdr_config, "# user-owned\n").unwrap();
 
-    let first_output = env.command().arg("setup").assert().success();
+    let first_output = env.command().args(["setup", "install"]).assert().success();
     let stdout = String::from_utf8_lossy(&first_output.get_output().stdout);
     assert!(stdout.contains("prefix+z"), "{stdout}");
     assert!(stdout.contains("plugin_action"), "{stdout}");
@@ -81,7 +81,7 @@ fn setup_is_idempotent_and_installs_exact_plugin_and_tasks_without_config_change
     for label in OWNED_LABELS {
         assert!(first.contains(label), "{first}");
     }
-    assert!(first.contains(r#""args": ["--anchor", "$ZED_WORKTREE_ROOT"]"#));
+    assert!(first.contains(r#""args": ["start", "--anchor", "$ZED_WORKTREE_ROOT"]"#));
     assert!(first.contains(r#""allow_concurrent_runs": true"#));
     assert!(first.contains(r#""use_new_terminal": true"#));
     assert!(first.contains(r#""hide": "never""#));
@@ -128,7 +128,7 @@ fn setup_is_idempotent_and_installs_exact_plugin_and_tasks_without_config_change
         ]))])
     );
 
-    let second_output = env.command().arg("setup").assert().success();
+    let second_output = env.command().args(["setup", "install"]).assert().success();
     assert_eq!(fs::read_to_string(tasks_path).unwrap(), first);
     assert_eq!(fs::read_to_string(manifest_path).unwrap(), manifest);
     assert_eq!(
@@ -151,7 +151,7 @@ command = ["wrong", "command"]
 "#,
     ] {
         let env = TestEnv::new();
-        env.command().arg("setup").assert().success();
+        env.command().args(["setup", "install"]).assert().success();
         let paths = Paths::for_test(env.root.path());
         let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
         let executable = assert_cmd::cargo::cargo_bin!("zerdr").display().to_string();
@@ -171,7 +171,7 @@ command = [{executable:?}, "sync-from-herdr"]
         let tasks_before = fs::read(&paths.zed_tasks_file).unwrap();
         let install_before = fs::read(&paths.install_state_file).unwrap();
 
-        env.command().arg("setup").assert().success();
+        env.command().args(["setup", "install"]).assert().success();
 
         let upgraded: toml::Value =
             toml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
@@ -198,7 +198,7 @@ command = [{executable:?}, "sync-from-herdr"]
 #[test]
 fn setup_restores_a_missing_owned_task() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let mut tasks: Vec<serde_json::Value> =
         serde_json::from_slice(&fs::read(&paths.zed_tasks_file).unwrap()).unwrap();
@@ -220,7 +220,7 @@ fn setup_restores_a_missing_owned_task() {
     )
     .unwrap();
 
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
 
     let installed = fs::read_to_string(paths.zed_tasks_file).unwrap();
     for label in OWNED_LABELS {
@@ -237,7 +237,7 @@ fn generated_task_command_executes_when_the_binary_path_contains_spaces() {
     fs::copy(assert_cmd::cargo::cargo_bin!("zerdr"), &installed).unwrap();
 
     env.command()
-        .arg("setup")
+        .args(["setup", "install"])
         .env("ZERDR_SETUP_EXECUTABLE", &installed)
         .assert()
         .success();
@@ -254,7 +254,7 @@ fn generated_task_command_executes_when_the_binary_path_contains_spaces() {
     let command = task["command"].as_str().unwrap();
     assert_eq!(
         task["args"],
-        serde_json::json!(["--anchor", "$ZED_WORKTREE_ROOT"])
+        serde_json::json!(["start", "--anchor", "$ZED_WORKTREE_ROOT"])
     );
     assert!(
         ProcessCommand::new("sh")
@@ -276,12 +276,15 @@ fn setup_and_uninstall_preserve_unrelated_jsonc_content() {
     )
     .unwrap();
 
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let installed = fs::read_to_string(&tasks_path).unwrap();
     assert!(installed.contains("// keep this comment"));
     assert!(installed.contains("user task"));
 
-    env.command().arg("uninstall").assert().success();
+    env.command()
+        .args(["setup", "uninstall"])
+        .assert()
+        .success();
     let uninstalled = fs::read_to_string(&tasks_path).unwrap();
     assert!(uninstalled.contains("// keep this comment"));
     assert!(uninstalled.contains("user task"));
@@ -299,7 +302,7 @@ fn setup_refuses_a_foreign_owned_label_without_changing_original_bytes() {
     fs::write(&tasks_path, original).unwrap();
 
     env.command()
-        .arg("setup")
+        .args(["setup", "install"])
         .assert()
         .failure()
         .stderr(predicates::str::contains("conflicting Zed task"));
@@ -311,17 +314,20 @@ fn setup_refuses_a_foreign_owned_label_without_changing_original_bytes() {
 #[test]
 fn uninstall_preserves_an_owned_task_modified_after_setup() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let tasks_path = env.root.path().join("zed/tasks.json");
     let installed = fs::read_to_string(&tasks_path).unwrap();
     let modified = installed.replacen(
-        r#""args": ["--anchor", "$ZED_WORKTREE_ROOT"]"#,
+        r#""args": ["start", "--anchor", "$ZED_WORKTREE_ROOT"]"#,
         r#""args": ["hacked"]"#,
         1,
     );
     fs::write(&tasks_path, modified).unwrap();
 
-    env.command().arg("uninstall").assert().success();
+    env.command()
+        .args(["setup", "uninstall"])
+        .assert()
+        .success();
     let remaining = fs::read_to_string(tasks_path).unwrap();
     assert!(remaining.contains("zerdr: Herdr"));
     assert!(remaining.contains("hacked"));
@@ -330,7 +336,7 @@ fn uninstall_preserves_an_owned_task_modified_after_setup() {
 #[test]
 fn setup_removes_stale_owned_tasks_recorded_by_an_older_install() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let stale_owned = serde_json::json!({
         "label": "zerdr: Pick Workspace",
@@ -372,7 +378,7 @@ fn setup_removes_stale_owned_tasks_recorded_by_an_older_install() {
     )
     .unwrap();
 
-    let assert = env.command().arg("setup").assert().success();
+    let assert = env.command().args(["setup", "install"]).assert().success();
     let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
     assert!(
         stderr.contains(r#"preserving modified or foreign Zed task "zerdr: Next Workspace""#),
@@ -394,7 +400,7 @@ fn setup_removes_stale_owned_tasks_recorded_by_an_older_install() {
 #[test]
 fn failed_setup_update_restores_previous_tasks_manifest_and_ownership_state() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let tasks_before = fs::read(&paths.zed_tasks_file).unwrap();
     let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
@@ -402,7 +408,7 @@ fn failed_setup_update_restores_previous_tasks_manifest_and_ownership_state() {
     let state_before = fs::read(&paths.install_state_file).unwrap();
 
     env.command()
-        .arg("setup")
+        .args(["setup", "install"])
         .env(
             "ZERDR_SETUP_EXECUTABLE",
             env.root.path().join("different/zerdr"),
@@ -421,7 +427,7 @@ fn failed_setup_update_restores_previous_tasks_manifest_and_ownership_state() {
 #[test]
 fn failed_plugin_link_restores_the_action_manifest_tasks_and_ownership_state() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let tasks_before = fs::read(&paths.zed_tasks_file).unwrap();
     let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
@@ -430,7 +436,7 @@ fn failed_plugin_link_restores_the_action_manifest_tasks_and_ownership_state() {
     let state_before = fs::read(&paths.install_state_file).unwrap();
 
     env.command()
-        .arg("setup")
+        .args(["setup", "install"])
         .env(
             "ZERDR_SETUP_EXECUTABLE",
             env.root.path().join("different/zerdr"),
@@ -448,7 +454,7 @@ fn failed_plugin_link_restores_the_action_manifest_tasks_and_ownership_state() {
 #[test]
 fn purge_does_not_break_a_live_one_shot_zed_lock() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     fs::write(&env.log, "").unwrap();
     let paths = Paths::for_test(env.root.path());
     let socket = env.root.path().join("default.sock");
@@ -503,7 +509,7 @@ fn purge_does_not_break_a_live_one_shot_zed_lock() {
     assert!(first_blocked.exists());
 
     env.command()
-        .args(["uninstall", "--purge"])
+        .args(["setup", "uninstall", "--purge"])
         .assert()
         .success();
     assert!(paths.zed_lock_file.exists());
@@ -541,7 +547,7 @@ fn purge_does_not_break_a_live_one_shot_zed_lock() {
 #[test]
 fn purge_refuses_to_change_installation_while_a_live_lease_exists() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
@@ -550,7 +556,7 @@ fn purge_refuses_to_change_installation_while_a_live_lease_exists() {
         .unwrap();
 
     env.command()
-        .args(["uninstall", "--purge"])
+        .args(["setup", "uninstall", "--purge"])
         .assert()
         .failure()
         .stderr(predicates::str::contains("live bare `zerdr` wrapper"));
@@ -564,7 +570,7 @@ fn purge_refuses_to_change_installation_while_a_live_lease_exists() {
 fn doctor_waits_for_admission_and_preserves_the_new_live_route() {
     let env = TestEnv::new();
     env.prepare_launcher();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
@@ -594,6 +600,7 @@ fn doctor_waits_for_admission_and_preserves_the_new_live_route() {
     let proceed = env.root.path().join("admission-continue");
     let mut wrapper_command = env.std_command();
     wrapper_command
+        .arg("start")
         .arg("--anchor")
         .arg(&new_anchor)
         .env("ZED_TERM", "true")
@@ -610,7 +617,7 @@ fn doctor_waits_for_admission_and_preserves_the_new_live_route() {
 
     let mut doctor_command = env.std_command();
     doctor_command
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
         .stdout(Stdio::piped())
@@ -636,12 +643,12 @@ fn doctor_waits_for_admission_and_preserves_the_new_live_route() {
 #[test]
 fn purge_rechecks_live_leases_after_waiting_for_wrapper_admission() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let lifecycle = LifecycleGuard::acquire(&paths.lifecycle_lock_file).unwrap();
     let mut command = env.std_command();
     command
-        .args(["uninstall", "--purge"])
+        .args(["setup", "uninstall", "--purge"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut purge = command.spawn().unwrap();
@@ -664,11 +671,11 @@ fn purge_rechecks_live_leases_after_waiting_for_wrapper_admission() {
 #[test]
 fn doctor_passes_installed_capabilities_and_prints_resolved_paths() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let plugins = compatible_plugins_json();
 
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
         .assert()
         .success()
@@ -681,7 +688,7 @@ fn doctor_passes_installed_capabilities_and_prints_resolved_paths() {
 #[test]
 fn doctor_requires_the_exact_action_and_recommends_setup() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let executable = assert_cmd::cargo::cargo_bin!("zerdr").display().to_string();
     fs::write(
@@ -712,16 +719,16 @@ command = [{executable:?}, "sync-from-herdr"]
     });
 
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_PLUGINS_JSON", event_only.to_string())
         .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
         .assert()
         .failure()
         .stdout(predicates::str::contains("Open Zed action"))
-        .stdout(predicates::str::contains("run `zerdr setup`"));
+        .stdout(predicates::str::contains("run `zerdr setup install`"));
     let stdout = String::from_utf8_lossy(
         &env.command()
-            .arg("doctor")
+            .args(["setup", "doctor"])
             .env("ZERDR_TEST_PLUGINS_JSON", event_only.to_string())
             .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
             .output()
@@ -739,7 +746,7 @@ command = [{executable:?}, "sync-from-herdr"]
 fn doctor_rejects_duplicate_zerdr_action_or_event_identities() {
     for duplicate in ["action", "event"] {
         let env = TestEnv::new();
-        env.command().arg("setup").assert().success();
+        env.command().args(["setup", "install"]).assert().success();
         let mut plugins = compatible_plugins_json();
         let plugin = &mut plugins["result"]["plugins"][0];
         if duplicate == "action" {
@@ -763,7 +770,7 @@ fn doctor_rejects_duplicate_zerdr_action_or_event_identities() {
         }
 
         env.command()
-            .arg("doctor")
+            .args(["setup", "doctor"])
             .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
             .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
             .assert()
@@ -776,7 +783,7 @@ fn doctor_rejects_duplicate_zerdr_action_or_event_identities() {
 fn doctor_rejects_duplicate_action_or_event_identities_in_the_materialized_manifest() {
     for duplicate in ["action", "event"] {
         let env = TestEnv::new();
-        env.command().arg("setup").assert().success();
+        env.command().args(["setup", "install"]).assert().success();
         let paths = Paths::for_test(env.root.path());
         let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
         let mut manifest = fs::read_to_string(&manifest_path).unwrap();
@@ -802,7 +809,7 @@ command = ["wrong", "command"]
         fs::write(&manifest_path, manifest).unwrap();
 
         env.command()
-            .arg("doctor")
+            .args(["setup", "doctor"])
             .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
             .assert()
             .failure()
@@ -815,7 +822,7 @@ command = ["wrong", "command"]
 #[test]
 fn doctor_matches_plugin_actions_and_events_semantically_without_order_dependence() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let executable = assert_cmd::cargo::cargo_bin!("zerdr").display().to_string();
     fs::write(
@@ -869,7 +876,7 @@ command = [{executable:?}, "sync-from-herdr"]
     });
 
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
         .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
         .assert()
@@ -890,7 +897,7 @@ fn doctor_rejects_each_malformed_or_disabled_action_installation() {
         "disabled",
     ] {
         let env = TestEnv::new();
-        env.command().arg("setup").assert().success();
+        env.command().args(["setup", "install"]).assert().success();
         let mut plugins = compatible_plugins_json();
         let plugin = &mut plugins["result"]["plugins"][0];
         match mutation {
@@ -906,13 +913,13 @@ fn doctor_rejects_each_malformed_or_disabled_action_installation() {
         }
 
         env.command()
-            .arg("doctor")
+            .args(["setup", "doctor"])
             .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
             .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
             .assert()
             .failure()
             .stdout(predicates::str::contains("Open Zed action"))
-            .stdout(predicates::str::contains("run `zerdr setup`"));
+            .stdout(predicates::str::contains("run `zerdr setup install`"));
     }
 }
 
@@ -920,7 +927,7 @@ fn doctor_rejects_each_malformed_or_disabled_action_installation() {
 fn doctor_treats_absent_session_or_wrapper_as_healthy_plugin_only_state() {
     for has_session in [false, true] {
         let env = TestEnv::new();
-        env.command().arg("setup").assert().success();
+        env.command().args(["setup", "install"]).assert().success();
         let socket = env.root.path().join("herdr.sock");
         let sessions = if has_session {
             fs::write(&socket, "").unwrap();
@@ -937,7 +944,7 @@ fn doctor_treats_absent_session_or_wrapper_as_healthy_plugin_only_state() {
 
         let assert = env
             .command()
-            .arg("doctor")
+            .args(["setup", "doctor"])
             .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
             .assert()
             .success()
@@ -952,7 +959,7 @@ fn doctor_treats_absent_session_or_wrapper_as_healthy_plugin_only_state() {
 #[test]
 fn doctor_validates_every_session_binding_and_preserves_legacy_bytes() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let repo = env.root.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -980,7 +987,7 @@ fn doctor_validates_every_session_binding_and_preserves_legacy_bytes() {
     .unwrap();
 
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
         .assert()
         .failure()
@@ -994,7 +1001,7 @@ fn doctor_validates_every_session_binding_and_preserves_legacy_bytes() {
     .unwrap();
     fs::write(&paths.bindings_file, &legacy).unwrap();
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
         .assert()
         .success();
@@ -1004,10 +1011,10 @@ fn doctor_validates_every_session_binding_and_preserves_legacy_bytes() {
 #[test]
 fn doctor_rejects_corrupt_session_discovery_without_live_authority() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
 
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_SESSIONS_JSON", r#"{"unexpected":[]}"#)
         .assert()
         .failure()
@@ -1019,7 +1026,7 @@ fn doctor_rejects_corrupt_session_discovery_without_live_authority() {
 #[test]
 fn doctor_validates_the_live_wrapper_route_and_anchor() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
@@ -1046,7 +1053,7 @@ fn doctor_validates_the_live_wrapper_route_and_anchor() {
     let plugins = compatible_plugins_json();
 
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
         .assert()
@@ -1060,7 +1067,7 @@ fn doctor_validates_the_live_wrapper_route_and_anchor() {
 #[test]
 fn doctor_targets_an_explicit_named_session() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let socket = env.root.path().join("work.sock");
     fs::write(&socket, "").unwrap();
@@ -1086,7 +1093,7 @@ fn doctor_targets_an_explicit_named_session() {
     });
 
     env.command()
-        .args(["doctor", "--session", "work"])
+        .args(["setup", "doctor", "--session", "work"])
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .assert()
         .success()
@@ -1098,7 +1105,7 @@ fn doctor_targets_an_explicit_named_session() {
 #[test]
 fn doctor_does_not_treat_another_sessions_wrapper_as_an_error() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let socket = env.root.path().join("work.sock");
     fs::write(&socket, "").unwrap();
@@ -1124,7 +1131,7 @@ fn doctor_does_not_treat_another_sessions_wrapper_as_an_error() {
     });
 
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .assert()
         .success()
@@ -1136,7 +1143,7 @@ fn doctor_does_not_treat_another_sessions_wrapper_as_an_error() {
 #[test]
 fn doctor_rejects_live_lease_state_when_session_discovery_fails() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
@@ -1159,7 +1166,7 @@ fn doctor_rejects_live_lease_state_when_session_discovery_fails() {
     let plugins = compatible_plugins_json();
 
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
         .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
         .assert()
@@ -1172,7 +1179,7 @@ fn doctor_rejects_live_lease_state_when_session_discovery_fails() {
 #[test]
 fn doctor_removes_a_stale_route_while_preserving_another_live_scope() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let live_socket = env.root.path().join("live.sock");
     let stale_socket = env.root.path().join("stale.sock");
@@ -1206,7 +1213,7 @@ fn doctor_removes_a_stale_route_while_preserving_another_live_scope() {
     let plugins = compatible_plugins_json();
 
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
         .assert()
@@ -1220,7 +1227,7 @@ fn doctor_removes_a_stale_route_while_preserving_another_live_scope() {
 #[test]
 fn doctor_rejects_multiple_live_wrappers() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
@@ -1246,7 +1253,7 @@ fn doctor_rejects_multiple_live_wrappers() {
     let plugins = compatible_plugins_json();
 
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
         .assert()
@@ -1259,7 +1266,7 @@ fn doctor_rejects_multiple_live_wrappers() {
 #[test]
 fn doctor_rejects_a_live_wrapper_without_route_state() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
@@ -1272,7 +1279,7 @@ fn doctor_rejects_a_live_wrapper_without_route_state() {
     let plugins = compatible_plugins_json();
 
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
         .assert()
@@ -1285,7 +1292,7 @@ fn doctor_rejects_a_live_wrapper_without_route_state() {
 #[test]
 fn doctor_reports_and_removes_stale_lease_files() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
@@ -1326,7 +1333,7 @@ fn doctor_reports_and_removes_stale_lease_files() {
     let plugins = compatible_plugins_json();
 
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
         .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
         .assert()
@@ -1342,13 +1349,13 @@ fn doctor_reports_and_removes_stale_lease_files() {
 #[test]
 fn doctor_rejects_a_modified_owned_task_payload() {
     let env = TestEnv::new();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let paths = Paths::for_test(env.root.path());
     let installed = fs::read_to_string(&paths.zed_tasks_file).unwrap();
     fs::write(
         &paths.zed_tasks_file,
         installed.replacen(
-            r#""args": ["--anchor", "$ZED_WORKTREE_ROOT"]"#,
+            r#""args": ["start", "--anchor", "$ZED_WORKTREE_ROOT"]"#,
             r#""args": ["unexpected"]"#,
             1,
         ),
@@ -1357,7 +1364,7 @@ fn doctor_rejects_a_modified_owned_task_payload() {
     let plugins = compatible_plugins_json();
 
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
         .assert()
         .failure()
@@ -1368,7 +1375,7 @@ fn doctor_rejects_a_modified_owned_task_payload() {
 fn doctor_fails_when_zed_lacks_existing_capability() {
     let env = TestEnv::new();
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_ZED_EXISTING", "0")
         .assert()
         .failure()
@@ -1381,7 +1388,7 @@ fn doctor_fails_when_zed_lacks_existing_capability() {
 fn doctor_fails_when_zed_lacks_add_capability() {
     let env = TestEnv::new();
     env.command()
-        .arg("doctor")
+        .args(["setup", "doctor"])
         .env("ZERDR_TEST_ZED_ADD", "0")
         .assert()
         .failure()
@@ -1396,11 +1403,11 @@ fn setup_leaves_zed_settings_alone_and_prints_the_thread_hint() {
     let paths = Paths::for_test(env.root.path());
 
     env.command()
-        .arg("setup")
+        .args(["setup", "install"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("zerdr thread"))
-        .stdout(predicate::str::contains("zerdr thread --enable"));
+        .stdout(predicate::str::contains("zerdr connect"))
+        .stdout(predicate::str::contains("zerdr setup auto on"));
 
     assert!(
         !paths.zed_settings_file.exists(),
@@ -1416,7 +1423,7 @@ fn setup_leaves_zed_settings_alone_and_prints_the_thread_hint() {
 
 fn expected_init_command() -> String {
     format!(
-        "{} thread --auto",
+        "{} connect --auto",
         assert_cmd::cargo::cargo_bin!("zerdr").display()
     )
 }
@@ -1427,10 +1434,10 @@ fn thread_enable_requires_setup_first() {
     let paths = Paths::for_test(env.root.path());
 
     env.command()
-        .args(["thread", "--enable"])
+        .args(["setup", "auto", "on"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("run `zerdr setup`"));
+        .stderr(predicate::str::contains("run `zerdr setup install`"));
 
     assert!(!paths.thread_auto_flag_file.exists());
     assert!(!paths.zed_settings_file.exists());
@@ -1440,7 +1447,7 @@ fn thread_enable_requires_setup_first() {
 fn thread_enable_installs_the_init_command_and_is_idempotent() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
     fs::write(
         &paths.zed_settings_file,
@@ -1449,10 +1456,10 @@ fn thread_enable_installs_the_init_command_and_is_idempotent() {
     .unwrap();
 
     env.command()
-        .args(["thread", "--enable"])
+        .args(["setup", "auto", "on"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("thread auto mode is enabled"));
+        .stdout(predicate::str::contains("auto mode is enabled"));
 
     let settings = fs::read_to_string(&paths.zed_settings_file).unwrap();
     assert_eq!(
@@ -1481,7 +1488,7 @@ fn thread_enable_installs_the_init_command_and_is_idempotent() {
     );
 
     env.command()
-        .args(["thread", "--enable"])
+        .args(["setup", "auto", "on"])
         .assert()
         .success();
     assert_eq!(
@@ -1495,7 +1502,7 @@ fn thread_enable_installs_the_init_command_and_is_idempotent() {
 fn thread_enable_adopts_a_manually_set_matching_value() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
     let original = format!(
         "{{\n  \"agent\": {{ \"terminal_init_command\": {} }}\n}}\n",
@@ -1504,7 +1511,7 @@ fn thread_enable_adopts_a_manually_set_matching_value() {
     fs::write(&paths.zed_settings_file, &original).unwrap();
 
     env.command()
-        .args(["thread", "--enable"])
+        .args(["setup", "auto", "on"])
         .assert()
         .success();
 
@@ -1525,13 +1532,13 @@ fn thread_enable_adopts_a_manually_set_matching_value() {
 fn thread_enable_refuses_a_foreign_init_command() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
     let original = "{\n  \"agent\": { \"terminal_init_command\": \"claude\" }\n}\n";
     fs::write(&paths.zed_settings_file, original).unwrap();
 
     env.command()
-        .args(["thread", "--enable"])
+        .args(["setup", "auto", "on"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("already set"));
@@ -1550,12 +1557,12 @@ fn thread_enable_refuses_a_foreign_init_command() {
 fn thread_enable_refuses_a_non_object_settings_root() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     fs::create_dir_all(paths.zed_settings_file.parent().unwrap()).unwrap();
     fs::write(&paths.zed_settings_file, "[]\n").unwrap();
 
     env.command()
-        .args(["thread", "--enable"])
+        .args(["setup", "auto", "on"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("top-level object"));
@@ -1574,18 +1581,18 @@ fn thread_enable_refuses_a_non_object_settings_root() {
 fn thread_disable_removes_only_the_flag() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     env.command()
-        .args(["thread", "--enable"])
+        .args(["setup", "auto", "on"])
         .assert()
         .success();
     let settings = fs::read_to_string(&paths.zed_settings_file).unwrap();
 
     env.command()
-        .args(["thread", "--disable"])
+        .args(["setup", "auto", "off"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("thread auto mode is disabled"));
+        .stdout(predicate::str::contains("auto mode is disabled"));
 
     assert!(!paths.thread_auto_flag_file.exists());
     assert_eq!(
@@ -1595,7 +1602,7 @@ fn thread_disable_removes_only_the_flag() {
     );
 
     env.command()
-        .args(["thread", "--disable"])
+        .args(["setup", "auto", "off"])
         .assert()
         .success();
 }
@@ -1604,14 +1611,14 @@ fn thread_disable_removes_only_the_flag() {
 fn setup_after_enable_preserves_the_init_command_and_fingerprint() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     env.command()
-        .args(["thread", "--enable"])
+        .args(["setup", "auto", "on"])
         .assert()
         .success();
     let settings = fs::read_to_string(&paths.zed_settings_file).unwrap();
 
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
 
     assert_eq!(
         fs::read_to_string(&paths.zed_settings_file).unwrap(),
@@ -1630,13 +1637,16 @@ fn setup_after_enable_preserves_the_init_command_and_fingerprint() {
 fn uninstall_after_enable_removes_the_init_command_and_flag() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     env.command()
-        .args(["thread", "--enable"])
+        .args(["setup", "auto", "on"])
         .assert()
         .success();
 
-    env.command().arg("uninstall").assert().success();
+    env.command()
+        .args(["setup", "uninstall"])
+        .assert()
+        .success();
 
     let after = fs::read_to_string(&paths.zed_settings_file).unwrap();
     assert!(
@@ -1657,7 +1667,7 @@ fn setup_leaves_unrelated_zed_settings_byte_identical() {
     let original = "{\n  // my editor preferences\n  \"theme\": \"One Dark\"\n}\n";
     fs::write(&paths.zed_settings_file, original).unwrap();
 
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
 
     assert_eq!(
         fs::read_to_string(&paths.zed_settings_file).unwrap(),
@@ -1671,7 +1681,7 @@ fn setup_leaves_unrelated_zed_settings_byte_identical() {
 fn setup_preserves_an_owned_init_command_and_its_fingerprint() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let command = format!(
         "{} thread",
         assert_cmd::cargo::cargo_bin!("zerdr").display()
@@ -1684,7 +1694,7 @@ fn setup_preserves_an_owned_init_command_and_its_fingerprint() {
     );
     fs::write(&paths.zed_settings_file, &original).unwrap();
 
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
 
     assert_eq!(
         fs::read_to_string(&paths.zed_settings_file).unwrap(),
@@ -1706,13 +1716,16 @@ fn setup_and_uninstall_leave_a_foreign_init_command_untouched() {
     let original = "{\n  // keep my own agent bootstrap\n  \"agent\": { \"terminal_init_command\": \"claude\" },\n  \"theme\": \"One Dark\"\n}\n";
     fs::write(&paths.zed_settings_file, original).unwrap();
 
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     assert_eq!(
         fs::read_to_string(&paths.zed_settings_file).unwrap(),
         original
     );
 
-    env.command().arg("uninstall").assert().success();
+    env.command()
+        .args(["setup", "uninstall"])
+        .assert()
+        .success();
     assert_eq!(
         fs::read_to_string(&paths.zed_settings_file).unwrap(),
         original
@@ -1724,7 +1737,7 @@ fn setup_and_uninstall_leave_a_foreign_init_command_untouched() {
 fn uninstall_removes_a_previously_owned_init_command() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     let command = format!(
         "{} thread",
         assert_cmd::cargo::cargo_bin!("zerdr").display()
@@ -1740,7 +1753,10 @@ fn uninstall_removes_a_previously_owned_init_command() {
     )
     .unwrap();
 
-    env.command().arg("uninstall").assert().success();
+    env.command()
+        .args(["setup", "uninstall"])
+        .assert()
+        .success();
 
     let after = fs::read_to_string(&paths.zed_settings_file).unwrap();
     assert!(
@@ -1756,21 +1772,21 @@ fn uninstall_removes_a_previously_owned_init_command() {
 fn doctor_reports_thread_auto_mode_informationally() {
     let expected = expected_init_command();
     let cases: [(bool, Option<&str>, &str); 4] = [
-        (false, None, "thread auto mode is disabled"),
+        (false, None, "auto mode is disabled"),
         (
             true,
             Some(expected.as_str()),
-            "thread auto mode is enabled: Zed terminal_init_command runs",
+            "auto mode is enabled: Zed terminal_init_command runs",
         ),
         (
             true,
             Some("claude"),
-            "thread auto mode is enabled but Zed terminal_init_command is set to",
+            "auto mode is enabled but Zed terminal_init_command is set to",
         ),
         (
             true,
             None,
-            "thread auto mode is enabled but Zed terminal_init_command is not set",
+            "auto mode is enabled but Zed terminal_init_command is not set",
         ),
     ];
     for (enabled, existing, report) in cases {
@@ -1787,13 +1803,13 @@ fn doctor_reports_thread_auto_mode_informationally() {
             )
             .unwrap();
         }
-        env.command().arg("setup").assert().success();
+        env.command().args(["setup", "install"]).assert().success();
         if enabled {
             fs::write(&paths.thread_auto_flag_file, b"").unwrap();
         }
 
         env.command()
-            .arg("doctor")
+            .args(["setup", "doctor"])
             .assert()
             .success()
             .stdout(predicate::str::contains(report));
@@ -1804,14 +1820,14 @@ fn doctor_reports_thread_auto_mode_informationally() {
 fn install_state_with_a_legacy_fingerprint_still_loads() {
     let env = TestEnv::new();
     let paths = Paths::for_test(env.root.path());
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     seed_owned_install(&paths, "stale value");
 
-    env.command().arg("doctor").assert().success();
+    env.command().args(["setup", "doctor"]).assert().success();
 }
 
 /// Zed configuration is commonly a symlink into a dotfiles checkout. Setup and
-/// `thread --enable` must operate on the real files so the symlinks survive and the
+/// `setup auto on` must operate on the real files so the symlinks survive and the
 /// dotfiles copies stay the source of truth.
 #[test]
 fn setup_and_thread_enable_write_through_symlinked_zed_configuration() {
@@ -1827,9 +1843,9 @@ fn setup_and_thread_enable_write_through_symlinked_zed_configuration() {
     symlink(&real_settings, &paths.zed_settings_file).unwrap();
     symlink(&real_tasks, &paths.zed_tasks_file).unwrap();
 
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
     env.command()
-        .args(["thread", "--enable"])
+        .args(["setup", "auto", "on"])
         .assert()
         .success();
 
@@ -1856,7 +1872,7 @@ fn setup_and_thread_enable_write_through_symlinked_zed_configuration() {
 }
 
 /// A symlink with no target is a broken configuration, not something to write through.
-/// Setup no longer opens the settings file, so only `thread --enable` refuses it.
+/// Setup no longer opens the settings file, so only `setup auto on` refuses it.
 #[test]
 fn thread_enable_refuses_a_broken_settings_symlink() {
     let env = TestEnv::new();
@@ -1867,10 +1883,10 @@ fn thread_enable_refuses_a_broken_settings_symlink() {
         &paths.zed_settings_file,
     )
     .unwrap();
-    env.command().arg("setup").assert().success();
+    env.command().args(["setup", "install"]).assert().success();
 
     env.command()
-        .args(["thread", "--enable"])
+        .args(["setup", "auto", "on"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("broken symlink"));

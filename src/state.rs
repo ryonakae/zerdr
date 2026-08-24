@@ -945,7 +945,7 @@ pub struct ThreadLeaseRecord {
     pub created_unix_ms: u128,
 }
 
-/// Per-pane leases that stop two bare `zerdr thread` invocations from attaching to the
+/// Per-pane leases that stop two bare `zerdr connect` invocations from attaching to the
 /// same Herdr agent. Unlike [`LeaseSet`] a scope holds many live leases at once, so the
 /// lease identity includes the pane and each pane maps to exactly one file.
 #[derive(Debug, Clone)]
@@ -985,7 +985,7 @@ impl ThreadLeaseSet {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 return Err(Error::User(format!(
-                    "Herdr pane {pane_id} already has a live zerdr thread"
+                    "Herdr pane {pane_id} already has a live zerdr connection"
                 )));
             }
             Err(error) => return Err(Error::io(&path, error)),

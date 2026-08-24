@@ -23,7 +23,7 @@ pub(crate) struct InstallState {
     pub(crate) executable: PathBuf,
     pub(crate) task_fingerprints: BTreeMap<String, String>,
     /// Present while zerdr owns Zed's `agent.terminal_init_command`, recorded by
-    /// `zerdr thread --enable` and consumed by uninstall.
+    /// `zerdr setup auto on` and consumed by uninstall.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) terminal_init_command_fingerprint: Option<String>,
 }
@@ -181,7 +181,7 @@ fn action_command_matches(value: &Value, executable: &str, subcommand: &str) -> 
 }
 
 fn setup_guidance(error: Error) -> Error {
-    Error::User(format!("{error}; run `zerdr setup`"))
+    Error::User(format!("{error}; run `zerdr setup install`"))
 }
 
 pub fn setup() -> Result<()> {
@@ -205,7 +205,7 @@ pub fn setup() -> Result<()> {
             .iter()
             .map(|task| (task_label(task).unwrap().to_owned(), fingerprint(task)))
             .collect(),
-        // Ownership recorded by `zerdr thread --enable` must survive rerunning setup,
+        // Ownership recorded by `zerdr setup auto on` must survive rerunning setup,
         // or uninstall could no longer clean the settings value up.
         terminal_init_command_fingerprint: old_install
             .as_ref()
@@ -242,9 +242,9 @@ pub fn setup() -> Result<()> {
         return Err(error);
     }
 
-    println!("zerdr setup complete");
+    println!("zerdr setup install complete");
     println!(
-        "Attach a Zed terminal thread to Herdr by running `zerdr thread` inside it.\nOptional automation: run `zerdr thread --enable` to attach every new terminal thread automatically."
+        "Attach a Zed terminal thread to Herdr by running `zerdr connect` inside it.\nOptional automation: run `zerdr setup auto on` to attach every new terminal thread automatically."
     );
     println!(
         "Add this Herdr keybinding manually if desired:\n{}",
@@ -337,7 +337,7 @@ pub fn uninstall(purge: bool) -> Result<()> {
                 .map_err(|error| Error::io(&paths.data_dir, error))?;
         }
     }
-    println!("zerdr uninstall complete");
+    println!("zerdr setup uninstall complete");
     Ok(())
 }
 
@@ -444,7 +444,7 @@ fn parse_tasks(text: &str) -> Result<CstRootNode> {
 }
 
 pub(crate) fn terminal_init_command(executable: &Path) -> String {
-    format!("{} thread --auto", executable.display())
+    format!("{} connect --auto", executable.display())
 }
 
 pub(crate) fn thread_auto_enabled(paths: &Paths) -> bool {
@@ -482,14 +482,14 @@ pub fn thread_auto_enable() -> Result<()> {
         }
         Some(current) => {
             return Err(Error::User(format!(
-                "Zed agent.terminal_init_command is already set to {current:?}; remove it before enabling thread auto mode"
+                "Zed agent.terminal_init_command is already set to {current:?}; remove it before enabling auto mode"
             )));
         }
     }
     fs::create_dir_all(&paths.state_dir).map_err(|error| Error::io(&paths.state_dir, error))?;
     fs::write(&paths.thread_auto_flag_file, b"")
         .map_err(|error| Error::io(&paths.thread_auto_flag_file, error))?;
-    println!("zerdr: thread auto mode is enabled");
+    println!("zerdr: auto mode is enabled");
     Ok(())
 }
 
@@ -500,7 +500,7 @@ pub fn thread_auto_disable() -> Result<()> {
     {
         return Err(Error::io(&paths.thread_auto_flag_file, error));
     }
-    println!("zerdr: thread auto mode is disabled");
+    println!("zerdr: auto mode is disabled");
     Ok(())
 }
 

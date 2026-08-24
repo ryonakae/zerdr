@@ -31,12 +31,13 @@ fn launcher_requires_a_compatible_plugin_before_spawning_herdr() {
     let anchor = anchor_repo(&env);
 
     env.command()
+        .arg("start")
         .arg("--anchor")
         .arg(&anchor)
         .env("ZERDR_TEST_PLUGINS_JSON", r#"{"result":{"plugins":[]}}"#)
         .assert()
         .failure()
-        .stderr(predicates::str::contains("run `zerdr setup`"));
+        .stderr(predicates::str::contains("run `zerdr setup install`"));
 
     let log = env.read_log();
     assert!(
@@ -61,6 +62,7 @@ fn bare_launcher_attaches_the_default_herdr_session() {
     });
 
     env.command()
+        .arg("start")
         .current_dir(&anchor)
         .env("ZERDR_TEST_HERDR_SLEEP", "0.1")
         .env("ZERDR_READY_TIMEOUT_MS", "100")
@@ -89,7 +91,7 @@ fn named_launcher_attaches_the_matching_herdr_session() {
     });
 
     env.command()
-        .args(["--session", "work"])
+        .args(["start", "--session", "work"])
         .current_dir(&anchor)
         .env("ZERDR_TEST_HERDR_SLEEP", "0.1")
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
@@ -151,6 +153,7 @@ command = [{executable:?}, "sync-from-herdr"]
 
     let anchor = anchor_repo(&env);
     env.command()
+        .arg("start")
         .arg("--anchor")
         .arg(&anchor)
         .env("ZERDR_TEST_HERDR_SLEEP", "0.1")
@@ -174,7 +177,7 @@ fn launcher_rejects_duplicate_focus_event_identities_in_manifest_or_plugin_regis
         let paths = Paths::for_test(env.root.path());
         let anchor = anchor_repo(&env);
         let mut invocation = env.command();
-        invocation.arg("--anchor").arg(&anchor);
+        invocation.arg("start").arg("--anchor").arg(&anchor);
 
         if source == "manifest" {
             let manifest_path = paths.plugin_dir.join("herdr-plugin.toml");
@@ -205,7 +208,7 @@ command = ["wrong", "sync-from-herdr"]
         invocation
             .assert()
             .failure()
-            .stderr(predicates::str::contains("run `zerdr setup`"));
+            .stderr(predicates::str::contains("run `zerdr setup install`"));
         assert!(!env.read_log().contains("herdr\t--session zerdr"));
     }
 }
@@ -222,11 +225,12 @@ fn launcher_preflight_rejects_unsupported_install_state_and_manifest() {
     let anchor = anchor_repo(&invalid_install);
     invalid_install
         .command()
+        .arg("start")
         .arg("--anchor")
         .arg(&anchor)
         .assert()
         .failure()
-        .stderr(predicates::str::contains("run `zerdr setup`"));
+        .stderr(predicates::str::contains("run `zerdr setup install`"));
     assert!(
         !invalid_install
             .read_log()
@@ -245,11 +249,12 @@ fn launcher_preflight_rejects_unsupported_install_state_and_manifest() {
     let anchor = anchor_repo(&invalid_manifest);
     invalid_manifest
         .command()
+        .arg("start")
         .arg("--anchor")
         .arg(&anchor)
         .assert()
         .failure()
-        .stderr(predicates::str::contains("run `zerdr setup`"));
+        .stderr(predicates::str::contains("run `zerdr setup install`"));
     assert!(
         !invalid_manifest
             .read_log()
@@ -267,12 +272,13 @@ fn launcher_preflight_uses_the_running_executable_not_the_setup_override() {
 
     let anchor = anchor_repo(&env);
     env.command_for(&alternate)
+        .arg("start")
         .arg("--anchor")
         .arg(&anchor)
         .env("ZERDR_SETUP_EXECUTABLE", installed)
         .assert()
         .failure()
-        .stderr(predicates::str::contains("run `zerdr setup`"));
+        .stderr(predicates::str::contains("run `zerdr setup install`"));
 
     let log = env.read_log();
     assert!(
@@ -303,6 +309,7 @@ fn bare_wrapper_routes_internally_regardless_of_terminal_environment() {
         "sessions": [{"name":"default","running":true,"socket_path":socket}]
     });
     env.command()
+        .arg("start")
         .current_dir(&repo)
         .env_remove("ZED_TERM")
         .env_remove("TERM_PROGRAM")
@@ -354,6 +361,7 @@ fn wrapper_syncs_the_initial_workspace_without_requiring_the_zed_task() {
     }]}});
 
     env.command()
+        .arg("start")
         .arg("--anchor")
         .arg(&repo)
         .env("ZERDR_TEST_HERDR_SLEEP", "0.2")
@@ -417,6 +425,7 @@ fn wrapper_holds_a_lease_runs_startup_sync_and_preserves_session() {
     });
 
     env.command()
+        .arg("start")
         .arg("--anchor")
         .arg(&repo)
         .env("ZED_TERM", "true")
@@ -479,6 +488,7 @@ fn concurrent_wrappers_admit_one_owner_and_reap_the_loser() {
         |anchor: &std::path::Path, ready: &std::path::Path, child_pid: &std::path::Path| {
             let mut command = env.std_command();
             command
+                .arg("start")
                 .arg("--anchor")
                 .arg(anchor)
                 .env("ZED_TERM", "true")
@@ -563,7 +573,7 @@ fn wrappers_for_different_named_sessions_can_coexist() {
     let spawn_wrapper = |session: &str, anchor: &std::path::Path| {
         let mut command = env.std_command();
         command
-            .args(["--session", session, "--anchor"])
+            .args(["start", "--session", session, "--anchor"])
             .arg(anchor)
             .env("ZED_TERM", "true")
             .env("TERM_PROGRAM", "zed")
@@ -640,6 +650,7 @@ fn startup_sync_failure_notifies_but_keeps_the_client_until_its_normal_exit() {
 
     let mut command = env.std_command();
     command
+        .arg("start")
         .arg("--anchor")
         .arg(&anchor)
         .env("ZED_TERM", "true")
@@ -697,6 +708,7 @@ fn post_readiness_initialization_failure_terminates_the_client() {
     });
 
     env.command()
+        .arg("start")
         .arg("--anchor")
         .arg(&anchor)
         .env("ZED_TERM", "true")
@@ -736,6 +748,7 @@ fn readiness_timeout_terminates_the_spawned_herdr_client() {
     );
 
     env.command()
+        .arg("start")
         .arg("--anchor")
         .arg(&anchor)
         .env("ZED_TERM", "true")
@@ -780,6 +793,7 @@ fn wrapper_propagates_the_herdr_client_exit_status() {
     );
 
     env.command()
+        .arg("start")
         .arg("--anchor")
         .arg(&anchor)
         .env("ZED_TERM", "true")

@@ -266,7 +266,7 @@ impl Herdr {
             [
                 OsStr::new("notification"),
                 OsStr::new("show"),
-                OsStr::new("zerdr sync failed"),
+                OsStr::new("zerdr: sync failed"),
                 OsStr::new("--body"),
                 OsStr::new(message),
                 OsStr::new("--position"),

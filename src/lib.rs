@@ -10,7 +10,7 @@ pub mod thread;
 pub mod zed;
 
 use clap::Parser;
-use cli::{Cli, Command};
+use cli::{AutoState, Cli, Command, SetupCommand, WorkspaceCommand};
 use error::{Error, Result};
 use state::DEFAULT_SESSION_NAME;
 
@@ -18,77 +18,45 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
     let remote = runtime::detect_remote_environment();
     if let Some(remote) = remote.as_ref()
-        && !matches!(&cli.command, Some(Command::Doctor { .. }))
+        && !matches!(
+            &cli.command,
+            Command::Setup {
+                command: SetupCommand::Doctor
+            }
+        )
     {
         return Err(remote.rejection());
     }
 
-    let Some(command) = cli.command else {
-        let session_name = cli.session.as_deref().unwrap_or(DEFAULT_SESSION_NAME);
-        let routing = runtime::resolve_launch(cli.anchor.as_deref())?;
-        return herdr::run_wrapper(session_name, routing);
-    };
-
-    if cli.anchor.is_some() {
-        return Err(Error::User(
-            "--anchor cannot be used with a subcommand".to_owned(),
-        ));
-    }
-
-    let command_session = match &command {
-        Command::Sync { session }
-        | Command::Bind { session, .. }
-        | Command::Unbind { session }
-        | Command::Doctor { session }
-        | Command::Thread { session, .. } => session.as_deref(),
-        Command::Setup
-        | Command::Uninstall { .. }
-        | Command::SyncFromHerdr
-        | Command::OpenFromHerdr => None,
-    };
-    if cli.session.is_some() && command_session.is_some() {
+    // clap accepts a global flag once before and once after the subcommand
+    // (the subcommand occurrence overwrites the propagated one), so the
+    // once-only rule is enforced on the raw argument list.
+    if cli.session.len() > 1 || session_flag_occurrences() > 1 {
         return Err(Error::User(
             "--session may be specified only once".to_owned(),
         ));
     }
+    let explicit_session = cli.session.first().map(String::as_str);
     let accepts_session = matches!(
-        &command,
-        Command::Sync { .. }
-            | Command::Bind { .. }
-            | Command::Unbind { .. }
-            | Command::Doctor { .. }
-            | Command::Thread { .. }
+        &cli.command,
+        Command::Connect { .. }
+            | Command::Start { .. }
+            | Command::Workspace { .. }
+            | Command::Setup {
+                command: SetupCommand::Doctor
+            }
     );
-    if cli.session.is_some() && !accepts_session {
+    if explicit_session.is_some() && !accepts_session {
         return Err(Error::User(
-            "--session cannot be used with this subcommand".to_owned(),
+            "--session cannot be used with this command".to_owned(),
         ));
     }
-    let explicit_session = command_session.or(cli.session.as_deref());
 
-    match &command {
-        Command::Sync { .. } => run_manual(explicit_session, |synchronizer| {
-            synchronizer.sync_manual(explicit_session)
-        }),
-        Command::Bind { path, .. } => run_manual(explicit_session, |synchronizer| {
-            synchronizer.bind(explicit_session, path.as_deref())
-        }),
-        Command::Unbind { .. } => run_manual(explicit_session, |synchronizer| {
-            synchronizer.unbind(explicit_session)
-        }),
-        Command::Thread { enable: true, .. } | Command::Thread { disable: true, .. }
-            if explicit_session.is_some() =>
-        {
-            Err(Error::User(
-                "--session cannot be used when toggling thread auto mode".to_owned(),
-            ))
-        }
-        Command::Thread { enable: true, .. } => setup::thread_auto_enable(),
-        Command::Thread { disable: true, .. } => setup::thread_auto_disable(),
-        Command::Thread { auto: true, .. } => {
+    match &cli.command {
+        Command::Connect { auto: true, .. } => {
             thread::run_auto(explicit_session.unwrap_or(DEFAULT_SESSION_NAME))
         }
-        Command::Thread {
+        Command::Connect {
             target,
             kind,
             create,
@@ -99,15 +67,48 @@ pub fn run() -> Result<()> {
             kind.as_deref(),
             *create,
         ),
-        Command::Setup => setup::setup(),
-        Command::Uninstall { purge } => setup::uninstall(*purge),
-        Command::Doctor { .. } => match remote {
-            Some(remote) => doctor::doctor_remote(remote.markers()),
-            None => doctor::doctor(explicit_session.unwrap_or(DEFAULT_SESSION_NAME)),
+        Command::Start { anchor } => {
+            let routing = runtime::resolve_launch(anchor.as_deref())?;
+            herdr::run_wrapper(explicit_session.unwrap_or(DEFAULT_SESSION_NAME), routing)
+        }
+        Command::Workspace { command } => match command {
+            WorkspaceCommand::Sync => run_manual(explicit_session, |synchronizer| {
+                synchronizer.sync_manual(explicit_session)
+            }),
+            WorkspaceCommand::Bind { path } => run_manual(explicit_session, |synchronizer| {
+                synchronizer.bind(explicit_session, path.as_deref())
+            }),
+            WorkspaceCommand::Unbind => run_manual(explicit_session, |synchronizer| {
+                synchronizer.unbind(explicit_session)
+            }),
+        },
+        Command::Setup { command } => match command {
+            SetupCommand::Install => setup::setup(),
+            SetupCommand::Uninstall { purge } => setup::uninstall(*purge),
+            SetupCommand::Doctor => match remote {
+                Some(remote) => doctor::doctor_remote(remote.markers()),
+                None => doctor::doctor(explicit_session.unwrap_or(DEFAULT_SESSION_NAME)),
+            },
+            SetupCommand::Auto {
+                state: AutoState::On,
+            } => setup::thread_auto_enable(),
+            SetupCommand::Auto {
+                state: AutoState::Off,
+            } => setup::thread_auto_disable(),
         },
         Command::SyncFromHerdr => sync::Synchronizer::from_env()?.event(),
         Command::OpenFromHerdr => sync::Synchronizer::from_env()?.open_from_herdr(),
     }
+}
+
+/// Counts `--session` occurrences in the raw arguments. Runs only after a
+/// successful parse, so every counted token is a flag clap accepted (no
+/// positional in this CLI can legally carry a leading `--`).
+fn session_flag_occurrences() -> usize {
+    std::env::args()
+        .skip(1)
+        .filter(|argument| argument == "--session" || argument.starts_with("--session="))
+        .count()
 }
 
 fn run_manual(

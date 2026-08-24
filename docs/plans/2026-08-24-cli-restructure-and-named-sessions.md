@@ -122,7 +122,7 @@ Named-session headless start (`connect --create`):
 
 ## Progress
 
-- [ ] Task 1: CLI restructure (tree, dispatch, strings, assets, all test renames)
+- [x] Task 1: CLI restructure (tree, dispatch, strings, assets, all test renames)
 - [ ] Task 2: Named-session headless start on `connect --create`
 - [ ] Task 3: Documentation (README, AGENTS.md) and final sweep
 
@@ -173,6 +173,12 @@ Named-session headless start (`connect --create`):
 - Expected: all pass.
 - Run: `cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-targets --all-features`
 - Expected: all pass.
+
+**Result (2026-08-24):** Implemented and validated; all suites pass (205 tests), fmt/clippy clean, string sweep clean for `src assets tests`. Notes:
+- The once-only `--session` rule is enforced by counting raw `--session`/`--session=` argv occurrences after a successful parse (`lib.rs::session_flag_occurrences`), because clap's global-flag propagation makes the subcommand occurrence overwrite the parent one instead of accumulating.
+- The rejection message reads "--session cannot be used with this command" (was "…this subcommand").
+- The Herdr notification title changed from "zerdr sync failed" to "zerdr: sync failed" so no user-facing string spells an old command.
+- `tests/support/mod.rs::prepare_launcher` now runs `setup install`.
 
 ### Task 2: Named-session headless start on `connect --create`
 

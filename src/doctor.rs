@@ -75,7 +75,7 @@ pub fn doctor(session_name: &str) -> Result<()> {
     let install = match load_install_state(&paths.install_state_file) {
         Ok(Some(install)) => Some(install),
         Ok(None) => {
-            report.fail("zerdr install ownership state is missing; run `zerdr setup`");
+            report.fail("zerdr install ownership state is missing; run `zerdr setup install`");
             None
         }
         Err(error) => {
@@ -88,7 +88,7 @@ pub fn doctor(session_name: &str) -> Result<()> {
             report.pass("Herdr zerdr Open Zed action is registered");
         } else {
             report.fail(
-                "Herdr zerdr plugin is missing, disabled, or lacks the exact Open Zed action; run `zerdr setup`",
+                "Herdr zerdr plugin is missing, disabled, or lacks the exact Open Zed action; run `zerdr setup install`",
             );
         }
     }
@@ -100,7 +100,7 @@ pub fn doctor(session_name: &str) -> Result<()> {
             ));
         } else {
             report.fail(format!(
-                "installed zerdr executable is missing: {}; rerun `zerdr setup` from the installed binary",
+                "installed zerdr executable is missing: {}; rerun `zerdr setup install` from the installed binary",
                 install.executable.display()
             ));
         }
@@ -125,7 +125,7 @@ pub fn doctor(session_name: &str) -> Result<()> {
                         Ok(canonical) => {
                             missing = true;
                             report.fail(format!(
-                                "binding {session}/{workspace} is not canonical: {} resolves to {}; run `zerdr bind --session {session} PATH`",
+                                "binding {session}/{workspace} is not canonical: {} resolves to {}; run `zerdr workspace bind --session {session} PATH`",
                                 root.display(),
                                 canonical.display()
                             ));
@@ -242,7 +242,7 @@ fn inspect_static_installation(paths: &Paths, report: &mut Report) {
     let install = match load_install_state(&paths.install_state_file) {
         Ok(Some(install)) => Some(install),
         Ok(None) => {
-            report.fail("zerdr install ownership state is missing; run `zerdr setup`");
+            report.fail("zerdr install ownership state is missing; run `zerdr setup install`");
             None
         }
         Err(error) => {
@@ -258,7 +258,7 @@ fn inspect_static_installation(paths: &Paths, report: &mut Report) {
             ));
         } else {
             report.fail(format!(
-                "installed zerdr executable is missing: {}; rerun `zerdr setup` from the installed binary",
+                "installed zerdr executable is missing: {}; rerun `zerdr setup install` from the installed binary",
                 install.executable.display()
             ));
         }
@@ -314,23 +314,24 @@ fn inspect_manifest(paths: &Paths, install: &InstallState) -> Result<()> {
         Ok(())
     } else {
         Err(Error::User(format!(
-            "generated Herdr manifest lacks the exact event or Open Zed action command; run `zerdr setup` ({})",
+            "generated Herdr manifest lacks the exact event or Open Zed action command; run `zerdr setup install` ({})",
             path.display()
         )))
     }
 }
 
 /// Thread auto mode is optional automation, so its state is reported without failing:
-/// attaching manually with `zerdr thread` is the default workflow.
+/// attaching manually with `zerdr connect` is the default workflow.
 fn report_thread_auto(paths: &Paths, install: &InstallState, report: &mut Report) {
     if !paths.thread_auto_flag_file.exists() {
         report.pass(
-            "thread auto mode is disabled; attach manually with `zerdr thread` or run `zerdr thread --enable`",
+            "auto mode is disabled; attach manually with `zerdr connect` or run `zerdr setup auto on`",
         );
         return;
     }
     let expected = terminal_init_command(&install.executable);
-    let not_set = "thread auto mode is enabled but Zed terminal_init_command is not set; run `zerdr thread --enable`";
+    let not_set =
+        "auto mode is enabled but Zed terminal_init_command is not set; run `zerdr setup auto on`";
     let text = match fs::read_to_string(&paths.zed_settings_file) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -348,11 +349,11 @@ fn report_thread_auto(paths: &Paths, install: &InstallState, report: &mut Report
     match installed_init_command(&text) {
         Ok(Some(current)) if current == expected => {
             report.pass(format!(
-                "thread auto mode is enabled: Zed terminal_init_command runs {current}"
+                "auto mode is enabled: Zed terminal_init_command runs {current}"
             ));
         }
         Ok(Some(current)) => report.warn(format!(
-            "thread auto mode is enabled but Zed terminal_init_command is set to {current:?}; clear it and run `zerdr thread --enable`"
+            "auto mode is enabled but Zed terminal_init_command is set to {current:?}; clear it and run `zerdr setup auto on`"
         )),
         Ok(None) => report.warn(not_set),
         Err(error) => report.warn(format!("could not inspect the Zed settings file: {error}")),
@@ -375,7 +376,7 @@ fn inspect_tasks(paths: &Paths, install: &InstallState) -> Result<()> {
     let expected = generated_tasks(&install.executable)?;
     if install.task_fingerprints.len() != owned_labels().len() {
         return Err(Error::User(
-            "zerdr task ownership state does not match the owned task list; run `zerdr setup`"
+            "zerdr task ownership state does not match the owned task list; run `zerdr setup install`"
                 .to_owned(),
         ));
     }
@@ -389,7 +390,7 @@ fn inspect_tasks(paths: &Paths, install: &InstallState) -> Result<()> {
             .collect::<Vec<_>>();
         if matches.len() != 1 {
             return Err(Error::User(format!(
-                "Zed task {label:?} is missing or duplicated; run `zerdr setup`"
+                "Zed task {label:?} is missing or duplicated; run `zerdr setup install`"
             )));
         }
         let current = fingerprint(matches[0]);
@@ -397,7 +398,7 @@ fn inspect_tasks(paths: &Paths, install: &InstallState) -> Result<()> {
         let expected = fingerprint(&expected_task);
         if recorded != Some(&current) || current != expected {
             return Err(Error::User(format!(
-                "Zed task payload {label:?} was modified or has the wrong command; run `zerdr setup`"
+                "Zed task payload {label:?} was modified or has the wrong command; run `zerdr setup install`"
             )));
         }
     }
