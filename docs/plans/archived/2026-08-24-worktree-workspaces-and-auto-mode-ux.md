@@ -90,12 +90,12 @@ Investigated and confirmed during requirements: worktree-backed workspaces that 
 
 ## Progress
 
-- [ ] Task 1: Register linked worktrees via `herdr worktree open`
-- [ ] Task 2: Worktree-aware no-match error
-- [ ] Task 3: Doctor guidance for deleted worktree checkouts
-- [ ] Task 4: Rename `setup auto on|off` to `enable|disable`
-- [ ] Task 5: Disabled-auto notice
-- [ ] Task 6: README update
+- [x] Task 1: Register linked worktrees via `herdr worktree open` (commit `def0516`; `cargo test --test thread_flow` 47/47, one unrelated pre-existing timing flake in `titles_are_emitted_once_per_change_and_a_bell_marks_settling` passed on rerun). Manual validation found `--path` alone insufficient: Herdr resolves worktree actions from the repo parent workspace and errors with `worktree_not_found`/`linked_worktree_source` without an anchor. Fixed in `67146ec` by deriving the primary checkout via `git worktree list --porcelain` (`linked_worktree_parent` replaced `is_linked_worktree`) and passing it as `--cwd`; verified against real Herdr 0.8.x
+- [x] Task 2: Worktree-aware no-match error (commit `aa00046`; thread_flow 48/48)
+- [x] Task 3: Doctor guidance for deleted worktree checkouts (commit `9fd0e69`; setup_and_doctor 52/52 — extended the existing binding-validation test instead of adding a new one)
+- [x] Task 4: Rename `setup auto on|off` to `enable|disable` (commit `b74c807`; cli_contract 21/21, setup_and_doctor 52/52)
+- [x] Task 5: Disabled-auto notice (commit `5290723`; cli_contract 21/21, thread_flow 48/48 — reworked the silence test into `connect_auto_explains_itself_when_disabled_without_touching_herdr`)
+- [x] Task 6: README update (commit `6194f38`; doc-updater also refreshed the `src/thread.rs` line in `AGENTS.md`)
 
 ## Tasks
 
@@ -276,17 +276,21 @@ Investigated and confirmed during requirements: worktree-backed workspaces that 
 
 ## Final Validation
 
-- [ ] `cargo test --test thread_flow && cargo test --test cli_contract && cargo test --test setup_and_doctor` — Expected: pass
-- [ ] `cargo fmt --all -- --check` — Expected: no diff
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings
-- [ ] `cargo test --all-targets --all-features` — Expected: pass
-- [ ] Manual (developer, real environment — not automated): reinstall the binary; in a `wt`-created worktree with no Herdr workspace run `zerdr connect --create` and confirm the sidebar shows a worktree-backed workspace grouped with the repo and `herdr worktree list` includes it; open a new Zed terminal thread with auto disabled and confirm the notice
-- [ ] Requirement Coverage has no unmapped rows
-- [ ] Plan matches the actual changes
-- [ ] After all of the above succeed, move this file unchanged to `docs/plans/archived/`
+- [x] `cargo test --test thread_flow && cargo test --test cli_contract && cargo test --test setup_and_doctor` — passed (48 + 21 + 52)
+- [x] `cargo fmt --all -- --check` — clean after `167b9b0`
+- [x] `cargo clippy --all-targets --all-features -- -D warnings` — no warnings
+- [x] `cargo test --all-targets --all-features` — passed on three consecutive runs; one isolated failure of the pre-existing timing-sensitive `titles_are_emitted_once_per_change_and_a_bell_marks_settling` passed on every rerun
+- [x] Manual (developer, real environment): a `wt`-created worktree with no Herdr workspace (`connect-worktree-test`) — bare `zerdr connect` showed the new worktree refusal; the first `--create` exposed the missing `--cwd` anchor (fixed in `67146ec`); after the fix `zerdr connect --create` attached and registered the worktree-backed workspace, and the disabled-auto notice appeared in a new thread
+- [x] Requirement Coverage has no unmapped rows
+- [x] Plan matches the actual changes (`worktree_open_for` gained a repo-parent anchor argument; `is_linked_worktree` became `linked_worktree_parent`)
+- [x] After all of the above succeed, move this file unchanged to `docs/plans/archived/`
+
+## Review
+
+An independent reviewer examined the plan and the full diff `a6c2808..167b9b0`: no blocking, high, or medium findings; one low finding (a stale `zerdr setup auto on` in `AGENTS.md:47`) was fixed in `840fca7` and re-verified. The manual-validation fix `67146ec` (repo-parent `--cwd` anchoring, `linked_worktree_parent`) was reviewed separately: porcelain parsing and canonicalization judged sound, plumbing consistent, no regressions. Verdict on both passes: implementation matches the plan's requirements, decisions, and scope; safe to ship.
 
 ## Risks and Open Questions
 
-- `herdr worktree open` response shape is documented only indirectly (Assumptions); the manual validation step confirms it, and only `worktree_open_for`'s pointers change if it differs.
+- `herdr worktree open` response shape is documented only indirectly (Assumptions); the manual validation step confirms it, and only `worktree_open_for`'s pointers change if it differs. Resolved: verified against real Herdr — the response mirrors `workspace create` (`.result.workspace`, `.result.root_pane`, plus a `label`), but the call needs a repo-parent anchor (`--cwd`), fixed in `67146ec`.
 - Behavior of `worktree open` when the parent repo has no Herdr workspace is Herdr's to define; per R3 zerdr surfaces whatever error Herdr returns rather than working around it.
 - Real `git worktree add` in test fixtures adds a few hundred ms per test; keep it out of the shared fake and inside only the tests that need it (wrapper tests are time-budgeted per `AGENTS.md`).
