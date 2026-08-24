@@ -32,6 +32,8 @@ fn help_lists_public_commands_and_hides_plugin_entry_points() {
         .success()
         .stdout(predicate::str::contains("connect"))
         .stdout(predicate::str::contains("start"))
+        .stdout(predicate::str::contains("detach"))
+        .stdout(predicate::str::contains("attach"))
         .stdout(predicate::str::contains("workspace"))
         .stdout(predicate::str::contains("setup"))
         .stdout(predicate::str::contains("--session <SESSION>"))
@@ -45,7 +47,7 @@ fn help_lists_public_commands_and_hides_plugin_entry_points() {
 
 #[test]
 fn bare_invocations_show_their_subcommands() {
-    assert_usage_lists(&[], &["connect", "start", "workspace", "setup"]);
+    assert_usage_lists(&[], &["connect", "start", "detach", "attach", "workspace", "setup"]);
     assert_usage_lists(&["workspace"], &["bind", "unbind", "sync"]);
     assert_usage_lists(&["setup"], &["install", "uninstall", "doctor", "auto"]);
 }
@@ -177,6 +179,55 @@ fn sessionless_setup_commands_reject_session_targeting() {
             assert_eq!(env.read_log(), "");
         }
     }
+}
+
+/// Detach mode is global by design; per-session scoping stays an explicit error
+/// until it exists.
+#[test]
+fn detach_and_attach_reject_session_targeting() {
+    let commands: [&[&str]; 2] = [&["detach"], &["attach"]];
+    for command in commands {
+        for session_first in [true, false] {
+            let env = TestEnv::new();
+            let mut args: Vec<&str> = Vec::new();
+            if session_first {
+                args.extend_from_slice(&["--session", "work"]);
+                args.extend_from_slice(command);
+            } else {
+                args.extend_from_slice(command);
+                args.extend_from_slice(&["--session", "work"]);
+            }
+            env.command()
+                .args(args)
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains(
+                    "--session cannot be used with this command",
+                ));
+            assert_eq!(env.read_log(), "");
+        }
+    }
+}
+
+/// Detach and attach only touch local state and processes, so they join
+/// `setup doctor` as the commands that still run over SSH: that is exactly
+/// where a phone-sized client needs them.
+#[test]
+fn detach_and_attach_run_under_remote_markers() {
+    let env = TestEnv::new();
+    env.command()
+        .arg("detach")
+        .env("SSH_CONNECTION", "client server")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("detected").not());
+    env.command()
+        .arg("attach")
+        .env("ZERDR_TEST_REMOTE_MARKERS", "/.dockerenv")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("detected").not());
+    assert_eq!(env.read_log(), "");
 }
 
 #[test]

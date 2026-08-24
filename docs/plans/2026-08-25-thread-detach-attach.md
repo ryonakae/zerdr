@@ -106,7 +106,7 @@ The user needs a way to suspend every thread attach before working from the phon
 
 - [x] Task 1: State layer — detach flag, lease markers, suspend scan
 - [x] Task 2: Connect suspend/resume cycle
-- [ ] Task 3: `zerdr detach` / `zerdr attach` commands
+- [x] Task 3: `zerdr detach` / `zerdr attach` commands
 - [ ] Task 4: README documentation
 
 ## Tasks
@@ -220,6 +220,8 @@ The user needs a way to suspend every thread attach before working from the phon
 **Validation:**
 - Run: `cargo test --test cli_contract --test thread_flow`
 - Expected: full pass including the new end-to-end flows.
+
+**Result:** Done. `src/suspend.rs` holds both commands (flag + `scan_all` poll at 50 ms, 5 s budget via `ZERDR_DETACH_WAIT_MS`); timeout reports the pending count and exits non-zero. Messages: `detached N thread(s)` / `no live threads; new threads will start detached` / `reattached N thread(s)` / `detach mode is off; no threads were waiting` / `detach mode is not active`. The timeout e2e test tears its connect down with SIGKILL instead of waiting out the deliberately huge cycle poll. Validation: `cargo test --test cli_contract --test thread_flow` → 23 + 59 passed.
 
 ### Task 4: README documentation
 

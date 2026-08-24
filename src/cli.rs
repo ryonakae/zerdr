@@ -43,6 +43,11 @@ pub enum Command {
         #[arg(long)]
         anchor: Option<PathBuf>,
     },
+    /// Suspend every Zed terminal thread's Herdr attach, freeing the panes'
+    /// sizes for other clients.
+    Detach,
+    /// Reconnect every thread suspended by `zerdr detach`.
+    Attach,
     /// Manage the selected Herdr workspace's Zed integration.
     #[command(arg_required_else_help = true)]
     Workspace {

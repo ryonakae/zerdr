@@ -2068,3 +2068,105 @@ fn a_signal_during_the_detached_wait_releases_the_lease_and_marker() {
     assert_eq!(count_leases(&paths), 0);
     assert_eq!(count_detach_markers(&paths), 0);
 }
+
+#[test]
+fn zerdr_detach_and_attach_drive_a_live_thread() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    let paths = fixture.paths();
+
+    let child = fixture.std_thread_command().arg("connect").spawn().unwrap();
+    wait_for_log(&fixture.env, "agent attach w1:p1");
+
+    fixture
+        .env
+        .command()
+        .arg("detach")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("detached 1 thread(s)"));
+    assert!(paths.thread_detach_flag_file.exists());
+    assert_eq!(count_detach_markers(&paths), 1);
+    assert!(!fixture.env.read_log().contains("terminal attach"));
+
+    fixture
+        .env
+        .command()
+        .arg("attach")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("reattached 1 thread(s)"));
+    assert!(!paths.thread_detach_flag_file.exists());
+    assert_eq!(count_detach_markers(&paths), 0);
+    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
+
+    fixture.release_attach();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn zerdr_detach_without_threads_sets_the_flag_for_future_threads() {
+    let fixture = Fixture::new();
+    let paths = fixture.paths();
+
+    fixture
+        .env
+        .command()
+        .arg("detach")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("new threads will start detached"));
+    assert!(paths.thread_detach_flag_file.exists());
+
+    fixture
+        .env
+        .command()
+        .arg("attach")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("detach mode is off"));
+    assert!(!paths.thread_detach_flag_file.exists());
+}
+
+#[test]
+fn zerdr_attach_when_not_detached_is_a_noop() {
+    let fixture = Fixture::new();
+
+    fixture
+        .env
+        .command()
+        .arg("attach")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("detach mode is not active"));
+}
+
+#[test]
+fn zerdr_detach_warns_when_a_thread_does_not_confirm_in_time() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+
+    let mut child = fixture
+        .std_thread_command()
+        .arg("connect")
+        .env("ZERDR_THREAD_CYCLE_POLL_MS", "60000")
+        .spawn()
+        .unwrap();
+    wait_for_log(&fixture.env, "agent attach w1:p1");
+
+    fixture
+        .env
+        .command()
+        .arg("detach")
+        .env("ZERDR_DETACH_WAIT_MS", "200")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("did not confirm"));
+
+    // The connect's cycle poll is deliberately enormous, so waiting for a natural
+    // exit would stall the suite; tear the processes down instead.
+    child.kill().unwrap();
+    child.wait().unwrap();
+    fixture.release_attach();
+}
