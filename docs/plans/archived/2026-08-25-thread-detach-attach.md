@@ -272,14 +272,19 @@ The user needs a way to suspend every thread attach before working from the phon
 
 ## Final Validation
 
-- [ ] `cargo test --test state_and_bindings --test thread_flow --test cli_contract` — Expected: pass
-- [ ] `cargo test --all-targets --all-features` — Expected: pass
-- [ ] `cargo fmt --all -- --check` — Expected: no diff
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings
-- [ ] Manual check in the real environment: with a Zed thread attached, run `zerdr detach`, confirm the pane reflows for the Herdr desktop client (and a small client if available), thread title shows `[herdr⏸]`; run `zerdr attach`, confirm the thread reconnects and the title marker reverts
-- [ ] Requirement Coverage に未対応項目がない
-- [ ] 計画と実際の変更内容が整合している
-- [ ] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
+- [x] `cargo test --test state_and_bindings --test thread_flow --test cli_contract` — Expected: pass — 25 + 59 + 23 passed
+- [x] `cargo test --all-targets --all-features` — Expected: pass — 234 tests across all suites
+- [x] `cargo fmt --all -- --check` — Expected: no diff — clean after `chore(fmt)` commit
+- [x] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings — clean
+- [x] Manual check in the real environment: with a Zed thread attached, run `zerdr detach`, confirm the pane reflows for the Herdr desktop client (and a small client if available), thread title shows `[herdr⏸]`; run `zerdr attach`, confirm the thread reconnects and the title marker reverts
+  — Executed against the real herdr 0.8.2 binary with an isolated named session (`zerdrtest`, per AGENTS.md test-session convention) and isolated zerdr state (`ZERDR_TEST_ROOT`), with the thread terminal simulated by a 60×20 PTY running the real `zerdr connect --create --session zerdrtest`: attach pinned the pane PTY to 60×20; `zerdr detach` reported `detached 1 thread(s)`, the thread terminal showed the mode restore (`?1049l`, cursor show) and the notice, and a 34×12 client then reflowed the pane to 34×12 (the phone scenario); `zerdr attach` reported `reattached 1 thread(s)` and repinned the pane to 60×20; SIGTERM ended the connect with status 0 and the session was stopped and deleted. The Zed-UI side of the walkthrough (sidebar rendering of `[herdr⏸]`) is covered by the OSC title assertions in `thread_flow` and remains for the user to eyeball in daily use.
+- [x] Requirement Coverage に未対応項目がない
+- [x] 計画と実際の変更内容が整合している — task Results record the two sanctioned deviations (`ZERDR_THREAD_CYCLE_POLL_MS`, fake pane-get shape fix) and the review-fix commit `5a888ed`
+- [x] 上記のすべてが成功した後、計画を同名のまま `docs/plans/archived/` へ移した
+
+## Independent Review
+
+Fresh-context reviewer, against this plan and `git diff bc113e5..HEAD`. First pass: no blocking/high findings; two medium and one low — (1) `terminate_gracefully` waited unboundedly after SIGTERM, so a TERM-ignoring attach client could wedge the connect; (2) a signal landing between the detached wait and the reattach spawn was silently discarded; (3) R8's live-thread idempotency (second `zerdr detach`) was untested. All three fixed in `5a888ed`: SIGKILL escalation after a grace period (`ZERDR_TERM_GRACE_MS`, default 5 s) with a fake-herdr `trap '' TERM` knob and test, a `signals.pending()` re-check after the reattach spawn that tears the fresh child down, and the idempotency test. Re-review verdict: all findings resolved, no new issues, nothing blocking. Two accepted residuals noted by the reviewer: the `Err(_)` arm of the `try_wait` loop follows the pre-existing `terminate()` pattern (unreachable in this process model), and the signal-during-reattach window itself has no deterministic test (would need a delay hook in the fake; logically sound by inspection).
 
 ## Risks and Open Questions
 
