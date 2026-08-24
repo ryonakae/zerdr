@@ -253,10 +253,16 @@ fn attach_cycle(
                         return Ok(CycleOutcome::PaneGone);
                     }
                 };
-                let spawned =
+                let mut spawned =
                     ManagedChild::new(herdr.spawn_terminal_attach_for(session_name, &terminal_id)?);
                 lease.clear_detached()?;
                 detached.store(false, Ordering::SeqCst);
+                // A signal that landed during this transition was neither polled above
+                // nor forwarded to the new child, so honor it instead of dropping it.
+                if signals.pending().next().is_some() {
+                    spawned.terminate_gracefully();
+                    return Ok(CycleOutcome::Interrupted);
+                }
                 child = Some(spawned);
             }
         }

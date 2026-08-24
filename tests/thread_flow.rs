@@ -2164,3 +2164,65 @@ fn zerdr_detach_warns_when_a_thread_does_not_confirm_in_time() {
     child.wait().unwrap();
     fixture.release_attach();
 }
+
+#[test]
+fn a_second_detach_reconfirms_an_already_detached_thread() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+
+    let child = fixture.std_thread_command().arg("connect").spawn().unwrap();
+    wait_for_log(&fixture.env, "agent attach w1:p1");
+    fixture
+        .env
+        .command()
+        .arg("detach")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("detached 1 thread(s)"));
+
+    // Re-running settles on the first scan: the thread is already confirmed.
+    fixture
+        .env
+        .command()
+        .arg("detach")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("detached 1 thread(s)"));
+
+    fixture.env.command().arg("attach").assert().success();
+    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
+    fixture.release_attach();
+    assert!(child.wait_with_output().unwrap().status.success());
+}
+
+/// An attach client that ignores SIGTERM must not wedge the connect: the graceful
+/// terminate escalates to SIGKILL after its grace period, so `zerdr detach` still
+/// confirms.
+#[test]
+fn a_term_ignoring_attach_client_is_escalated_to_sigkill() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    let paths = fixture.paths();
+
+    let child = fixture
+        .std_thread_command()
+        .arg("connect")
+        .env("ZERDR_TEST_ATTACH_IGNORE_TERM", "1")
+        .env("ZERDR_TERM_GRACE_MS", "150")
+        .spawn()
+        .unwrap();
+    wait_for_log(&fixture.env, "agent attach w1:p1");
+
+    fixture
+        .env
+        .command()
+        .arg("detach")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("detached 1 thread(s)"));
+    assert_eq!(count_detach_markers(&paths), 1);
+
+    fixture.env.command().arg("attach").assert().success();
+    fixture.release_attach();
+    assert!(child.wait_with_output().unwrap().status.success());
+}

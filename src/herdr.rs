@@ -635,13 +635,29 @@ impl ManagedChild {
 
     /// SIGTERM rather than the SIGKILL of [`Self::terminate`]: a Herdr attach client
     /// restores the host terminal's modes (alternate screen, mouse, keyboard
-    /// protocol) only when it can handle the signal.
+    /// protocol) only when it can handle the signal. A child that ignores SIGTERM
+    /// must not wedge the caller behind an unbounded wait, so after a grace period
+    /// the termination escalates to SIGKILL.
     pub(crate) fn terminate_gracefully(&mut self) {
-        if self.running {
-            let _ = kill(Pid::from_raw(self.child.id() as i32), Signal::SIGTERM);
-            let _ = self.child.wait();
-            self.running = false;
+        if !self.running {
+            return;
         }
+        let _ = kill(Pid::from_raw(self.child.id() as i32), Signal::SIGTERM);
+        let deadline = Instant::now() + term_grace();
+        loop {
+            match self.child.try_wait() {
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Ok(Some(_)) | Err(_) => break,
+                Ok(None) => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    break;
+                }
+            }
+        }
+        self.running = false;
     }
 }
 
@@ -649,6 +665,16 @@ impl Drop for ManagedChild {
     fn drop(&mut self) {
         self.terminate();
     }
+}
+
+fn term_grace() -> Duration {
+    const DEFAULT_TERM_GRACE_MS: u64 = 5_000;
+    Duration::from_millis(
+        std::env::var("ZERDR_TERM_GRACE_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_TERM_GRACE_MS),
+    )
 }
 
 pub(crate) struct SignalForwarder {

@@ -152,12 +152,18 @@ if [ "$1" = "--session" ] && [ "$3" = "pane" ] && [ "$4" = "get" ]; then
   exit 0
 fi
 if [ "$1" = "--session" ] && [ "$3" = "terminal" ] && [ "$4" = "attach" ]; then
+  if [ "${ZERDR_TEST_ATTACH_IGNORE_TERM:-0}" = "1" ]; then
+    trap '' TERM
+  fi
   if [ -n "$ZERDR_TEST_ATTACH_RELEASE_FILE" ]; then
     while [ ! -e "$ZERDR_TEST_ATTACH_RELEASE_FILE" ]; do sleep 0.01; done
   fi
   exit "${ZERDR_TEST_ATTACH_EXIT:-0}"
 fi
 if [ "$1" = "--session" ] && [ "$3" = "agent" ] && [ "$4" = "attach" ]; then
+  if [ "${ZERDR_TEST_ATTACH_IGNORE_TERM:-0}" = "1" ]; then
+    trap '' TERM
+  fi
   if [ -n "$ZERDR_TEST_ATTACH_RELEASE_FILE" ]; then
     while [ ! -e "$ZERDR_TEST_ATTACH_RELEASE_FILE" ]; do sleep 0.01; done
   fi
