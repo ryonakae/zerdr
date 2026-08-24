@@ -10,8 +10,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use zerdr::state::{
     BindingStore, LeaseSet, LifecycleGuard, Paths, RouteStore, SyncGuard, ThreadLeaseScan,
-    ThreadLeaseSet, ThreadPaneMemory, thread_detach_active, thread_detach_clear,
-    thread_detach_set,
+    ThreadLeaseSet, ThreadPaneMemory, thread_detach_active, thread_detach_clear, thread_detach_set,
 };
 
 fn git_repo() -> (TempDir, std::path::PathBuf) {

@@ -47,7 +47,10 @@ fn help_lists_public_commands_and_hides_plugin_entry_points() {
 
 #[test]
 fn bare_invocations_show_their_subcommands() {
-    assert_usage_lists(&[], &["connect", "start", "detach", "attach", "workspace", "setup"]);
+    assert_usage_lists(
+        &[],
+        &["connect", "start", "detach", "attach", "workspace", "setup"],
+    );
     assert_usage_lists(&["workspace"], &["bind", "unbind", "sync"]);
     assert_usage_lists(&["setup"], &["install", "uninstall", "doctor", "auto"]);
 }

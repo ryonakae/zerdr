@@ -8,9 +8,7 @@ use std::time::Duration;
 
 use predicates::prelude::*;
 use support::TestEnv;
-use zerdr::state::{
-    BindingStore, Paths, ThreadPaneMemory, thread_detach_clear, thread_detach_set,
-};
+use zerdr::state::{BindingStore, Paths, ThreadPaneMemory, thread_detach_clear, thread_detach_set};
 
 const OSC_PREFIX: &str = "\u{1b}]0;";
 
@@ -1942,11 +1940,7 @@ fn a_detached_thread_keeps_a_marked_title_and_never_rings_the_bell() {
     wait_for_sequence(&sequence, polled(&sequence) + 2);
 
     // The settling transition happens while detached, so it must not ring the bell.
-    fs::write(
-        sequence.join("2.json"),
-        agent_response("idle", "compiling"),
-    )
-    .unwrap();
+    fs::write(sequence.join("2.json"), agent_response("idle", "compiling")).unwrap();
     wait_for_sequence(&sequence, polled(&sequence) + 2);
 
     let pid = child.id().to_string();

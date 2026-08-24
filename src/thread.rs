@@ -221,10 +221,9 @@ fn attach_cycle(
             None => {
                 // Without a child there is nothing forwarding signals, and the default
                 // disposition would skip the guard cleanup, so watch them here.
-                let mut signals =
-                    Signals::new([SIGINT, SIGTERM, SIGHUP]).map_err(|error| {
-                        Error::User(format!("failed to register signal handlers: {error}"))
-                    })?;
+                let mut signals = Signals::new([SIGINT, SIGTERM, SIGHUP]).map_err(|error| {
+                    Error::User(format!("failed to register signal handlers: {error}"))
+                })?;
                 loop {
                     if signals.pending().next().is_some() {
                         return Ok(CycleOutcome::Interrupted);
@@ -701,7 +700,12 @@ impl Monitor {
                 let is_detached = detached.load(Ordering::SeqCst);
                 match herdr.agent_get_for(&session_name, &pane_id) {
                     Ok(Some(agent)) => {
-                        emit_title(&mut last_label, &agent, fallback_label.as_deref(), is_detached);
+                        emit_title(
+                            &mut last_label,
+                            &agent,
+                            fallback_label.as_deref(),
+                            is_detached,
+                        );
                         if !is_detached
                             && last_status == "working"
                             && SETTLED_STATES.contains(&agent.status.as_str())
@@ -716,7 +720,12 @@ impl Monitor {
                     // the thread, so the bell still rings.
                     Ok(None) => {
                         let shell = AgentInfo::shell(&pane_id, &workspace_id);
-                        emit_title(&mut last_label, &shell, fallback_label.as_deref(), is_detached);
+                        emit_title(
+                            &mut last_label,
+                            &shell,
+                            fallback_label.as_deref(),
+                            is_detached,
+                        );
                         if !is_detached && last_status == "working" {
                             emit(b"\x07");
                         }
@@ -767,8 +776,17 @@ fn wait_for_stop(stop: &(Mutex<bool>, Condvar), interval: Duration) -> bool {
 /// tab still says where it lives. Agent titles lead with a status glyph, which Zed
 /// promotes into the thread's sidebar row icon. While detached the marker becomes
 /// `[herdr⏸]`, so a thread that will not take input is visibly different.
-fn emit_title(last: &mut Option<String>, agent: &AgentInfo, fallback: Option<&str>, detached: bool) {
-    let marker = if detached { "[herdr\u{23f8}]" } else { "[herdr]" };
+fn emit_title(
+    last: &mut Option<String>,
+    agent: &AgentInfo,
+    fallback: Option<&str>,
+    detached: bool,
+) {
+    let marker = if detached {
+        "[herdr\u{23f8}]"
+    } else {
+        "[herdr]"
+    };
     let label = if agent.kind.is_empty() {
         format!("{marker} {}", fallback.unwrap_or(&agent.workspace_id))
     } else {
