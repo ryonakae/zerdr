@@ -200,6 +200,14 @@ if [ "$1" = "--session" ] && [ "$3" = "workspace" ] && [ "$4" = "create" ]; then
   printf '%s\n' "$ZERDR_TEST_WORKSPACE_CREATE_JSON"
   exit 0
 fi
+if [ "$1" = "--session" ] && [ "$3" = "worktree" ] && [ "$4" = "open" ]; then
+  if [ "${ZERDR_TEST_WORKTREE_OPEN_EXIT:-0}" != "0" ]; then
+    printf '%s\n' 'fake worktree open failure' >&2
+    exit "$ZERDR_TEST_WORKTREE_OPEN_EXIT"
+  fi
+  printf '%s\n' "$ZERDR_TEST_WORKTREE_OPEN_JSON"
+  exit 0
+fi
 if { [ "$#" = "0" ] || { [ "$1" = "--session" ] && [ "$#" = "2" ]; }; }; then
   if [ -n "$ZERDR_TEST_CHILD_PID_FILE" ]; then
     printf '%s\n' "$$" > "$ZERDR_TEST_CHILD_PID_FILE"

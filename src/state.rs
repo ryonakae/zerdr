@@ -374,6 +374,44 @@ pub fn canonical_git_root(candidate: &Path) -> Result<PathBuf> {
         .map_err(|error| Error::io(candidate, error))
 }
 
+/// Whether `root` is a linked Git worktree rather than a primary checkout, detected
+/// tool-agnostically: the two directories differ exactly for linked worktrees.
+pub fn is_linked_worktree(root: &Path) -> Result<bool> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--git-dir", "--git-common-dir"])
+        .output()
+        .map_err(|error| Error::User(format!("failed to run git: {error}")))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(Error::User(format!(
+            "could not inspect the Git checkout at {}: {detail}",
+            root.display()
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    let (Some(git_dir), Some(common_dir)) = (lines.next(), lines.next()) else {
+        return Err(Error::User(format!(
+            "git rev-parse returned no directories for {}",
+            root.display()
+        )));
+    };
+    // Either line may be relative (plain `.git` in a primary checkout) and unresolved,
+    // so both are anchored to the root and canonicalized before comparing.
+    let resolve = |dir: &str| {
+        let path = Path::new(dir);
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        };
+        absolute.canonicalize().map_err(|error| Error::io(dir, error))
+    };
+    Ok(resolve(git_dir)? != resolve(common_dir)?)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "mode", rename_all = "lowercase", deny_unknown_fields)]
 pub enum RouteStrategy {

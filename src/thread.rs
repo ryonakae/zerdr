@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 use crate::herdr::{AgentInfo, Herdr, ManagedChild, SignalForwarder, Workspace};
 use crate::state::{
     BindingStore, DEFAULT_SESSION_NAME, OperationGuard, Paths, ThreadLeaseGuard, ThreadLeaseSet,
-    ThreadPaneMemory, canonical_git_root,
+    ThreadPaneMemory, canonical_git_root, is_linked_worktree,
 };
 
 const DEFAULT_POLL_MS: u64 = 2_000;
@@ -244,9 +244,18 @@ fn resolve_or_create(
                 || root.display().to_string(),
                 |name| name.to_string_lossy().into_owned(),
             );
-            let created = session
-                .herdr
-                .workspace_create_for(session.name, &root, &label)?;
+            // A linked worktree becomes a worktree-backed workspace so `herdr worktree
+            // list`/`remove` manage it like one Herdr created itself; on failure nothing
+            // is created — a plain-workspace fallback would hide the very inconsistency
+            // this registration removes.
+            let created = if is_linked_worktree(&root)? {
+                session.herdr.worktree_open_for(session.name, &root)?
+            } else {
+                session
+                    .herdr
+                    .workspace_create_for(session.name, &root, &label)?
+            };
+            let label = created.label.clone().unwrap_or(label);
             bindings.bind_if_absent(session.name, &created.workspace_id, &root)?;
             let (agent, lease, terminal) = start_and_lease(
                 session,

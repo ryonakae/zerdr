@@ -46,6 +46,8 @@ pub struct AgentInfo {
 pub struct CreatedWorkspace {
     pub workspace_id: String,
     pub root_pane_id: String,
+    /// The label Herdr reported for the new workspace; `worktree open` derives its own.
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,20 +146,27 @@ impl Herdr {
                 OsStr::new("--no-focus"),
             ],
         )?;
-        let workspace_id = value
-            .pointer("/result/workspace/workspace_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                Error::User("Herdr workspace create did not return a workspace".to_owned())
-            })?
-            .to_owned();
-        let root_pane_id = root_pane_id(&value).ok_or_else(|| {
-            Error::User("Herdr workspace create did not return a root pane".to_owned())
-        })?;
-        Ok(CreatedWorkspace {
-            workspace_id,
-            root_pane_id,
-        })
+        parse_created_workspace(&value, "workspace create")
+    }
+
+    /// Register an existing linked worktree as a worktree-backed workspace. No label is
+    /// passed: Herdr derives one from the checkout's branch.
+    pub fn worktree_open_for(
+        &self,
+        session_name: &str,
+        path: &std::path::Path,
+    ) -> Result<CreatedWorkspace> {
+        let value = self.session_json_output_for(
+            session_name,
+            [
+                OsStr::new("worktree"),
+                OsStr::new("open"),
+                OsStr::new("--path"),
+                path.as_os_str(),
+                OsStr::new("--no-focus"),
+            ],
+        )?;
+        parse_created_workspace(&value, "worktree open")
     }
 
     pub fn spawn_agent_attach_for(&self, session_name: &str, target: &str) -> Result<Child> {
@@ -642,6 +651,25 @@ impl Drop for SignalForwarder {
             let _ = thread.join();
         }
     }
+}
+
+fn parse_created_workspace(value: &Value, what: &str) -> Result<CreatedWorkspace> {
+    let workspace_id = value
+        .pointer("/result/workspace/workspace_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::User(format!("Herdr {what} did not return a workspace")))?
+        .to_owned();
+    let root_pane_id = root_pane_id(value)
+        .ok_or_else(|| Error::User(format!("Herdr {what} did not return a root pane")))?;
+    let label = value
+        .pointer("/result/workspace/label")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    Ok(CreatedWorkspace {
+        workspace_id,
+        root_pane_id,
+        label,
+    })
 }
 
 fn parse_workspace(value: &Value) -> Result<Workspace> {

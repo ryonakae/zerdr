@@ -141,6 +141,43 @@ impl Fixture {
         fs::write(&self.release, "go").unwrap();
     }
 
+    /// A linked worktree of the fixture repo, created with plain `git worktree add` the
+    /// way external tools do, canonicalized like `repo`.
+    fn linked_worktree(&self, branch: &str) -> PathBuf {
+        let git = |args: &[&str]| {
+            assert!(
+                ProcessCommand::new("git")
+                    .args(args)
+                    .current_dir(&self.repo)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        // `git worktree add` needs a commit to check out.
+        git(&[
+            "-c",
+            "user.name=zerdr",
+            "-c",
+            "user.email=zerdr@invalid",
+            "commit",
+            "--allow-empty",
+            "--quiet",
+            "-m",
+            "init",
+        ]);
+        let path = self.env.root.path().join(branch);
+        git(&[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            branch,
+            path.to_str().unwrap(),
+        ]);
+        path.canonicalize().unwrap()
+    }
+
     fn paths(&self) -> Paths {
         Paths::for_test(self.env.root.path())
     }
@@ -615,6 +652,128 @@ fn create_makes_the_workspace_binds_it_and_starts_an_agent() {
     assert!(status.contains("created Herdr workspace"), "{stdout:?}");
     assert!(status.contains("w7:p1"), "{stdout:?}");
     assert!(!stdout.contains("auto mode"), "{stdout:?}");
+}
+
+/// A linked worktree is registered with `herdr worktree open` so Herdr knows the
+/// checkout's provenance, whatever tool created the worktree. The label comes from
+/// Herdr's response, not the directory name.
+#[test]
+fn create_registers_a_linked_worktree_via_worktree_open() {
+    let fixture = Fixture::new();
+    let worktree = fixture.linked_worktree("feature");
+    let opened = serde_json::json!({
+        "result": {
+            "workspace": {"workspace_id": "w8", "label": "checkout/feature"},
+            "root_pane": {"pane_id": "w8:p1"}
+        }
+    });
+
+    let output = fixture
+        .std_thread_command()
+        .current_dir(&worktree)
+        .args(["connect", "--create"])
+        .env(
+            "ZERDR_TEST_WORKSPACES_JSON",
+            r#"{"result":{"workspaces":[]}}"#,
+        )
+        .env("ZERDR_TEST_WORKTREE_OPEN_JSON", opened.to_string())
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let log = fixture.env.read_log();
+    assert!(
+        log.contains(&format!(
+            "herdr\t--session default worktree open --path {} --no-focus",
+            worktree.display()
+        )),
+        "{log}"
+    );
+    assert!(!log.contains("workspace create"), "{log}");
+    assert!(log.contains("terminal attach term-w8:p1"), "{log}");
+
+    let bound = BindingStore::new(fixture.paths().bindings_file)
+        .get("default", "w8")
+        .unwrap();
+    assert_eq!(bound, Some(worktree));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let status = stdout.lines().next().unwrap_or_default();
+    assert!(status.contains("created Herdr workspace"), "{stdout:?}");
+    assert!(status.contains("checkout/feature"), "{stdout:?}");
+    assert!(status.contains("w8:p1"), "{stdout:?}");
+}
+
+/// Auto mode's create-on-miss shares the create path, so a worktree opened in Zed gets
+/// the same registration without an explicit `--create`.
+#[test]
+fn auto_in_a_linked_worktree_creates_via_worktree_open() {
+    let fixture = Fixture::new();
+    let worktree = fixture.linked_worktree("feature");
+    let paths = fixture.paths();
+    fs::create_dir_all(&paths.state_dir).unwrap();
+    fs::write(&paths.thread_auto_flag_file, b"").unwrap();
+    let opened = serde_json::json!({
+        "result": {
+            "workspace": {"workspace_id": "w8", "label": "checkout/feature"},
+            "root_pane": {"pane_id": "w8:p1"}
+        }
+    });
+
+    let output = fixture
+        .std_thread_command()
+        .current_dir(&worktree)
+        .args(["connect", "--auto"])
+        .env(
+            "ZERDR_TEST_WORKSPACES_JSON",
+            r#"{"result":{"workspaces":[]}}"#,
+        )
+        .env("ZERDR_TEST_WORKTREE_OPEN_JSON", opened.to_string())
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+
+    let log = fixture.env.read_log();
+    assert!(log.contains("worktree open --path"), "{log}");
+    assert!(!log.contains("workspace create"), "{log}");
+    let bound = BindingStore::new(paths.bindings_file)
+        .get("default", "w8")
+        .unwrap();
+    assert_eq!(bound, Some(worktree));
+}
+
+/// A failing `worktree open` must abort the create: falling back to a plain workspace
+/// would recreate exactly the unregistered-worktree state this path removes.
+#[test]
+fn a_failing_worktree_open_aborts_create_without_fallback() {
+    let fixture = Fixture::new();
+    let worktree = fixture.linked_worktree("feature");
+
+    fixture
+        .thread_command()
+        .current_dir(&worktree)
+        .args(["connect", "--create"])
+        .env(
+            "ZERDR_TEST_WORKSPACES_JSON",
+            r#"{"result":{"workspaces":[]}}"#,
+        )
+        .env("ZERDR_TEST_WORKTREE_OPEN_EXIT", "13")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("fake worktree open failure"));
+
+    let log = fixture.env.read_log();
+    assert!(!log.contains("workspace create"), "{log}");
+    let bound = BindingStore::new(fixture.paths().bindings_file)
+        .get("default", "w8")
+        .unwrap();
+    assert_eq!(bound, None);
 }
 
 /// Two threads racing on an empty workspace must each end up with their own tab and
