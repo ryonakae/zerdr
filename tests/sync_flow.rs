@@ -1028,7 +1028,9 @@ fn internal_routes_from_different_sessions_do_not_interleave_zed_operations() {
         .env("ZERDR_TEST_ZED_BLOCK_MARKER", &first_blocked)
         .env("ZERDR_TEST_ZED_BLOCK_CONTINUE", &release_first);
     let mut first = first.spawn().unwrap();
-    for _ in 0..200 {
+    // A generous budget: under full-suite parallelism the first process can be
+    // starved for seconds before it reaches the fake Zed.
+    for _ in 0..600 {
         if first_blocked.exists() {
             break;
         }
