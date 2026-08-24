@@ -74,6 +74,22 @@ Manual `zerdr connect` only attaches to workspaces Herdr already manages. In a c
 
 To select text with the mouse while attached, hold Shift and drag: the Herdr client enables mouse reporting, and Shift is Zed's built-in escape hatch for native selection (fixed for the no-prior-selection case in Zed v1.16.1). Through Herdr 0.8.2 the attach client always captures the mouse and discards clicks and drags, so Shift+drag is the only way to select. Herdr has merged a fix ([herdr#2995](https://github.com/herdrdev/herdr/pull/2995), not yet in any release as of 0.8.2): once it ships, setting `ui.mouse_capture = false` in Herdr's `config.toml` makes the attach client leave the mouse to Zed, and plain drag selects natively. The setting is global — the full Herdr client then loses its own mouse UI (sidebar clicks, drag-select copy, wheel scrollback) as well, though pane apps that request the mouse, and popups, still capture it dynamically.
 
+### Sharing the session with a small client
+
+An attached thread pins its Herdr pane to the thread terminal's size, so opening the same session from a much smaller client — a phone terminal over SSH — shows those panes clipped to the wrong grid. Suspend every thread's attach first:
+
+```bash
+zerdr detach
+```
+
+Each thread stays open in Zed, keeps its pane reserved, and keeps following the agent's title in the sidebar with a `[herdr⏸]` marker (notifications stay quiet); the panes themselves are free to fit whichever Herdr client you use next. The command waits until every thread has confirmed, and works over SSH — run it from the phone before launching `herdr`. Back at your desk:
+
+```bash
+zerdr attach
+```
+
+Every thread reconnects to its pane, whether or not the agent inside changed in the meantime. Threads opened while detach mode is on wait the same way and connect on `zerdr attach`.
+
 ### Named sessions
 
 `zerdr connect --session NAME` attaches to a running named Herdr session. With `--create`, a session that is not running is first started headless — the same `herdr --session NAME server` a stopped session restarts with — and the thread then connects as usual. Only named sessions start this way; the default session is launched by `zerdr start`, and auto mode never starts servers.

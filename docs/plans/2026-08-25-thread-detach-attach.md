@@ -107,7 +107,7 @@ The user needs a way to suspend every thread attach before working from the phon
 - [x] Task 1: State layer — detach flag, lease markers, suspend scan
 - [x] Task 2: Connect suspend/resume cycle
 - [x] Task 3: `zerdr detach` / `zerdr attach` commands
-- [ ] Task 4: README documentation
+- [x] Task 4: README documentation
 
 ## Tasks
 
@@ -246,6 +246,8 @@ The user needs a way to suspend every thread attach before working from the phon
 **Validation:**
 - Run: `cargo run --locked -- --help`
 - Expected: help output lists `detach` and `attach` matching the README wording.
+
+**Result:** Done. Added "Sharing the session with a small client" under Terminal threads. Help output verified to list both commands.
 
 ## Requirement Coverage
 
