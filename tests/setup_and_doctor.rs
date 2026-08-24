@@ -986,12 +986,21 @@ fn doctor_validates_every_session_binding_and_preserves_legacy_bytes() {
     )
     .unwrap();
 
+    // A missing path is how a deleted worktree checkout shows up, and zerdr cannot tell
+    // that case from a plain wrong path, so the guidance names both remedies and doctor
+    // never prunes the binding itself.
     env.command()
         .args(["setup", "doctor"])
         .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
         .assert()
         .failure()
-        .stdout(predicates::str::contains("binding default/shared"));
+        .stdout(predicates::str::contains("binding default/shared"))
+        .stdout(predicates::str::contains(
+            "herdr worktree remove --workspace shared",
+        ))
+        .stdout(predicates::str::contains(
+            "zerdr workspace bind --session default PATH",
+        ));
 
     let legacy = serde_json::to_vec(&serde_json::json!({
         "schema_version":1,

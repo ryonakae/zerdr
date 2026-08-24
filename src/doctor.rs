@@ -131,9 +131,12 @@ pub fn doctor(session_name: &str) -> Result<()> {
                             ));
                         }
                         Err(error) => {
+                            // A vanished path is usually a deleted worktree checkout, but
+                            // zerdr cannot verify that once the path is gone, so both
+                            // remedies are offered and nothing is pruned automatically.
                             missing = true;
                             report.fail(format!(
-                                "binding {session}/{workspace} is not a valid Git checkout root: {error}"
+                                "binding {session}/{workspace} is not a valid Git checkout root: {error}; if the checkout was a removed Git worktree, close it with `herdr worktree remove --workspace {workspace}`, otherwise rebind with `zerdr workspace bind --session {session} PATH`"
                             ));
                         }
                     }
