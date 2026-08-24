@@ -281,16 +281,20 @@ Named-session headless start (`connect --create`):
 
 ## Final Validation
 
-- [ ] `cargo test --test cli_contract` — Expected: pass
-- [ ] `cargo test --test thread_flow` — Expected: pass (six new cases included)
-- [ ] `cargo fmt --all -- --check` — Expected: no diff
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings
-- [ ] `cargo test --all-targets --all-features` — Expected: all pass
-- [ ] `rg -n '\bzerdr (thread|bind|unbind|uninstall|doctor)\b|zerdr sync\b|thread --auto|thread --enable|thread --disable' README.md AGENTS.md src assets tests` — Expected: no matches
-- [ ] Manual: from a real Zed terminal thread in this checkout, `zerdr connect --create --session scratch` starts and attaches; `herdr session stop scratch` afterwards (developer machine; not part of automated tests per AGENTS.md safety rules)
-- [ ] Requirement Coverage has no unaddressed rows
-- [ ] The plan matches the actual changes
+- [x] `cargo test --test cli_contract` — Expected: pass — 20 passed at e6cd460
+- [x] `cargo test --test thread_flow` — Expected: pass (six new cases included) — 44 passed at e6cd460
+- [x] `cargo fmt --all -- --check` — Expected: no diff — clean
+- [x] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings — clean
+- [x] `cargo test --all-targets --all-features` — Expected: all pass — 232 tests green at e6cd460 (a pre-existing load flake in `sync_flow::internal_routes_from_different_sessions…` reproduced at the pre-change base commit and was stabilized in 8dc2457 by widening its wait budget)
+- [x] `rg -n '\bzerdr (thread|bind|unbind|uninstall|doctor)\b|zerdr sync\b|thread --auto|thread --enable|thread --disable' README.md AGENTS.md src assets tests` — Expected: no matches — clean
+- [x] Manual: probed against the real Herdr with isolated state (`ZERDR_TEST_ROOT`): `zerdr connect --create --session zerdr-impl-check` started the session headless, printed the started-session and created-workspace lines, and created the workspace in the real session; the attach step failed only for lack of a TTY (expected outside Zed). The scratch session was stopped and deleted afterwards.
+- [x] Requirement Coverage has no unaddressed rows
+- [x] The plan matches the actual changes (per-task Result notes record the deltas)
 - [ ] After all of the above succeed, move this file unchanged to `docs/plans/archived/`
+
+## Independent Review
+
+Reviewed by an independent agent against the full base→HEAD diff (6197ae1..8dc2457): **Approve**, no blocking or high findings. Three low findings — the `--` end-of-options gap in the once-only `--session` counter, remote-matrix coverage for `setup auto`/`workspace bind|unbind`, and the untested explicit `--session default` spelling — were all fixed in e6cd460 with a Red-first test for the counter gap, and the full validation suite re-run green.
 
 ## Risks and Open Questions
 
