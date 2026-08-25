@@ -272,6 +272,9 @@ impl TestEnv {
         let log = root.path().join("process.log");
         let zed = r##"#!/bin/sh
 printf 'zed\t%s\n' "$*" >> "$ZERDR_TEST_LOG"
+if [ -n "$ZERDR_TEST_ZED_ENV_FILE" ]; then
+  env | LC_ALL=C sort > "$ZERDR_TEST_ZED_ENV_FILE"
+fi
 if [ -n "$ZERDR_TEST_ZED_CALL_MARKER" ]; then
   : > "$ZERDR_TEST_ZED_CALL_MARKER"
 fi

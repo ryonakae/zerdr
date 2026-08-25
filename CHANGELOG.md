@@ -5,6 +5,12 @@ All notable changes to zerdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- zerdr now removes Herdr's pane and plugin runtime context before launching Zed. A Zed process first opened by a Herdr event no longer passes `HERDR_ENV=1` to its integrated terminals, where `zerdr start` would be rejected as a nested Herdr launch.
+
 ## v0.5.0
 
 _2026-08-25_

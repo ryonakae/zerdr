@@ -224,6 +224,81 @@ fn one_shot_action_without_a_live_lease_opens_the_captured_checkout_via_existing
 }
 
 #[test]
+fn one_shot_action_does_not_leak_herdr_runtime_context_into_zed() {
+    let env = TestEnv::new();
+    let socket = env.root.path().join("default.sock");
+    fs::write(&socket, "").unwrap();
+    let target = git_repo(&env.root.path().join("target-parent"));
+    let zed_env_file = env.root.path().join("zed.env");
+    let sessions = serde_json::json!({
+        "result":{"sessions":[{"name":"default","running":true,"socket_path":socket}]}
+    });
+    let context = serde_json::json!({
+        "workspace_id":"w-captured",
+        "worktree":{"checkout_path":target}
+    });
+    let runtime_variables = [
+        "HERDR_ENV",
+        "HERDR_SOCKET_PATH",
+        "HERDR_CLIENT_SOCKET_PATH",
+        "HERDR_BIN_PATH",
+        "HERDR_ACTIVE_WORKSPACE_ID",
+        "HERDR_ACTIVE_TAB_ID",
+        "HERDR_ACTIVE_PANE_ID",
+        "HERDR_ACTIVE_PANE_CWD",
+        "HERDR_WORKSPACE_ID",
+        "HERDR_TAB_ID",
+        "HERDR_PANE_ID",
+        "HERDR_PLUGIN_ID",
+        "HERDR_PLUGIN_ROOT",
+        "HERDR_PLUGIN_CONFIG_DIR",
+        "HERDR_PLUGIN_STATE_DIR",
+        "HERDR_PLUGIN_CONTEXT_JSON",
+        "HERDR_PLUGIN_ACTION_ID",
+        "HERDR_PLUGIN_EVENT",
+        "HERDR_PLUGIN_EVENT_JSON",
+        "HERDR_PLUGIN_ENTRYPOINT_ID",
+        "HERDR_PLUGIN_CLICKED_URL",
+        "HERDR_PLUGIN_LINK_HANDLER_ID",
+    ];
+
+    let mut command = env.command();
+    command
+        .arg("open-from-herdr")
+        .env("HERDR_PLUGIN_ACTION_ID", "open-zed")
+        .env("HERDR_SOCKET_PATH", &socket)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context.to_string())
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .env("ZERDR_TEST_ZED_ENV_FILE", &zed_env_file)
+        .env("HERDR_CONFIG_PATH", "/user/herdr-config.toml");
+    for variable in runtime_variables {
+        if !matches!(
+            variable,
+            "HERDR_SOCKET_PATH" | "HERDR_PLUGIN_CONTEXT_JSON" | "HERDR_PLUGIN_ACTION_ID"
+        ) {
+            command.env(variable, "injected");
+        }
+    }
+    command.assert().success();
+
+    let zed_env = fs::read_to_string(zed_env_file).unwrap();
+    for variable in runtime_variables {
+        assert!(
+            !zed_env
+                .lines()
+                .any(|line| line.starts_with(&format!("{variable}="))),
+            "{variable} leaked into Zed:\n{zed_env}"
+        );
+    }
+    assert!(
+        zed_env
+            .lines()
+            .any(|line| line == "HERDR_CONFIG_PATH=/user/herdr-config.toml"),
+        "{zed_env}"
+    );
+}
+
+#[test]
 fn one_shot_action_uses_nested_workspace_cwd_without_persisting_a_binding() {
     let env = TestEnv::new();
     let socket = env.root.path().join("default.sock");
