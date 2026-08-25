@@ -5,6 +5,12 @@ All notable changes to zerdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- The recommended Herdr keybinding for the Open Zed action is now `prefix+shift+z`: plain `prefix+z` is Herdr's built-in pane zoom, which shadows a command binding on the same key. `zerdr setup install` prints the updated example.
+
 ## v0.4.0
 
 _2026-08-25_

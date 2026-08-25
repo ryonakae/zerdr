@@ -33,13 +33,13 @@ To keep normal Herdr workspace switching independent from Zed, do not start the 
 
 ```toml
 [[keys.command]]
-key = "prefix+z"
+key = "prefix+shift+z"
 type = "plugin_action"
 command = "zerdr.open-zed"
 description = "open workspace in Zed"
 ```
 
-The action opens the current workspace in Zed once and leaves Zed in front. `zerdr setup install` prints this example but does not edit your Herdr configuration.
+`prefix+shift+z` keeps the Z-for-Zed mnemonic while staying clear of Herdr's defaults: plain `prefix+z` is Herdr's built-in pane zoom, which shadows a command binding on the same key. The action opens the current workspace in Zed once and leaves Zed in front. `zerdr setup install` prints this example but does not edit your Herdr configuration.
 
 ## Terminal threads
 

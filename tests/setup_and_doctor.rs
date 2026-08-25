@@ -68,7 +68,7 @@ fn setup_is_idempotent_and_installs_exact_plugin_and_tasks_without_config_change
 
     let first_output = env.command().args(["setup", "install"]).assert().success();
     let stdout = String::from_utf8_lossy(&first_output.get_output().stdout);
-    assert!(stdout.contains("prefix+z"), "{stdout}");
+    assert!(stdout.contains("prefix+shift+z"), "{stdout}");
     assert!(stdout.contains("plugin_action"), "{stdout}");
     assert!(stdout.contains("zerdr.open-zed"), "{stdout}");
     assert_eq!(fs::read_to_string(&herdr_config).unwrap(), "# user-owned\n");

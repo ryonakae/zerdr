@@ -1,5 +1,5 @@
 [[keys.command]]
-key = "prefix+z"
+key = "prefix+shift+z"
 type = "plugin_action"
 command = "zerdr.open-zed"
 description = "open workspace in Zed"
