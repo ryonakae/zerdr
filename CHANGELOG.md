@@ -5,7 +5,9 @@ All notable changes to zerdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - 2026-08-25
+## v0.4.0
+
+_2026-08-25_
 
 ### Added
 
@@ -13,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - While detached, each thread stays open in Zed, keeps its pane reserved, and keeps following the agent's title in the sidebar with a `[herdr⏸]` marker; the settle bell stays quiet. Threads opened while detach mode is on wait without attaching and connect together on `zerdr attach`.
 - Reattaching goes through the pane's current terminal, so it works whether or not the agent inside changed in the meantime; a pane that no longer exists ends its thread gracefully without disturbing the others.
 
-## [0.3.0] - 2026-08-24
+## v0.3.0
+
+_2026-08-24_
 
 ### Added
 
@@ -33,19 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `herdr worktree open` is anchored to the repository's parent checkout.
 - Setup writes through symlinked Zed configuration files instead of replacing the link.
 
-## [0.2.0] - 2026-08-20
+## v0.2.0
+
+_2026-08-20_
 
 ### Added
 
 - Shared named Herdr sessions: zerdr can target a named session alongside the default persistent one.
 
-## [0.1.0] - 2026-08-20
+## v0.1.0
+
+_2026-08-20_
 
 ### Added
 
 - Initial release: launch Herdr wrapped with Zed focus sync so selecting a Herdr workspace brings its Git checkout into Zed, with anchor-routed workspace synchronization, focus restoration, session-scoped bindings, an Open Zed plugin action for Herdr keybindings, and Homebrew packaging.
-
-[0.4.0]: https://github.com/ryonakae/zerdr/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/ryonakae/zerdr/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/ryonakae/zerdr/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/ryonakae/zerdr/releases/tag/v0.1.0
