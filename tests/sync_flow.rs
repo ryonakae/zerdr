@@ -187,7 +187,7 @@ fn every_manual_command_rejects_a_route_owner_mismatch_before_workspace_or_state
 }
 
 #[test]
-fn one_shot_action_without_a_live_lease_plain_opens_the_captured_checkout() {
+fn one_shot_action_without_a_live_lease_opens_the_captured_checkout_via_existing_window() {
     let env = TestEnv::new();
     let socket = env.root.path().join("default.sock");
     fs::write(&socket, "").unwrap();
@@ -215,7 +215,7 @@ fn one_shot_action_without_a_live_lease_plain_opens_the_captured_checkout() {
         env.read_log().lines().collect::<Vec<_>>(),
         vec![
             "herdr\tsession list --json",
-            &format!("zed\t{}", target.display()),
+            &format!("zed\t--existing {}", target.display()),
         ]
     );
     let paths = Paths::for_test(env.root.path());
@@ -250,7 +250,7 @@ fn one_shot_action_uses_nested_workspace_cwd_without_persisting_a_binding() {
 
     assert!(
         env.read_log()
-            .contains(&format!("zed\t{}", target.display()))
+            .contains(&format!("zed\t--existing {}", target.display()))
     );
     assert!(!Paths::for_test(env.root.path()).bindings_file.exists());
 }
@@ -285,7 +285,10 @@ fn one_shot_action_prefers_an_explicit_session_binding_over_context() {
         .success();
 
     let log = env.read_log();
-    assert!(log.contains(&format!("zed\t{}", bound.display())), "{log}");
+    assert!(
+        log.contains(&format!("zed\t--existing {}", bound.display())),
+        "{log}"
+    );
     assert!(!log.contains(&context_root.display().to_string()), "{log}");
     assert_eq!(fs::read(paths.bindings_file).unwrap(), original_bindings);
 }
@@ -519,7 +522,7 @@ fn one_shot_action_without_a_live_lease_ignores_a_stale_route() {
         log.lines()
             .filter(|line| line.starts_with("zed\t"))
             .collect::<Vec<_>>(),
-        vec![format!("zed\t{}", target.display())],
+        vec![format!("zed\t--existing {}", target.display())],
         "{log}"
     );
     assert_eq!(fs::read(route_path).unwrap(), original_route);
@@ -674,7 +677,7 @@ fn one_shot_action_keeps_the_captured_target_after_focus_changes_while_waiting_f
     assert!(child.wait().unwrap().success());
     let log = env.read_log();
     assert!(
-        log.contains(&format!("zed\t{}", captured.display())),
+        log.contains(&format!("zed\t--existing {}", captured.display())),
         "{log}"
     );
     assert!(!log.contains(&newly_focused.display().to_string()), "{log}");

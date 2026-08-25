@@ -39,7 +39,7 @@ command = "zerdr.open-zed"
 description = "open workspace in Zed"
 ```
 
-`prefix+shift+z` keeps the Z-for-Zed mnemonic while staying clear of Herdr's defaults: plain `prefix+z` is Herdr's built-in pane zoom, which shadows a command binding on the same key. The action opens the current workspace in Zed once and leaves Zed in front. `zerdr setup install` prints this example but does not edit your Herdr configuration.
+`prefix+shift+z` keeps the Z-for-Zed mnemonic while staying clear of Herdr's defaults: plain `prefix+z` is Herdr's built-in pane zoom, which shadows a command binding on the same key. The action brings the current workspace's Zed window to the front — opening the checkout first when no window has it — and leaves Zed in front. `zerdr setup install` prints this example but does not edit your Herdr configuration.
 
 ## Terminal threads
 
@@ -120,7 +120,7 @@ Start `zerdr start` in a Zed terminal whose current directory belongs to the tar
 
 Zed can reuse a window that contains the target project. Its CLI cannot force a new window when no window contains that project.
 
-The one-shot plugin action reuses an applicable live wrapper route. Without a wrapper, it runs `zed TARGET`, so window placement follows Zed's `cli_default_open_behavior` setting. A corrupt live route is reported instead of falling back to another window.
+The one-shot plugin action reuses an applicable live wrapper route. Without a wrapper, it runs `zed --existing TARGET`: a window that already has the checkout open comes to the front regardless of Zed's `cli_default_open_behavior` setting, and when no window has it, Zed opens the checkout with its existing-window handling — added to the active window's workspaces, or a new window when none is open. A corrupt live route is reported instead of falling back to another window.
 
 ## Requirements
 

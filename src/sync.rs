@@ -260,7 +260,7 @@ impl Synchronizer {
         let inspection =
             LeaseSet::new(self.paths.leases_dir.clone()).inspect_for(session_name, socket)?;
         match inspection.live_wrapper_pids.as_slice() {
-            [] => self.zed.open(&root),
+            [] => self.zed.activate_existing(&root),
             [wrapper_pid] => {
                 let route = RouteStore::new(self.paths.routes_dir.clone())
                     .load_for(session_name, socket)?;

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The recommended Herdr keybinding for the Open Zed action is now `prefix+shift+z`: plain `prefix+z` is Herdr's built-in pane zoom, which shadows a command binding on the same key. `zerdr setup install` prints the updated example.
+- Without a live wrapper, the Open Zed action now runs `zed --existing TARGET` instead of `zed TARGET`, so a Zed window that already has the checkout open comes to the front instead of a duplicate window opening. Zed's `"cli_default_open_behavior": "new_window"` never matches an already-open project root (its subpath matching excludes worktree roots), which made the plain form duplicate windows.
 
 ## v0.4.0
 
