@@ -672,6 +672,55 @@ fn bare_connect_makes_the_workspace_binds_it_and_starts_an_agent() {
     assert!(!stdout.contains("auto mode"), "{stdout:?}");
 }
 
+/// A reused workspace id must not inherit a stale binding to another checkout.
+#[test]
+fn bare_connect_refuses_a_created_workspace_id_bound_to_another_checkout() {
+    let fixture = Fixture::new();
+    let other = fixture.env.root.path().join("other-checkout");
+    fs::create_dir_all(&other).unwrap();
+    assert!(
+        ProcessCommand::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&other)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let other = other.canonicalize().unwrap();
+    BindingStore::new(fixture.paths().bindings_file.clone())
+        .bind("default", "w7", &other)
+        .unwrap();
+    let workspace = serde_json::json!({
+        "result": {
+            "workspace": {"workspace_id": "w7", "label": "checkout"},
+            "root_pane": {"pane_id": "w7:p1"}
+        }
+    });
+
+    fixture
+        .thread_command()
+        .arg("connect")
+        .env(
+            "ZERDR_TEST_WORKSPACES_JSON",
+            r#"{"result":{"workspaces":[]}}"#,
+        )
+        .env("ZERDR_TEST_WORKSPACE_CREATE_JSON", workspace.to_string())
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("workspace w7 is already bound"))
+        .stderr(predicate::str::contains(other.display().to_string()))
+        .stderr(predicate::str::contains(fixture.repo.display().to_string()));
+
+    let log = fixture.env.read_log();
+    assert!(log.contains("workspace create"), "{log}");
+    assert!(!log.contains("terminal attach"), "{log}");
+    let binding = BindingStore::new(fixture.paths().bindings_file)
+        .get("default", "w7")
+        .unwrap();
+    assert_eq!(binding, Some(other));
+}
+
 /// A linked worktree is registered with `herdr worktree open` so Herdr knows the
 /// checkout's provenance, whatever tool created the worktree. The label comes from
 /// Herdr's response, not the directory name.

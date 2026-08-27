@@ -335,7 +335,15 @@ fn resolve_or_create(
                     .workspace_create_for(session.name, &root, &label)?
             };
             let label = created.label.clone().unwrap_or(label);
-            bindings.bind_if_absent(session.name, &created.workspace_id, &root)?;
+            let bound_root = bindings.bind_if_absent(session.name, &created.workspace_id, &root)?;
+            if bound_root != root {
+                return Err(Error::User(format!(
+                    "Herdr workspace {} is already bound to {}; refusing to attach it to {}",
+                    created.workspace_id,
+                    bound_root.display(),
+                    root.display()
+                )));
+            }
             let (agent, lease, terminal) = start_and_lease(
                 session,
                 &created.workspace_id,

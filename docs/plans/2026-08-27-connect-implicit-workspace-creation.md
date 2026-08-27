@@ -147,7 +147,7 @@ Implementation-time minor file changes or internal differences belong in the rel
 - Green: `cargo test --test cli_contract && cargo test --test thread_flow`
 - Expected after implementation: all tests pass.
 
-**Result (2026-08-27):** Implemented through the public binary seam. `cli_contract` passes 24 tests and `thread_flow` passes 57 tests. Bare connects now create/register on miss; explicit targets, matching order, leases, auto fallback, and stopped-session no-spawn behavior remain covered. The existing "bound elsewhere" case now verifies that zerdr preserves the foreign binding and creates a distinct workspace for the current checkout.
+**Result (2026-08-27):** Implemented through the public binary seam. `cli_contract` passes 24 tests and `thread_flow` passes 58 tests. Bare connects now create/register on miss; explicit targets, matching order, leases, auto fallback, and stopped-session no-spawn behavior remain covered. The existing "bound elsewhere" case verifies that zerdr preserves the foreign binding and creates a distinct workspace for the current checkout. Independent review found that a newly created workspace ID could itself collide with a stale foreign binding; correction cycle 1 now checks `bind_if_absent`'s returned root and aborts before attach on mismatch, with a dedicated integration test.
 
 ### Task 2: Remove headless connect startup support and align documentation
 
