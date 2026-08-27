@@ -30,11 +30,8 @@ pub enum Command {
         /// Start an agent of this kind in a fresh pane instead of a plain shell.
         #[arg(long, conflicts_with = "target")]
         kind: Option<String>,
-        /// Create the Herdr session and workspace when they are missing.
-        #[arg(long, conflicts_with = "target")]
-        create: bool,
         /// Attach best-effort, and only while auto mode is enabled.
-        #[arg(long, hide = true, conflicts_with_all = ["target", "kind", "create"])]
+        #[arg(long, hide = true, conflicts_with_all = ["target", "kind"])]
         auto: bool,
     },
     /// Launch Herdr wrapped with Zed focus sync.

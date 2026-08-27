@@ -211,27 +211,6 @@ impl Herdr {
             .map_err(|error| Error::User(format!("failed to attach to Herdr {surface}: {error}")))
     }
 
-    /// Starts a named session's server headless, in its own process group so a
-    /// Ctrl-C aimed at the attached thread can never reach it, with the
-    /// standard streams detached (Herdr keeps its own log in the session
-    /// directory). The caller owns readiness polling; once the socket is up
-    /// the child is left running and never waited on again.
-    pub fn spawn_server_detached_for(&self, session_name: &str) -> Result<Child> {
-        use std::os::unix::process::CommandExt;
-        Command::new(&self.program)
-            .args(["--session", session_name, "server"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()
-            .map_err(|error| {
-                Error::User(format!(
-                    "failed to start the Herdr server for session {session_name:?}: {error}"
-                ))
-            })
-    }
-
     pub fn pane_terminal_for(&self, session_name: &str, pane_id: &str) -> Result<String> {
         let value = self.session_json_output_for(session_name, ["pane", "get", pane_id])?;
         value

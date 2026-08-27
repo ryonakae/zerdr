@@ -61,16 +61,10 @@ pub fn run() -> Result<()> {
         Command::Connect { auto: true, .. } => {
             thread::run_auto(explicit_session.unwrap_or(DEFAULT_SESSION_NAME))
         }
-        Command::Connect {
-            target,
-            kind,
-            create,
-            ..
-        } => thread::run(
+        Command::Connect { target, kind, .. } => thread::run(
             explicit_session.unwrap_or(DEFAULT_SESSION_NAME),
             target.as_deref(),
             kind.as_deref(),
-            *create,
         ),
         Command::Start { anchor } => {
             let routing = runtime::resolve_launch(anchor.as_deref())?;

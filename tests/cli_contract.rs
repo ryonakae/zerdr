@@ -365,13 +365,13 @@ fn unknown_commands_fail_with_clap_usage() {
 }
 
 #[test]
-fn connect_exposes_kind_and_create_and_hides_auto() {
+fn connect_exposes_kind_and_hides_internal_options() {
     cargo_bin_cmd!("zerdr")
         .args(["connect", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("--kind <KIND>"))
-        .stdout(predicate::str::contains("--create"))
+        .stdout(predicate::str::contains("--create").not())
         .stdout(predicate::str::contains("[TARGET]"))
         .stdout(predicate::str::contains("--auto").not())
         .stdout(predicate::str::contains("--enable").not())
@@ -379,25 +379,31 @@ fn connect_exposes_kind_and_create_and_hides_auto() {
 }
 
 #[test]
-fn connect_rejects_creation_options_alongside_an_explicit_target() {
-    for extra in [vec!["--kind", "pi"], vec!["--create"]] {
-        let env = TestEnv::new();
-        let mut args = vec!["connect", "wM:p8"];
-        args.extend(extra);
-        env.command()
-            .args(args)
-            .assert()
-            .code(2)
-            .stderr(predicate::str::contains("cannot be used with"));
-        assert_eq!(env.read_log(), "");
-    }
+fn connect_rejects_the_removed_create_option_without_contacting_herdr() {
+    let env = TestEnv::new();
+    env.command()
+        .args(["connect", "--create"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("unexpected argument '--create'"));
+    assert_eq!(env.read_log(), "");
+}
+
+#[test]
+fn connect_rejects_kind_alongside_an_explicit_target() {
+    let env = TestEnv::new();
+    env.command()
+        .args(["connect", "wM:p8", "--kind", "pi"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
+    assert_eq!(env.read_log(), "");
 }
 
 #[test]
 fn connect_auto_rejects_attach_options() {
-    let conflicting: [&[&str]; 3] = [
+    let conflicting: [&[&str]; 2] = [
         &["connect", "--auto", "--kind", "pi"],
-        &["connect", "--auto", "--create"],
         &["connect", "--auto", "wM:p8"],
     ];
     for args in conflicting {

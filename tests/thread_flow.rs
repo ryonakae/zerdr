@@ -397,55 +397,6 @@ fn generated_agent_names_skip_live_names() {
     assert!(log.contains("agent start zed-2 --kind pi"), "{log}");
 }
 
-#[test]
-fn a_bare_thread_without_a_matching_workspace_explains_the_create_flag() {
-    let fixture = Fixture::new();
-
-    fixture
-        .thread_command()
-        .arg("connect")
-        .env(
-            "ZERDR_TEST_WORKSPACES_JSON",
-            r#"{"result":{"workspaces":[]}}"#,
-        )
-        .assert()
-        .code(1)
-        .stderr(predicate::str::contains("zerdr workspace bind"))
-        .stderr(predicate::str::contains("zerdr connect --create"))
-        .stderr(predicate::str::contains(fixture.repo.display().to_string()));
-
-    assert!(!fixture.env.read_log().contains("workspace create"));
-}
-
-/// In an unmatched linked worktree the refusal explains what `--create` would do there:
-/// open the worktree as a Herdr workspace, not just "make one".
-#[test]
-fn a_bare_thread_in_a_worktree_explains_worktree_registration() {
-    let fixture = Fixture::new();
-    let worktree = fixture.linked_worktree("feature");
-
-    fixture
-        .thread_command()
-        .current_dir(&worktree)
-        .arg("connect")
-        .env(
-            "ZERDR_TEST_WORKSPACES_JSON",
-            r#"{"result":{"workspaces":[]}}"#,
-        )
-        .assert()
-        .code(1)
-        .stderr(predicate::str::contains(
-            "open this Git worktree as a Herdr workspace",
-        ))
-        .stderr(predicate::str::contains("zerdr connect --create"))
-        .stderr(predicate::str::contains("zerdr workspace bind"))
-        .stderr(predicate::str::contains(worktree.display().to_string()));
-
-    let log = fixture.env.read_log();
-    assert!(!log.contains("workspace create"), "{log}");
-    assert!(!log.contains("worktree open"), "{log}");
-}
-
 /// With auto mode enabled, `--auto` behaves exactly like a manual `zerdr connect`.
 #[test]
 fn auto_attaches_a_free_agent_while_the_mode_is_enabled() {
@@ -482,8 +433,8 @@ fn auto_attaches_a_free_agent_while_the_mode_is_enabled() {
     assert!(String::from_utf8_lossy(&output.stderr).is_empty());
 }
 
-/// An unmatched project no longer dead-ends: auto creates the workspace like an
-/// explicit `--create`, binds it, and lands in its plain shell.
+/// An unmatched project no longer dead-ends: auto creates the workspace like a
+/// manual bare connect, binds it, and lands in its plain shell.
 #[test]
 fn auto_without_a_matching_workspace_creates_and_binds_one() {
     let fixture = Fixture::new();
@@ -621,7 +572,7 @@ fn a_workspace_without_checkout_metadata_matches_by_pane_cwd_and_is_bound() {
 
 /// An explicit binding to another checkout wins over where the panes happen to sit.
 #[test]
-fn a_workspace_bound_elsewhere_is_not_matched_by_cwd() {
+fn a_workspace_bound_elsewhere_is_not_matched_and_a_new_one_is_created() {
     let fixture = Fixture::new();
     let other = fixture.env.root.path().join("other-checkout");
     fs::create_dir_all(&other).unwrap();
@@ -645,18 +596,39 @@ fn a_workspace_bound_elsewhere_is_not_matched_by_cwd() {
             "cwd": fixture.repo
         }]}
     });
+    let created = serde_json::json!({
+        "result": {
+            "workspace": {"workspace_id": "w7", "label": "checkout"},
+            "root_pane": {"pane_id": "w7:p1"}
+        }
+    });
 
-    fixture
-        .thread_command()
+    let output = fixture
+        .std_thread_command()
         .arg("connect")
         .env("ZERDR_TEST_WORKSPACES_JSON", workspaces.to_string())
-        .assert()
-        .code(1)
-        .stderr(predicate::str::contains("no Herdr workspace matches"));
+        .env("ZERDR_TEST_WORKSPACE_CREATE_JSON", created.to_string())
+        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let log = fixture.env.read_log();
+    assert!(!log.contains("agent attach w1:p1"), "{log}");
+    assert!(log.contains("workspace create"), "{log}");
+    assert!(log.contains("terminal attach term-w7:p1"), "{log}");
+    let bindings = BindingStore::new(fixture.paths().bindings_file);
+    assert_eq!(bindings.get("default", "w1").unwrap(), Some(other));
+    assert_eq!(
+        bindings.get("default", "w7").unwrap(),
+        Some(fixture.repo.clone())
+    );
 }
 
 #[test]
-fn create_makes_the_workspace_binds_it_and_starts_an_agent() {
+fn bare_connect_makes_the_workspace_binds_it_and_starts_an_agent() {
     let fixture = Fixture::new();
     let workspace = serde_json::json!({
         "result": {
@@ -667,7 +639,7 @@ fn create_makes_the_workspace_binds_it_and_starts_an_agent() {
 
     let output = fixture
         .std_thread_command()
-        .args(["connect", "--create"])
+        .arg("connect")
         .env(
             "ZERDR_TEST_WORKSPACES_JSON",
             r#"{"result":{"workspaces":[]}}"#,
@@ -704,7 +676,7 @@ fn create_makes_the_workspace_binds_it_and_starts_an_agent() {
 /// checkout's provenance, whatever tool created the worktree. The label comes from
 /// Herdr's response, not the directory name.
 #[test]
-fn create_registers_a_linked_worktree_via_worktree_open() {
+fn bare_connect_registers_a_linked_worktree_via_worktree_open() {
     let fixture = Fixture::new();
     let worktree = fixture.linked_worktree("feature");
     let opened = serde_json::json!({
@@ -717,7 +689,7 @@ fn create_registers_a_linked_worktree_via_worktree_open() {
     let output = fixture
         .std_thread_command()
         .current_dir(&worktree)
-        .args(["connect", "--create"])
+        .arg("connect")
         .env(
             "ZERDR_TEST_WORKSPACES_JSON",
             r#"{"result":{"workspaces":[]}}"#,
@@ -756,8 +728,8 @@ fn create_registers_a_linked_worktree_via_worktree_open() {
     assert!(status.contains("w8:p1"), "{stdout:?}");
 }
 
-/// Auto mode's create-on-miss shares the create path, so a worktree opened in Zed gets
-/// the same registration without an explicit `--create`.
+/// Auto mode's create-on-miss shares the manual path, so a worktree opened in Zed gets
+/// the same registration.
 #[test]
 fn auto_in_a_linked_worktree_creates_via_worktree_open() {
     let fixture = Fixture::new();
@@ -801,17 +773,17 @@ fn auto_in_a_linked_worktree_creates_via_worktree_open() {
     assert_eq!(bound, Some(worktree));
 }
 
-/// A failing `worktree open` must abort the create: falling back to a plain workspace
+/// A failing `worktree open` must abort the connect: falling back to a plain workspace
 /// would recreate exactly the unregistered-worktree state this path removes.
 #[test]
-fn a_failing_worktree_open_aborts_create_without_fallback() {
+fn a_failing_worktree_open_aborts_connect_without_fallback() {
     let fixture = Fixture::new();
     let worktree = fixture.linked_worktree("feature");
 
     fixture
         .thread_command()
         .current_dir(&worktree)
-        .args(["connect", "--create"])
+        .arg("connect")
         .env(
             "ZERDR_TEST_WORKSPACES_JSON",
             r#"{"result":{"workspaces":[]}}"#,
@@ -1677,94 +1649,25 @@ fn an_explicit_target_attach_is_remembered() {
     );
 }
 
-/// `--create` also covers the session: a not-running named session is started
-/// headless, and only then does the normal workspace create/attach flow run.
+/// A not-running named session stays an error that points to the wrapper,
+/// and connect never spawns a server process.
 #[test]
-fn create_starts_a_not_running_named_session_headless() {
-    let fixture = Fixture::new();
-    let sessions_file = fixture.env.root.path().join("sessions-live.json");
-    let work_socket = fixture.env.root.path().join("work.sock");
-    fs::write(&work_socket, "").unwrap();
-    let started = serde_json::json!({
-        "sessions": [
-            {"name": "default", "running": true, "socket_path": fixture.socket},
-            {"name": "work", "running": true, "socket_path": work_socket}
-        ]
-    });
-    let workspace = serde_json::json!({
-        "result": {
-            "workspace": {"workspace_id": "w7", "label": "checkout"},
-            "root_pane": {"pane_id": "w7:p1"}
-        }
-    });
-
-    let output = fixture
-        .std_thread_command()
-        .args(["connect", "--create", "--session", "work"])
-        .env("ZERDR_TEST_SESSIONS_FILE", &sessions_file)
-        .env("ZERDR_TEST_SESSIONS_STARTED_JSON", started.to_string())
-        .env(
-            "ZERDR_TEST_WORKSPACES_JSON",
-            r#"{"result":{"workspaces":[]}}"#,
-        )
-        .env("ZERDR_TEST_WORKSPACE_CREATE_JSON", workspace.to_string())
-        .env("ZERDR_TEST_ATTACH_RELEASE_FILE", "")
-        .spawn()
-        .unwrap()
-        .wait_with_output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-
-    let log = fixture.env.read_log();
-    let server = log.find("herdr\t--session work server").expect(&log);
-    let workspaces = log
-        .find("herdr\t--session work workspace list")
-        .expect(&log);
-    assert!(server < workspaces, "{log}");
-    assert!(
-        log.contains("--session work workspace create --cwd"),
-        "{log}"
-    );
-    assert!(log.contains("terminal attach term-w7:p1"), "{log}");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("started Herdr session work"), "{stdout:?}");
-    assert!(stdout.contains("created Herdr workspace"), "{stdout:?}");
-
-    let paths = fixture.paths();
-    let bound = BindingStore::new(paths.bindings_file.clone())
-        .get("work", "w7")
-        .unwrap();
-    assert_eq!(bound, Some(fixture.repo.clone()));
-    // Sessions started by connect get no route: sync stays inert until a
-    // `zerdr start` wrapper attaches.
-    assert!(!paths.routes_dir.exists());
-}
-
-/// Without `--create`, a not-running named session stays an error that points
-/// at `--create`, and no server process is spawned.
-#[test]
-fn connect_without_create_names_the_missing_session_and_starts_nothing() {
+fn connect_names_the_start_command_for_a_missing_named_session() {
     let fixture = Fixture::new();
     fixture
         .thread_command()
         .args(["connect", "--session", "work"])
         .assert()
         .code(1)
-        .stderr(predicate::str::contains(
-            "zerdr connect --create --session work",
-        ));
+        .stderr(predicate::str::contains("zerdr start --session work"));
     assert!(!fixture.env.read_log().contains(" server"));
 }
 
-/// The default session is only ever started by `zerdr start`, never by
-/// `connect --create`.
+/// The default session is only ever started by `zerdr start`, including when
+/// it is selected explicitly.
 #[test]
-fn create_never_starts_the_default_session() {
-    for args in [
-        vec!["connect", "--create"],
-        vec!["connect", "--create", "--session", "default"],
-    ] {
+fn connect_never_starts_the_default_session() {
+    for args in [vec!["connect"], vec!["connect", "--session", "default"]] {
         let fixture = Fixture::new();
         fixture
             .thread_command()
@@ -1785,47 +1688,19 @@ fn auto_never_starts_a_session_server() {
     let paths = fixture.paths();
     fs::create_dir_all(&paths.state_dir).unwrap();
     fs::write(&paths.thread_auto_flag_file, b"").unwrap();
-    let sessions_file = fixture.env.root.path().join("sessions-live.json");
-
     let assert = fixture
         .thread_command()
         .args(["connect", "--auto", "--session", "work"])
-        .env("ZERDR_TEST_SESSIONS_FILE", &sessions_file)
-        .env("ZERDR_TEST_SESSIONS_STARTED_JSON", fixture.sessions())
         .assert()
         .success();
     assert!(assert.get_output().stdout.is_empty());
     assert!(!fixture.env.read_log().contains(" server"));
 }
 
-/// A server that never registers its session fails the attach with a timeout
-/// naming the session instead of hanging.
+/// A bare connect against an already-running named session follows the
+/// existing attach flow without spawning a server.
 #[test]
-fn server_readiness_timeout_fails_with_the_session_name() {
-    let fixture = Fixture::new();
-    let sessions_file = fixture.env.root.path().join("sessions-live.json");
-
-    fixture
-        .thread_command()
-        .args(["connect", "--create", "--session", "work"])
-        .env("ZERDR_TEST_SESSIONS_FILE", &sessions_file)
-        .env("ZERDR_READY_TIMEOUT_MS", "200")
-        .assert()
-        .code(1)
-        .stderr(predicate::str::contains("timed out"))
-        .stderr(predicate::str::contains("work"));
-    assert!(
-        fixture
-            .env
-            .read_log()
-            .contains("herdr\t--session work server")
-    );
-}
-
-/// `--create` against an already-running named session must not spawn a
-/// second server; the existing attach flow runs unchanged.
-#[test]
-fn create_with_a_running_named_session_does_not_start_a_server() {
+fn connect_with_a_running_named_session_does_not_start_a_server() {
     let fixture = Fixture::new();
     let work_socket = fixture.env.root.path().join("work.sock");
     fs::write(&work_socket, "").unwrap();
@@ -1838,7 +1713,7 @@ fn create_with_a_running_named_session_does_not_start_a_server() {
 
     let output = fixture
         .std_thread_command()
-        .args(["connect", "--create", "--session", "work"])
+        .args(["connect", "--session", "work"])
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env(
             "ZERDR_TEST_PANE_COUNTER_FILE",
@@ -1854,8 +1729,6 @@ fn create_with_a_running_named_session_does_not_start_a_server() {
     let log = fixture.env.read_log();
     assert!(!log.contains(" server"), "{log}");
     assert!(log.contains("--session work tab create"), "{log}");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains("started Herdr session"), "{stdout:?}");
 }
 
 fn count_detach_markers(paths: &Paths) -> usize {

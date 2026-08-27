@@ -5,6 +5,12 @@ All notable changes to zerdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- **Breaking:** `zerdr connect` now creates and binds a missing Herdr workspace automatically, registering linked Git worktrees via `herdr worktree open`; the `--create` option has been removed. `connect` no longer starts stopped named sessions headless — launch them with `zerdr start --session NAME` so routing and focus sync are active from the start.
+
 ## v0.5.1
 
 _2026-08-25_

@@ -17,12 +17,6 @@ pub struct TestEnv {
 /// [`TestEnv::baked_herdr`]. Kept free of any per-invocation setup so the fake stays
 /// as cheap as the timing-sensitive wrapper tests expect.
 const FAKE_HERDR_BODY: &str = r##"printf 'herdr\t%s\n' "$*" >> "$ZERDR_TEST_LOG"
-if [ "$1" = "--session" ] && [ "$3" = "server" ]; then
-  if [ -n "$ZERDR_TEST_SESSIONS_STARTED_JSON" ] && [ -n "$ZERDR_TEST_SESSIONS_FILE" ]; then
-    printf '%s\n' "$ZERDR_TEST_SESSIONS_STARTED_JSON" > "$ZERDR_TEST_SESSIONS_FILE"
-  fi
-  exec sleep "${ZERDR_TEST_SERVER_SLEEP:-5}"
-fi
 if [ "$1" = "--session" ] && [ "$3" = "workspace" ] && [ "$4" = "list" ]; then
   if [ -n "$ZERDR_TEST_WORKSPACE_LIST_MARKER" ]; then
     : > "$ZERDR_TEST_WORKSPACE_LIST_MARKER"
@@ -245,11 +239,7 @@ case "$*" in
       : > "$ZERDR_TEST_SESSION_READY_FILE"
       while [ ! -e "$ZERDR_TEST_SESSION_RELEASE_FILE" ]; do sleep 0.01; done
     fi
-    if [ -n "$ZERDR_TEST_SESSIONS_FILE" ] && [ -f "$ZERDR_TEST_SESSIONS_FILE" ]; then
-      while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line"; done < "$ZERDR_TEST_SESSIONS_FILE"
-    else
-      printf '%s\n' "$ZERDR_TEST_SESSIONS_JSON"
-    fi
+    printf '%s\n' "$ZERDR_TEST_SESSIONS_JSON"
     ;;
   "plugin link "*)
     if [ "${ZERDR_TEST_PLUGIN_LINK_FAIL:-0}" = "1" ]; then

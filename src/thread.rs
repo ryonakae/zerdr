@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
@@ -48,34 +48,24 @@ pub fn run_auto(session_name: &str) -> Result<()> {
         );
         return Ok(());
     }
-    let _ = run_with_mode(session_name, None, None, true, true);
+    let _ = run_with_mode(session_name, None, None, true);
     Ok(())
 }
 
-pub fn run(
-    session_name: &str,
-    target: Option<&str>,
-    kind: Option<&str>,
-    create: bool,
-) -> Result<()> {
-    run_with_mode(session_name, target, kind, create, false)
+pub fn run(session_name: &str, target: Option<&str>, kind: Option<&str>) -> Result<()> {
+    run_with_mode(session_name, target, kind, false)
 }
 
 fn run_with_mode(
     session_name: &str,
     target: Option<&str>,
     kind: Option<&str>,
-    create: bool,
     auto: bool,
 ) -> Result<()> {
     let herdr = Herdr::from_env();
     let paths = Paths::discover()?;
     let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
-    let (socket, started_session) =
-        resolve_session_socket(&herdr, &leases, session_name, create, auto)?;
-    if started_session {
-        println!("zerdr: started Herdr session {session_name}");
-    }
+    let socket = resolve_session_socket(&herdr, session_name)?;
 
     let session = Session {
         herdr: &herdr,
@@ -98,7 +88,7 @@ fn run_with_mode(
             }
             (agent, lease, None, Attachment::Agent)
         }
-        None => resolve_or_create(&session, &memory, &paths, kind, create)?,
+        None => resolve_or_create(&session, &memory, &paths, kind)?,
     };
 
     // Without the workspace list there is no way to tell whether this workspace is
@@ -283,72 +273,20 @@ fn cycle_interval() -> Duration {
     )
 }
 
-/// Resolves the session socket, starting a headless server for a not-running
-/// named session when `--create` allows it. The default session is only ever
-/// started by `zerdr start` (which sets up routing and sync), and the auto
-/// path never spawns servers: a best-effort init command must not create
-/// background processes. Returns whether this call started the session.
-fn resolve_session_socket(
-    herdr: &Herdr,
-    leases: &ThreadLeaseSet,
-    session_name: &str,
-    create: bool,
-    auto: bool,
-) -> Result<(PathBuf, bool)> {
+/// Resolves an already-running session. Session startup belongs to `zerdr start`,
+/// which also establishes routing and focus sync.
+fn resolve_session_socket(herdr: &Herdr, session_name: &str) -> Result<PathBuf> {
     if let Some(socket) = herdr.session_socket_if_running(session_name)? {
-        return Ok((socket, false));
+        return Ok(socket);
     }
     if session_name == DEFAULT_SESSION_NAME {
         return Err(Error::User(
             "the default Herdr session is not running; launch it with `zerdr start`".to_owned(),
         ));
     }
-    if !create || auto {
-        return Err(Error::User(format!(
-            "Herdr session {session_name:?} is not running; run `zerdr connect --create --session {session_name}` to start it"
-        )));
-    }
-
-    // Two connects racing on the same missing session must not spawn two
-    // servers, so the start sequence is serialized per session name and the
-    // session list is re-checked under the lock.
-    let _serialize = OperationGuard::acquire(&leases.session_start_lock_path(session_name))?;
-    if let Some(socket) = herdr.session_socket_if_running(session_name)? {
-        return Ok((socket, false));
-    }
-    let mut server = herdr.spawn_server_detached_for(session_name)?;
-    let timeout_ms = std::env::var("ZERDR_READY_TIMEOUT_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(5_000);
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        if let Some(socket) = herdr.session_socket_if_running(session_name)? {
-            return Ok((socket, true));
-        }
-        match server.try_wait() {
-            Ok(Some(status)) => {
-                return Err(Error::User(format!(
-                    "the Herdr server for session {session_name:?} exited with status {} before its socket appeared",
-                    status.code().unwrap_or(1)
-                )));
-            }
-            Ok(None) => {}
-            Err(error) => {
-                return Err(Error::User(format!(
-                    "failed to wait for the Herdr session server: {error}"
-                )));
-            }
-        }
-        if Instant::now() >= deadline {
-            let _ = server.kill();
-            let _ = server.wait();
-            return Err(Error::User(format!(
-                "timed out waiting for the {session_name} Herdr session socket"
-            )));
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
+    Err(Error::User(format!(
+        "Herdr session {session_name:?} is not running; launch it with `zerdr start --session {session_name}`"
+    )))
 }
 
 /// Resolve the pane for a bare invocation, creating a tab or workspace when needed.
@@ -359,7 +297,6 @@ fn resolve_or_create(
     memory: &ThreadPaneMemory,
     paths: &Paths,
     kind: Option<&str>,
-    create: bool,
 ) -> Result<(AgentInfo, ThreadLeaseGuard, Option<String>, Attachment)> {
     let cwd = std::env::current_dir()
         .map_err(|error| Error::User(format!("failed to read the current directory: {error}")))?;
@@ -380,23 +317,6 @@ fn resolve_or_create(
     let workspace_id = match match_workspace(session, &bindings, &workspaces, &root)? {
         Some(workspace_id) => workspace_id,
         None => {
-            if !create {
-                // In a linked worktree the refusal names what `--create` does there, so
-                // the user knows registration (not a plain workspace) is one flag away.
-                let message = if linked_worktree_parent(&root).is_ok_and(|parent| parent.is_some())
-                {
-                    format!(
-                        "no Herdr workspace matches {}; run `zerdr connect --create` to open this Git worktree as a Herdr workspace, or bind one with `zerdr workspace bind`",
-                        root.display()
-                    )
-                } else {
-                    format!(
-                        "no Herdr workspace matches {}; bind an existing workspace with `zerdr workspace bind` or run `zerdr connect --create` to make one",
-                        root.display()
-                    )
-                };
-                return Err(Error::User(message));
-            }
             let label = root.file_name().map_or_else(
                 || root.display().to_string(),
                 |name| name.to_string_lossy().into_owned(),
