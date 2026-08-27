@@ -207,17 +207,25 @@ Implementation-time minor file changes or internal differences belong in the rel
 
 ## Final Validation
 
-- [ ] `cargo test --test cli_contract` — Expected: all CLI contract tests pass.
-- [ ] `cargo test --test thread_flow` — Expected: all connect flows pass, including implicit primary/worktree creation and stopped-session no-spawn cases.
-- [ ] `cargo fmt --all -- --check` — Expected: no formatting diff.
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings` — Expected: no warnings.
-- [ ] `cargo test --all-targets --all-features` — Expected: all tests pass.
-- [ ] `rg -n --glob '!docs/plans/**' --glob '!CHANGELOG.md' --glob '!tests/cli_contract.rs' -- '--create|spawn_server_detached_for|session_start_lock_path|ZERDR_TEST_SESSIONS_FILE|ZERDR_TEST_SESSIONS_STARTED_JSON|ZERDR_TEST_SERVER_SLEEP|started Herdr session|headless' src tests README.md AGENTS.md` — Expected: no matches; `tests/cli_contract.rs` intentionally pins rejection of the removed option.
-- [ ] `cargo run --locked -- connect --help` — Expected: public help matches the new contract and README.
-- [ ] Manual real-environment validation: N/A by default because automated integration tests cover the Herdr argv and repository safety guidance forbids environment-facing setup operations. If a developer chooses to smoke-test later, use an isolated already-running session and disposable checkout; do not start or mutate the normal development session.
-- [ ] Requirement Coverage has no unaddressed rows.
-- [ ] The plan and actual changes are consistent.
-- [ ] After all checks succeed, move this file unchanged to `docs/plans/archived/`.
+- [x] `cargo test --test cli_contract` — 24 passed at `8535dcb`; the same suite passed within the final full run at `a025079`.
+- [x] `cargo test --test thread_flow` — 58 passed at `a025079`, including implicit create/register, stopped-session no-spawn, and two-step binding-collision coverage.
+- [x] `cargo fmt --all -- --check` — no formatting diff at the content committed as `a025079`.
+- [x] `cargo clippy --all-targets --all-features -- -D warnings` — no warnings at the content committed as `a025079`.
+- [x] `cargo test --all-targets --all-features` — 235 tests passed at `a025079` (24 + 20 + 52 + 25 + 56 + 58; unit targets contain no tests).
+- [x] `rg -n --glob '!docs/plans/**' --glob '!CHANGELOG.md' --glob '!tests/cli_contract.rs' -- '--create|spawn_server_detached_for|session_start_lock_path|ZERDR_TEST_SESSIONS_FILE|ZERDR_TEST_SESSIONS_STARTED_JSON|ZERDR_TEST_SERVER_SLEEP|started Herdr session|headless' src tests README.md AGENTS.md` — no matches; `tests/cli_contract.rs` intentionally pins rejection of the removed option.
+- [x] `cargo run --locked -- connect --help` — public help matches the new contract and README, with no `--create`.
+- [x] Manual real-environment validation: N/A; isolated binary integration tests cover Herdr argv and state behavior without modifying the developer's environment.
+- [x] Requirement Coverage has no unaddressed rows.
+- [x] The plan and actual changes are consistent.
+- [x] After all checks succeeded, this file was moved unchanged to `docs/plans/archived/`.
+
+## Independent Review Gate
+
+- Review range: `1495967..8535dcb`; reviewer found one blocking binding-ownership path and two low test-coverage observations.
+- Correction cycle 1: `1f25380` stopped immediate attach when a created workspace ID collided with a foreign binding. Scoped review found a later checkout-metadata retry could still bypass ownership.
+- Correction cycle 2: `a025079` applies the ownership check to both creation and checkout-metadata matching. Scoped re-review found no blocking/high, decision-required, or new medium/low findings and marked the change mergeable.
+- Unresolved blocking/high or decision-required findings: none.
+- Low findings left unchanged: no direct concurrent workspace-miss/create integration test; explicit-TARGET coverage does not exercise a non-Git cwd. Existing resolve-lock structure and direct-target branch were reviewed as correct.
 
 ## Risks and Open Questions
 
