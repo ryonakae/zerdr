@@ -14,7 +14,7 @@ use predicates::prelude::*;
 use sha2::Digest;
 use support::{TestEnv, compatible_plugins_json};
 
-const OWNED_LABELS: [&str; 1] = ["zerdr: Herdr"];
+const OWNED_LABELS: [&str; 3] = ["zerdr: Herdr", "zerdr: Detach", "zerdr: Attach"];
 
 #[test]
 fn remote_doctor_reports_all_markers_without_processes_locks_or_cleanup() {
@@ -71,20 +71,52 @@ fn setup_is_idempotent_and_installs_exact_plugin_and_tasks_without_config_change
     assert!(stdout.contains("prefix+shift+z"), "{stdout}");
     assert!(stdout.contains("plugin_action"), "{stdout}");
     assert!(stdout.contains("zerdr.open-zed"), "{stdout}");
+    assert!(
+        stdout.contains(r#""task_name": "zerdr: Detach""#),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(r#""task_name": "zerdr: Attach""#),
+        "{stdout}"
+    );
     assert_eq!(fs::read_to_string(&herdr_config).unwrap(), "# user-owned\n");
 
     let tasks_path = env.root.path().join("zed/tasks.json");
     let first = fs::read_to_string(&tasks_path).unwrap();
     let root = CstRootNode::parse(&first, &ParseOptions::default()).unwrap();
-    let values = root.array_value().unwrap().elements();
-    assert_eq!(values.len(), 1);
+    let values = root
+        .array_value()
+        .unwrap()
+        .elements()
+        .iter()
+        .map(|element| element.to_serde_value().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(values.len(), 3);
     for label in OWNED_LABELS {
-        assert!(first.contains(label), "{first}");
+        assert_eq!(
+            values.iter().filter(|task| task["label"] == label).count(),
+            1,
+            "{first}"
+        );
     }
-    assert!(first.contains(r#""args": ["start", "--anchor", "$ZED_WORKTREE_ROOT"]"#));
-    assert!(first.contains(r#""allow_concurrent_runs": true"#));
-    assert!(first.contains(r#""use_new_terminal": true"#));
-    assert!(first.contains(r#""hide": "never""#));
+    let herdr = values
+        .iter()
+        .find(|task| task["label"] == "zerdr: Herdr")
+        .unwrap();
+    assert_eq!(
+        herdr["args"],
+        serde_json::json!(["start", "--anchor", "$ZED_WORKTREE_ROOT"])
+    );
+    assert_eq!(herdr["allow_concurrent_runs"], true);
+    assert_eq!(herdr["use_new_terminal"], true);
+    assert_eq!(herdr["hide"], "never");
+    for (label, subcommand) in [("zerdr: Detach", "detach"), ("zerdr: Attach", "attach")] {
+        let task = values.iter().find(|task| task["label"] == label).unwrap();
+        assert_eq!(task["args"], serde_json::json!([subcommand]));
+        assert_eq!(task["use_new_terminal"], false);
+        assert_eq!(task["reveal"], "no_focus");
+        assert_eq!(task["hide"], "on_success");
+    }
     assert!(!env.root.path().join("zed/keymap.json").exists());
     let manifest_path = env.root.path().join("data/plugin-v1/herdr-plugin.toml");
     let manifest = fs::read_to_string(&manifest_path).unwrap();
@@ -229,7 +261,7 @@ fn setup_restores_a_missing_owned_task() {
 }
 
 #[test]
-fn generated_task_command_executes_when_the_binary_path_contains_spaces() {
+fn generated_task_commands_execute_when_the_binary_path_contains_spaces() {
     let env = TestEnv::new();
     let installed_dir = env.root.path().join("installed bin");
     fs::create_dir_all(&installed_dir).unwrap();
@@ -243,26 +275,25 @@ fn generated_task_command_executes_when_the_binary_path_contains_spaces() {
         .success();
     let tasks = fs::read_to_string(env.root.path().join("zed/tasks.json")).unwrap();
     let root = CstRootNode::parse(&tasks, &ParseOptions::default()).unwrap();
-    let task = root
+    let tasks = root
         .array_value()
         .unwrap()
         .elements()
         .iter()
         .map(|element| element.to_serde_value().unwrap())
-        .find(|task| task["label"] == "zerdr: Herdr")
-        .unwrap();
-    let command = task["command"].as_str().unwrap();
-    assert_eq!(
-        task["args"],
-        serde_json::json!(["start", "--anchor", "$ZED_WORKTREE_ROOT"])
-    );
-    assert!(
-        ProcessCommand::new("sh")
-            .args(["-c", &format!("{command} --help >/dev/null")])
-            .status()
-            .unwrap()
-            .success()
-    );
+        .collect::<Vec<_>>();
+    for label in OWNED_LABELS {
+        let task = tasks.iter().find(|task| task["label"] == label).unwrap();
+        let command = task["command"].as_str().unwrap();
+        assert!(
+            ProcessCommand::new("sh")
+                .args(["-c", &format!("{command} --help >/dev/null")])
+                .status()
+                .unwrap()
+                .success(),
+            "{label}"
+        );
+    }
 }
 
 #[test]
@@ -393,8 +424,10 @@ fn setup_removes_stale_owned_tasks_recorded_by_an_older_install() {
     let install: serde_json::Value =
         serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
     let fingerprints = install["task_fingerprints"].as_object().unwrap();
-    assert_eq!(fingerprints.len(), 1, "{fingerprints:?}");
-    assert!(fingerprints.contains_key("zerdr: Herdr"));
+    assert_eq!(fingerprints.len(), 3, "{fingerprints:?}");
+    for label in OWNED_LABELS {
+        assert!(fingerprints.contains_key(label));
+    }
 }
 
 #[test]

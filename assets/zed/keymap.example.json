@@ -4,5 +4,12 @@
     "bindings": {
       "ctrl-alt-t": ["terminal::SendText", "zerdr connect\n"]
     }
+  },
+  {
+    "context": "Workspace",
+    "bindings": {
+      "ctrl-alt-d": ["task::Spawn", { "task_name": "zerdr: Detach" }],
+      "ctrl-alt-a": ["task::Spawn", { "task_name": "zerdr: Attach" }]
+    }
   }
 ]

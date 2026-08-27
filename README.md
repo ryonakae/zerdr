@@ -20,7 +20,7 @@ cargo install --git https://github.com/ryonakae/zerdr --locked
 
 ## Quickstart
 
-Install the Herdr focus hook, Open Zed action, and the Zed task, then open the default Herdr session with Zed routing enabled:
+Install the Herdr focus hook, Open Zed action, and the Zed tasks, then open the default Herdr session with Zed routing enabled:
 
 ```bash
 zerdr setup install
@@ -90,6 +90,8 @@ zerdr attach
 
 Every thread reconnects to its pane, whether or not the agent inside changed in the meantime. Threads opened while detach mode is on wait the same way and connect on `zerdr attach`.
 
+Because an attached terminal thread is still occupied by `zerdr connect`, `zerdr setup install` also installs global `zerdr: Detach` and `zerdr: Attach` Zed tasks. Run them from Zed's task picker; they use a separate task terminal without taking focus and hide it after success. For one-keystroke access, copy the optional `task::Spawn` bindings printed by setup into your Zed keymap.
+
 ### Named sessions
 
 `zerdr connect --session NAME` attaches to a running named Herdr session. If it is stopped, launch it with `zerdr start --session NAME`; `connect` never starts sessions itself. Keeping startup under `start` ensures the session has zerdr's route and focus sync from the beginning.
@@ -100,10 +102,12 @@ Every thread reconnects to its pane, whether or not the agent inside changed in 
 |---|---|
 | `zerdr connect [TARGET] [--session NAME]` | Connect a Zed terminal thread to a Herdr agent or a fresh shell tab, creating a workspace when needed; `TARGET` is a pane id or agent name. Add `--kind KIND` to start an agent in a fresh tab. |
 | `zerdr start [--session NAME] [--anchor PATH]` | Open or attach the default or named Herdr session with Zed routing. |
+| `zerdr detach` | Suspend every Zed terminal thread's Herdr attachment. |
+| `zerdr attach` | Resume every suspended terminal thread's Herdr attachment. |
 | `zerdr workspace sync [--session NAME]` | Reapply the focused Herdr workspace route to Zed. |
 | `zerdr workspace bind [PATH] [--session NAME]` | Bind the selected workspace to a Git checkout; sync it when a wrapper is live. |
 | `zerdr workspace unbind [--session NAME]` | Remove the selected workspace binding. |
-| `zerdr setup install` | Install or update the Herdr plugin and the global "zerdr: Herdr" Zed task. |
+| `zerdr setup install` | Install or update the Herdr plugin and the global Herdr, Detach, and Attach Zed tasks. |
 | `zerdr setup uninstall [--purge]` | Remove integration files, the owned init command, and the auto-mode flag; `--purge` removes zerdr state too. |
 | `zerdr setup doctor [--session NAME]` | Check required commands, installed files, bindings, routes, leases, and auto mode for the selected session. |
 | `zerdr setup auto enable\|disable` | Toggle auto mode; the first `enable` installs `zerdr connect --auto` as Zed's `agent.terminal_init_command`. |
@@ -133,7 +137,7 @@ The one-shot plugin action reuses an applicable live wrapper route. Without a wr
 
 ## Notes
 
-- **Keybindings:** `zerdr setup install` adds the global Zed task and prints optional Herdr and Zed keybindings. It does not edit your Herdr config or Zed keymap.
+- **Keybindings:** `zerdr setup install` adds the global Zed tasks and prints optional Herdr and Zed keybindings. It does not edit your Herdr config or Zed keymap.
 - **Terminal thread automation:** `zerdr setup install` never writes `agent.terminal_init_command`; automation is opt-in via `zerdr setup auto enable`, which records ownership so `zerdr setup uninstall` can remove the value again (with a backup under zerdr's state directory). `zerdr setup doctor` reports the mode informationally. With the mode enabled, restored terminal threads reattach after a Zed restart; disable the mode if you want a quiet restart.
 - **One thread per agent:** two terminal threads never share an agent. Attaching an agent that already has a thread fails and names the pane.
 - **Wrapper ownership:** Each Herdr session can have one live zerdr wrapper. Wrappers for different named sessions can coexist.

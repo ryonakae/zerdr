@@ -14,7 +14,7 @@ use crate::error::{Error, Result};
 use crate::herdr::Herdr;
 use crate::state::{LeaseSet, LifecycleGuard, Paths};
 
-const OWNED_LABELS: [&str; 1] = ["zerdr: Herdr"];
+const OWNED_LABELS: [&str; 3] = ["zerdr: Herdr", "zerdr: Detach", "zerdr: Attach"];
 const INSTALL_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,7 +244,7 @@ pub fn setup() -> Result<()> {
 
     println!("zerdr setup install complete");
     println!(
-        "Attach a Zed terminal thread to Herdr by running `zerdr connect` inside it.\nOptional automation: run `zerdr setup auto enable` to attach every new terminal thread automatically."
+        "Attach a Zed terminal thread to Herdr by running `zerdr connect` inside it.\nOptional automation: run `zerdr setup auto enable` to attach every new terminal thread automatically.\nUse Zed's task picker for `zerdr: Detach` and `zerdr: Attach`; they run outside attached threads."
     );
     println!(
         "Add this Herdr keybinding manually if desired:\n{}",

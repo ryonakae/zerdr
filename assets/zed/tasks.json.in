@@ -7,5 +7,21 @@
     "use_new_terminal": true,
     "reveal": "always",
     "hide": "never"
+  },
+  {
+    "label": "zerdr: Detach",
+    "command": @ZERDR_EXECUTABLE@,
+    "args": ["detach"],
+    "use_new_terminal": false,
+    "reveal": "no_focus",
+    "hide": "on_success"
+  },
+  {
+    "label": "zerdr: Attach",
+    "command": @ZERDR_EXECUTABLE@,
+    "args": ["attach"],
+    "use_new_terminal": false,
+    "reveal": "no_focus",
+    "hide": "on_success"
   }
 ]
