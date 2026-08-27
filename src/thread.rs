@@ -336,14 +336,7 @@ fn resolve_or_create(
             };
             let label = created.label.clone().unwrap_or(label);
             let bound_root = bindings.bind_if_absent(session.name, &created.workspace_id, &root)?;
-            if bound_root != root {
-                return Err(Error::User(format!(
-                    "Herdr workspace {} is already bound to {}; refusing to attach it to {}",
-                    created.workspace_id,
-                    bound_root.display(),
-                    root.display()
-                )));
-            }
+            ensure_binding_matches_root(&created.workspace_id, &bound_root, &root)?;
             let (agent, lease, terminal) = start_and_lease(
                 session,
                 &created.workspace_id,
@@ -491,13 +484,18 @@ fn match_workspace(
             return Ok(Some(workspace.id.clone()));
         }
     }
-    if let Some(workspace) = workspaces.iter().find(|workspace| {
-        workspace
+    for workspace in workspaces {
+        let checkout_matches = workspace
             .checkout_path
             .as_deref()
             .and_then(|checkout| checkout.canonicalize().ok())
-            .is_some_and(|checkout| checkout == root)
-    }) {
+            .is_some_and(|checkout| checkout == root);
+        if !checkout_matches {
+            continue;
+        }
+        if let Some(bound_root) = bindings.get(session.name, &workspace.id)? {
+            ensure_binding_matches_root(&workspace.id, &bound_root, root)?;
+        }
         return Ok(Some(workspace.id.clone()));
     }
     for workspace in workspaces {
@@ -520,6 +518,17 @@ fn match_workspace(
         }
     }
     Ok(None)
+}
+
+fn ensure_binding_matches_root(workspace_id: &str, bound_root: &Path, root: &Path) -> Result<()> {
+    if bound_root == root {
+        return Ok(());
+    }
+    Err(Error::User(format!(
+        "Herdr workspace {workspace_id} is already bound to {}; refusing to attach it to {}",
+        bound_root.display(),
+        root.display()
+    )))
 }
 
 /// One line telling the user what this thread is now connected to, so a plain local
