@@ -5,6 +5,14 @@ All notable changes to zerdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.7.0
+
+_2026-08-27_
+
+### Added
+
+- `zerdr setup install` now adds global `zerdr: Detach` and `zerdr: Attach` Zed tasks, so attached terminal threads can be suspended and resumed from Zed's task picker without needing a free shell. The tasks run without taking focus, hide their terminal after success, and setup prints optional direct keybindings.
+
 ## v0.6.0
 
 _2026-08-27_
