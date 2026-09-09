@@ -20,7 +20,7 @@ cargo install --git https://github.com/ryonakae/zerdr --locked
 
 ## Quickstart
 
-Install the Herdr focus hook, Open Zed action, and the Zed tasks, then open the default Herdr session with Zed routing enabled:
+Install the Herdr event hooks, Open Zed action, and the Zed task, then open the default Herdr session with Zed routing enabled:
 
 ```bash
 zerdr setup install
@@ -76,21 +76,11 @@ To select text with the mouse while attached, hold Shift and drag: the Herdr cli
 
 ### Sharing the session with a small client
 
-An attached thread pins its Herdr pane to the thread terminal's size, so opening the same session from a much smaller client — a phone terminal over SSH — shows those panes clipped to the wrong grid. Suspend every thread's attach first:
+An attached thread pins its Herdr pane to the thread terminal's size, so a much smaller client — a phone terminal over SSH — would see that pane clipped to the wrong grid. zerdr releases the attach for you: when another Herdr client selects the pane, the thread detaches, prints one notice line, and Herdr sizes the pane for the client that selected it. The thread stays open in Zed, keeps its pane reserved, and keeps following the agent's title in the sidebar with a `[herdr⏸]` marker (notifications stay quiet).
 
-```bash
-zerdr detach
-```
+Back in Zed, the thread reattaches as soon as you return to it: selecting the thread in the sidebar, clicking inside it, or pressing any key (the key is not passed to the agent). Bringing the Zed window to the front while the thread has focus counts as returning, too. The pane goes back to the thread's size, whether or not the agent inside changed in the meantime.
 
-Each thread stays open in Zed, keeps its pane reserved, and keeps following the agent's title in the sidebar with a `[herdr⏸]` marker (notifications stay quiet); the panes themselves are free to fit whichever Herdr client you use next. The command waits until every thread has confirmed, and works over SSH — run it from the phone before launching `herdr`. Back at your desk:
-
-```bash
-zerdr attach
-```
-
-Every thread reconnects to its pane, whether or not the agent inside changed in the meantime. Threads opened while detach mode is on wait the same way and connect on `zerdr attach`.
-
-Because an attached terminal thread is still occupied by `zerdr connect`, `zerdr setup install` also installs global `zerdr: Detach` and `zerdr: Attach` Zed tasks. Run them from Zed's task picker; they use a separate task terminal without taking focus and hide it after success. For one-keystroke access, copy the optional `task::Spawn` bindings printed by setup into your Zed keymap.
+Herdr reports a pane as focused only when the focus changes, so a client that connects while the pane is already its focused pane does not trigger the detach; select another pane and come back. Zed threads and a full-size Herdr client on the same desk share this rule: selecting the pane in the other client takes it, returning to the thread takes it back.
 
 ### Named sessions
 
@@ -102,12 +92,10 @@ Because an attached terminal thread is still occupied by `zerdr connect`, `zerdr
 |---|---|
 | `zerdr connect [TARGET] [--session NAME]` | Connect a Zed terminal thread to a Herdr agent or a fresh shell tab, creating a workspace when needed; `TARGET` is a pane id or agent name. Add `--kind KIND` to start an agent in a fresh tab. |
 | `zerdr start [--session NAME] [--anchor PATH]` | Open or attach the default or named Herdr session with Zed routing. |
-| `zerdr detach` | Suspend every Zed terminal thread's Herdr attachment. |
-| `zerdr attach` | Resume every suspended terminal thread's Herdr attachment. |
 | `zerdr workspace sync [--session NAME]` | Reapply the focused Herdr workspace route to Zed. |
 | `zerdr workspace bind [PATH] [--session NAME]` | Bind the selected workspace to a Git checkout; sync it when a wrapper is live. |
 | `zerdr workspace unbind [--session NAME]` | Remove the selected workspace binding. |
-| `zerdr setup install` | Install or update the Herdr plugin and the global Herdr, Detach, and Attach Zed tasks. |
+| `zerdr setup install` | Install or update the Herdr plugin and the global Herdr Zed task. |
 | `zerdr setup uninstall [--purge]` | Remove integration files, the owned init command, and the auto-mode flag; `--purge` removes zerdr state too. |
 | `zerdr setup doctor [--session NAME]` | Check required commands, installed files, bindings, routes, leases, and auto mode for the selected session. |
 | `zerdr setup auto enable\|disable` | Toggle auto mode; the first `enable` installs `zerdr connect --auto` as Zed's `agent.terminal_init_command`. |
@@ -137,7 +125,7 @@ The one-shot plugin action reuses an applicable live wrapper route. Without a wr
 
 ## Notes
 
-- **Keybindings:** `zerdr setup install` adds the global Zed tasks and prints optional Herdr and Zed keybindings. It does not edit your Herdr config or Zed keymap.
+- **Keybindings:** `zerdr setup install` adds the global Zed task and prints optional Herdr and Zed keybindings. It does not edit your Herdr config or Zed keymap.
 - **Terminal thread automation:** `zerdr setup install` never writes `agent.terminal_init_command`; automation is opt-in via `zerdr setup auto enable`, which records ownership so `zerdr setup uninstall` can remove the value again (with a backup under zerdr's state directory). `zerdr setup doctor` reports the mode informationally. With the mode enabled, restored terminal threads reattach after a Zed restart; disable the mode if you want a quiet restart.
 - **One thread per agent:** two terminal threads never share an agent. Attaching an agent that already has a thread fails and names the pane.
 - **Wrapper ownership:** Each Herdr session can have one live zerdr wrapper. Wrappers for different named sessions can coexist.

@@ -5,6 +5,14 @@ All notable changes to zerdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.8.0
+
+_2026-09-09_
+
+### Changed
+
+- **Breaking:** attached terminal threads now detach on their own when another Herdr client selects their pane, and reattach when you return to the thread in Zed — selecting it in the sidebar, clicking it, or pressing a key. The manual `zerdr detach` and `zerdr attach` commands, the `zerdr: Detach` and `zerdr: Attach` Zed tasks, and their keybinding examples are gone; the next `zerdr setup install` removes the two tasks from your Zed tasks file (a copy you modified is left alone). Rerun `zerdr setup install` after upgrading: the Herdr plugin manifest gains a `pane.focused` hook, and `zerdr start`, `zerdr setup doctor`, and `zerdr setup auto enable` require it.
+
 ## v0.7.0
 
 _2026-08-27_
