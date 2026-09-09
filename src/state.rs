@@ -4,7 +4,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use directories::ProjectDirs;
 use fs2::FileExt;
@@ -986,6 +986,8 @@ pub struct ThreadLeaseRecord {
 /// to release its attach. Existence-based like the lease markers: the hook only
 /// creates it and the connect only removes it, so a reader never sees a torn state.
 const DETACH_REQUEST_EXTENSION: &str = "detach-request";
+/// Per-workspace focus stamps in a lease scope; see [`ThreadLeaseGuard::mark_focus`].
+const FOCUS_STAMP_EXTENSION: &str = "focus-stamp";
 
 /// Per-pane leases that stop two bare `zerdr connect` invocations from attaching to the
 /// same Herdr agent. Unlike [`LeaseSet`] a scope holds many live leases at once, so the
@@ -1300,6 +1302,33 @@ pub struct ThreadLeaseGuard {
 impl ThreadLeaseGuard {
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Records that a connect in this session scope just focused `workspace_id`. Herdr
+    /// answers a workspace focus with `pane.focused` for that workspace's focused pane,
+    /// which may belong to any thread in the scope, so the stamp is shared by all of
+    /// them rather than kept in the focusing process.
+    pub fn mark_focus(&self, workspace_id: &str) -> Result<()> {
+        let stamp = self.focus_stamp_path(workspace_id);
+        fs::write(&stamp, b"").map_err(|error| Error::io(&stamp, error))
+    }
+
+    /// How long ago a connect in this scope last focused `workspace_id`, if ever.
+    pub fn focus_age(&self, workspace_id: &str) -> Option<Duration> {
+        fs::metadata(self.focus_stamp_path(workspace_id))
+            .ok()?
+            .modified()
+            .ok()?
+            .elapsed()
+            .ok()
+    }
+
+    fn focus_stamp_path(&self, workspace_id: &str) -> PathBuf {
+        let scope = self.path.parent().unwrap_or(&self.path);
+        scope.join(format!(
+            "focus-{}.{FOCUS_STAMP_EXTENSION}",
+            path_hash(Path::new(workspace_id))
+        ))
     }
 
     /// Consumes a pending detach request from the plugin hook, reporting whether

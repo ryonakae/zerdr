@@ -588,3 +588,26 @@ fn detach_request_marks_only_the_live_lease_for_the_socket_and_pane() {
     assert!(!lease_path.exists());
     assert!(!orphan.exists());
 }
+
+#[test]
+fn a_focus_stamp_is_shared_by_every_lease_in_the_scope() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let socket = state.path().join("herdr.sock");
+    fs::write(&socket, "").unwrap();
+    let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
+    let first = leases.acquire("default", &socket, "w1:p1").unwrap();
+    let second = leases.acquire("default", &socket, "w1:p2").unwrap();
+
+    assert!(first.focus_age("w1").is_none());
+    second.mark_focus("w1").unwrap();
+    let age = first
+        .focus_age("w1")
+        .expect("the sibling's focus is visible");
+    assert!(age < Duration::from_secs(5), "{age:?}");
+    assert!(first.focus_age("w2").is_none(), "stamps are per workspace");
+    // Stamps live beside the leases but never disturb the request scan.
+    assert!(leases.request_detach(&socket, "w1:p1").unwrap());
+    assert!(first.take_detach_request().unwrap());
+    assert!(first.focus_age("w1").is_some());
+}

@@ -1900,7 +1900,7 @@ fn a_request_inside_the_grace_window_after_the_own_focus_is_dropped() {
     command
         .arg("connect")
         .env("ZERDR_TEST_WORKSPACES_JSON", fixture.workspaces(false))
-        .env("ZERDR_THREAD_FOCUS_GRACE_MS", "600");
+        .env("ZERDR_THREAD_FOCUS_GRACE_MS", "1500");
     let mut thread = attached_pty_thread(&fixture, command);
     let log = fixture.env.read_log();
     assert!(log.contains("workspace focus w1"), "{log}");
@@ -1918,7 +1918,7 @@ fn a_request_inside_the_grace_window_after_the_own_focus_is_dropped() {
     );
     assert!(thread.is_running());
 
-    thread::sleep(Duration::from_millis(600));
+    thread::sleep(Duration::from_millis(1500));
     hook_command(&fixture, "w1:p1").assert().success();
     thread.wait_for_output(DETACHED_NOTICE);
 
@@ -1926,6 +1926,60 @@ fn a_request_inside_the_grace_window_after_the_own_focus_is_dropped() {
     wait_for_log(&fixture.env, "terminal attach term-w1:p1");
     fixture.release_attach();
     assert!(thread.wait().success());
+}
+
+/// A second thread connecting to the same workspace focuses it, and Herdr answers with
+/// pane.focused for the workspace's focused pane — which may be the first thread's.
+/// That echo must not detach the sibling either.
+#[test]
+fn a_request_echoing_a_sibling_connects_focus_is_dropped() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    fixture.agent("zed-2", "w1:p2", "w1", "idle", "write tests");
+    let paths = fixture.paths();
+    let mut first = fixture.std_thread_command();
+    first
+        .arg("connect")
+        .env("ZERDR_THREAD_FOCUS_GRACE_MS", "1500");
+    let mut first = attached_pty_thread(&fixture, first);
+    assert!(!fixture.env.read_log().contains("workspace focus"));
+
+    let mut second = fixture.std_thread_command();
+    second
+        .arg("connect")
+        .env("ZERDR_TEST_WORKSPACES_JSON", fixture.workspaces(false))
+        .env("ZERDR_THREAD_FOCUS_GRACE_MS", "1500");
+    let mut second = PtyChild::spawn(second);
+    wait_for_log(&fixture.env, "agent attach w1:p2");
+    let log = fixture.env.read_log();
+    assert!(log.contains("workspace focus w1"), "{log}");
+
+    hook_command(&fixture, "w1:p1").assert().success();
+    wait_until("the request to be consumed", || {
+        count_detach_requests(&paths) == 0
+    });
+    thread::sleep(Duration::from_millis(200));
+    assert!(
+        !first.output().contains(DETACHED_NOTICE),
+        "{}",
+        first.output()
+    );
+    assert!(first.is_running());
+
+    thread::sleep(Duration::from_millis(1500));
+    hook_command(&fixture, "w1:p1").assert().success();
+    first.wait_for_output(DETACHED_NOTICE);
+    assert!(
+        !second.output().contains(DETACHED_NOTICE),
+        "{}",
+        second.output()
+    );
+
+    first.write(FOCUS_IN);
+    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
+    fixture.release_attach();
+    assert!(first.wait().success());
+    assert!(second.wait().success());
 }
 
 #[test]
