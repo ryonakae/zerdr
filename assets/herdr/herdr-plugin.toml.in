@@ -13,3 +13,7 @@ command = [@ZERDR_EXECUTABLE@, "open-from-herdr"]
 [[events]]
 on = "workspace.focused"
 command = [@ZERDR_EXECUTABLE@, "sync-from-herdr"]
+
+[[events]]
+on = "pane.focused"
+command = [@ZERDR_EXECUTABLE@, "detach-from-herdr"]

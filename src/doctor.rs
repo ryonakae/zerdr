@@ -10,8 +10,8 @@ use serde_json::Value;
 use crate::error::{Error, Result};
 use crate::herdr::Herdr;
 use crate::setup::{
-    InstallState, fingerprint, generated_tasks, installed_init_command, load_install_state,
-    owned_labels, plugin_has_complete_action, terminal_init_command,
+    EVENT_HOOKS, InstallState, fingerprint, generated_tasks, installed_init_command,
+    load_install_state, owned_labels, plugin_has_complete_action, terminal_init_command,
 };
 use crate::state::{
     BindingStore, LeaseSet, LifecycleGuard, Paths, RouteStore, RouteStrategy, canonical_git_root,
@@ -88,7 +88,7 @@ pub fn doctor(session_name: &str) -> Result<()> {
             report.pass("Herdr zerdr Open Zed action is registered");
         } else {
             report.fail(
-                "Herdr zerdr plugin is missing, disabled, or lacks the exact Open Zed action; run `zerdr setup install`",
+                "Herdr zerdr plugin is missing, disabled, or lacks the exact Open Zed action or event hooks; run `zerdr setup install`",
             );
         }
     }
@@ -287,19 +287,23 @@ fn inspect_manifest(paths: &Paths, install: &InstallState) -> Result<()> {
     let text = fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
     let manifest: PluginManifest = toml::from_str(&text)
         .map_err(|error| Error::User(format!("generated Herdr manifest is invalid: {error}")))?;
-    let expected_command = vec![
-        install.executable.display().to_string(),
-        "sync-from-herdr".to_owned(),
-    ];
     let expected_action_command = vec![
         install.executable.display().to_string(),
         "open-from-herdr".to_owned(),
     ];
-    let focus_events = manifest
-        .events
-        .iter()
-        .filter(|event| event.on == "workspace.focused")
-        .collect::<Vec<_>>();
+    let exact_event = |on: &str, subcommand: &str| {
+        let events = manifest
+            .events
+            .iter()
+            .filter(|event| event.on == on)
+            .collect::<Vec<_>>();
+        events.len() == 1
+            && events[0].command
+                == [
+                    install.executable.display().to_string(),
+                    subcommand.to_owned(),
+                ]
+    };
     let open_actions = manifest
         .actions
         .iter()
@@ -307,8 +311,9 @@ fn inspect_manifest(paths: &Paths, install: &InstallState) -> Result<()> {
         .collect::<Vec<_>>();
     let compatible = manifest.id == "zerdr"
         && manifest.min_herdr_version == "0.8.0"
-        && focus_events.len() == 1
-        && focus_events[0].command == expected_command
+        && EVENT_HOOKS
+            .iter()
+            .all(|(on, subcommand)| exact_event(on, subcommand))
         && open_actions.len() == 1
         && open_actions[0].title == "Open Zed"
         && open_actions[0].contexts == ["workspace"]

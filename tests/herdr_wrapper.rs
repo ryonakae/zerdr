@@ -113,51 +113,88 @@ fn named_launcher_attaches_the_matching_herdr_session() {
     );
 }
 
+/// The launcher needs the event hooks but not the Open Zed action: an installation
+/// that predates the action still starts, while one that predates the `pane.focused`
+/// hook is sent back to `zerdr setup install`.
 #[test]
-fn launcher_accepts_an_event_only_pre_action_installation() {
+fn launcher_accepts_a_pre_action_installation_but_requires_both_event_hooks() {
     let env = TestEnv::new();
     env.prepare_launcher();
     let paths = Paths::for_test(env.root.path());
     let executable = assert_cmd::cargo::cargo_bin!("zerdr").display().to_string();
-    fs::write(
-        paths.plugin_dir.join("herdr-plugin.toml"),
-        format!(
-            r#"id = "zerdr"
-name = "zerdr"
-version = "0.1.0"
-min_herdr_version = "0.8.0"
-platforms = ["macos", "linux"]
-
-[[events]]
-on = "workspace.focused"
-command = [{executable:?}, "sync-from-herdr"]
-"#
-        ),
-    )
-    .unwrap();
-    let plugins = serde_json::json!({
-        "result":{"plugins":[{
-            "plugin_id":"zerdr",
-            "enabled":true,
-            "events":[{
-                "on":"workspace.focused",
-                "command":[executable,"sync-from-herdr"]
-            }]
-        }]}
-    });
     let socket = env.root.path().join("herdr.sock");
     fs::write(&socket, "").unwrap();
     let sessions = serde_json::json!({
         "sessions":[{"name":"default","running":true,"socket_path":socket}]
     });
-
     let anchor = anchor_repo(&env);
+    let focus_event = format!(
+        r#"[[events]]
+on = "workspace.focused"
+command = [{executable:?}, "sync-from-herdr"]
+"#
+    );
+    let pane_event = format!(
+        r#"[[events]]
+on = "pane.focused"
+command = [{executable:?}, "detach-from-herdr"]
+"#
+    );
+    let header = r#"id = "zerdr"
+name = "zerdr"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+platforms = ["macos", "linux"]
+
+"#;
+    let focus_json = serde_json::json!({
+        "on":"workspace.focused",
+        "command":[executable.clone(),"sync-from-herdr"]
+    });
+    let pane_json = serde_json::json!({
+        "on":"pane.focused",
+        "command":[executable.clone(),"detach-from-herdr"]
+    });
+    let registry = |events: Vec<serde_json::Value>| {
+        serde_json::json!({
+            "result":{"plugins":[{"plugin_id":"zerdr","enabled":true,"events":events}]}
+        })
+        .to_string()
+    };
+
+    fs::write(
+        paths.plugin_dir.join("herdr-plugin.toml"),
+        format!("{header}{focus_event}"),
+    )
+    .unwrap();
+    env.command()
+        .arg("start")
+        .arg("--anchor")
+        .arg(&anchor)
+        .env(
+            "ZERDR_TEST_PLUGINS_JSON",
+            registry(vec![focus_json.clone()]),
+        )
+        .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("run `zerdr setup install`"));
+    assert!(!env.read_log().lines().any(|line| line == "herdr\t"));
+
+    fs::write(
+        paths.plugin_dir.join("herdr-plugin.toml"),
+        format!("{header}{focus_event}\n{pane_event}"),
+    )
+    .unwrap();
     env.command()
         .arg("start")
         .arg("--anchor")
         .arg(&anchor)
         .env("ZERDR_TEST_HERDR_SLEEP", "0.1")
-        .env("ZERDR_TEST_PLUGINS_JSON", plugins.to_string())
+        .env(
+            "ZERDR_TEST_PLUGINS_JSON",
+            registry(vec![focus_json, pane_json]),
+        )
         .env("ZERDR_TEST_SESSIONS_JSON", sessions.to_string())
         .env(
             "ZERDR_TEST_WORKSPACES_JSON",
@@ -165,7 +202,6 @@ command = [{executable:?}, "sync-from-herdr"]
         )
         .assert()
         .success();
-
     assert!(env.read_log().lines().any(|line| line == "herdr\t"));
 }
 

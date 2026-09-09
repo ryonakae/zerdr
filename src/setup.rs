@@ -14,7 +14,7 @@ use crate::error::{Error, Result};
 use crate::herdr::Herdr;
 use crate::state::{LeaseSet, LifecycleGuard, Paths};
 
-const OWNED_LABELS: [&str; 3] = ["zerdr: Herdr", "zerdr: Detach", "zerdr: Attach"];
+const OWNED_LABELS: [&str; 1] = ["zerdr: Herdr"];
 const INSTALL_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +46,7 @@ pub(crate) fn validate_launcher_installation(paths: &Paths, herdr: &Herdr) -> Re
     let plugins = herdr.plugin_list().map_err(setup_guidance)?;
     if !plugin_is_compatible(&plugins) {
         return Err(setup_guidance(Error::User(
-            "Herdr zerdr plugin is missing, disabled, or lacks workspace.focused".to_owned(),
+            "Herdr zerdr plugin is missing, disabled, or lacks its event hooks".to_owned(),
         )));
     }
     let install = load_install_state(&paths.install_state_file)
@@ -80,21 +80,25 @@ pub(crate) fn validate_launcher_installation(paths: &Paths, herdr: &Herdr) -> Re
         .executable
         .canonicalize()
         .map_err(|error| setup_guidance(Error::io(&install.executable, error)))?;
-    let focus_events = manifest
-        .events
-        .iter()
-        .filter(|event| event.on == "workspace.focused")
-        .collect::<Vec<_>>();
-    let compatible_event = focus_events.len() == 1
-        && focus_events[0].command.len() == 2
-        && focus_events[0].command[1] == "sync-from-herdr"
-        && Path::new(&focus_events[0].command[0])
-            .canonicalize()
-            .is_ok_and(|event_executable| event_executable == current);
+    let compatible_event = |on: &str, subcommand: &str| {
+        let events = manifest
+            .events
+            .iter()
+            .filter(|event| event.on == on)
+            .collect::<Vec<_>>();
+        events.len() == 1
+            && events[0].command.len() == 2
+            && events[0].command[1] == subcommand
+            && Path::new(&events[0].command[0])
+                .canonicalize()
+                .is_ok_and(|event_executable| event_executable == current)
+    };
     let compatible_manifest = manifest.id == "zerdr"
         && manifest.min_herdr_version == "0.8.0"
         && installed == current
-        && compatible_event;
+        && EVENT_HOOKS
+            .iter()
+            .all(|(on, subcommand)| compatible_event(on, subcommand));
     if compatible_manifest {
         Ok(())
     } else {
@@ -104,14 +108,21 @@ pub(crate) fn validate_launcher_installation(paths: &Paths, herdr: &Herdr) -> Re
     }
 }
 
+/// The plugin event hooks zerdr registers: Herdr event name and the hidden zerdr
+/// subcommand it runs.
+pub(crate) const EVENT_HOOKS: [(&str, &str); 2] = [
+    ("workspace.focused", "sync-from-herdr"),
+    ("pane.focused", "detach-from-herdr"),
+];
+
 pub(crate) fn plugin_is_compatible(value: &Value) -> bool {
-    compatible_plugin(value).is_some_and(|plugin| has_focus_event(plugin, None))
+    compatible_plugin(value).is_some_and(|plugin| has_event_hooks(plugin, None))
 }
 
 pub(crate) fn plugin_has_complete_action(value: &Value, executable: &Path) -> bool {
     let expected = executable.display().to_string();
     compatible_plugin(value).is_some_and(|plugin| {
-        has_focus_event(plugin, Some(&expected))
+        has_event_hooks(plugin, Some(&expected))
             && plugin
                 .get("actions")
                 .and_then(Value::as_array)
@@ -149,24 +160,24 @@ fn compatible_plugin(value: &Value) -> Option<&Value> {
         })
 }
 
-fn has_focus_event(plugin: &Value, executable: Option<&str>) -> bool {
-    plugin
-        .get("events")
-        .and_then(Value::as_array)
-        .map(|events| {
-            events
-                .iter()
-                .filter(|event| {
-                    event.get("on").and_then(Value::as_str) == Some("workspace.focused")
-                })
-                .collect::<Vec<_>>()
-        })
-        .is_some_and(|events| {
-            events.len() == 1
-                && executable.is_none_or(|executable| {
-                    action_command_matches(events[0], executable, "sync-from-herdr")
-                })
-        })
+fn has_event_hooks(plugin: &Value, executable: Option<&str>) -> bool {
+    EVENT_HOOKS.iter().all(|(on, subcommand)| {
+        plugin
+            .get("events")
+            .and_then(Value::as_array)
+            .map(|events| {
+                events
+                    .iter()
+                    .filter(|event| event.get("on").and_then(Value::as_str) == Some(*on))
+                    .collect::<Vec<_>>()
+            })
+            .is_some_and(|events| {
+                events.len() == 1
+                    && executable.is_none_or(|executable| {
+                        action_command_matches(events[0], executable, subcommand)
+                    })
+            })
+    })
 }
 
 fn action_command_matches(value: &Value, executable: &str, subcommand: &str) -> bool {
@@ -244,7 +255,7 @@ pub fn setup() -> Result<()> {
 
     println!("zerdr setup install complete");
     println!(
-        "Attach a Zed terminal thread to Herdr by running `zerdr connect` inside it.\nOptional automation: run `zerdr setup auto enable` to attach every new terminal thread automatically.\nUse Zed's task picker for `zerdr: Detach` and `zerdr: Attach`; they run outside attached threads."
+        "Attach a Zed terminal thread to Herdr by running `zerdr connect` inside it.\nOptional automation: run `zerdr setup auto enable` to attach every new terminal thread automatically."
     );
     println!(
         "Add this Herdr keybinding manually if desired:\n{}",

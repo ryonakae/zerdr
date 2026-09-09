@@ -14,7 +14,7 @@ use predicates::prelude::*;
 use sha2::Digest;
 use support::{TestEnv, compatible_plugins_json};
 
-const OWNED_LABELS: [&str; 3] = ["zerdr: Herdr", "zerdr: Detach", "zerdr: Attach"];
+const OWNED_LABELS: [&str; 1] = ["zerdr: Herdr"];
 
 #[test]
 fn remote_doctor_reports_all_markers_without_processes_locks_or_cleanup() {
@@ -71,14 +71,9 @@ fn setup_is_idempotent_and_installs_exact_plugin_and_tasks_without_config_change
     assert!(stdout.contains("prefix+shift+z"), "{stdout}");
     assert!(stdout.contains("plugin_action"), "{stdout}");
     assert!(stdout.contains("zerdr.open-zed"), "{stdout}");
-    assert!(
-        stdout.contains(r#""task_name": "zerdr: Detach""#),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains(r#""task_name": "zerdr: Attach""#),
-        "{stdout}"
-    );
+    assert!(!stdout.contains("zerdr: Detach"), "{stdout}");
+    assert!(!stdout.contains("zerdr: Attach"), "{stdout}");
+    assert!(!stdout.contains("task picker"), "{stdout}");
     assert_eq!(fs::read_to_string(&herdr_config).unwrap(), "# user-owned\n");
 
     let tasks_path = env.root.path().join("zed/tasks.json");
@@ -91,7 +86,7 @@ fn setup_is_idempotent_and_installs_exact_plugin_and_tasks_without_config_change
         .iter()
         .map(|element| element.to_serde_value().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(values.len(), 3);
+    assert_eq!(values.len(), 1);
     for label in OWNED_LABELS {
         assert_eq!(
             values.iter().filter(|task| task["label"] == label).count(),
@@ -110,33 +105,29 @@ fn setup_is_idempotent_and_installs_exact_plugin_and_tasks_without_config_change
     assert_eq!(herdr["allow_concurrent_runs"], true);
     assert_eq!(herdr["use_new_terminal"], true);
     assert_eq!(herdr["hide"], "never");
-    for (label, subcommand) in [("zerdr: Detach", "detach"), ("zerdr: Attach", "attach")] {
-        let task = values.iter().find(|task| task["label"] == label).unwrap();
-        assert_eq!(task["args"], serde_json::json!([subcommand]));
-        assert_eq!(task["use_new_terminal"], false);
-        assert_eq!(task["reveal"], "no_focus");
-        assert_eq!(task["hide"], "on_success");
-    }
     assert!(!env.root.path().join("zed/keymap.json").exists());
     let manifest_path = env.root.path().join("data/plugin-v1/herdr-plugin.toml");
     let manifest = fs::read_to_string(&manifest_path).unwrap();
     let parsed: toml::Value = toml::from_str(&manifest).unwrap();
     let executable = assert_cmd::cargo::cargo_bin!("zerdr").display().to_string();
-    assert_eq!(
-        parsed["events"],
-        toml::Value::Array(vec![toml::Value::Table(toml::Table::from_iter([
-            (
-                "on".to_owned(),
-                toml::Value::String("workspace.focused".to_owned()),
-            ),
+    let event = |on: &str, subcommand: &str| {
+        toml::Value::Table(toml::Table::from_iter([
+            ("on".to_owned(), toml::Value::String(on.to_owned())),
             (
                 "command".to_owned(),
                 toml::Value::Array(vec![
                     toml::Value::String(executable.clone()),
-                    toml::Value::String("sync-from-herdr".to_owned()),
+                    toml::Value::String(subcommand.to_owned()),
                 ]),
             ),
-        ]))])
+        ]))
+    };
+    assert_eq!(
+        parsed["events"],
+        toml::Value::Array(vec![
+            event("workspace.focused", "sync-from-herdr"),
+            event("pane.focused", "detach-from-herdr"),
+        ])
     );
     assert_eq!(
         parsed["actions"],
@@ -207,6 +198,16 @@ command = [{executable:?}, "sync-from-herdr"]
 
         let upgraded: toml::Value =
             toml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        let events = upgraded["events"].as_array().unwrap();
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[1]["on"].as_str(), Some("pane.focused"));
+        assert_eq!(
+            events[1]["command"].as_array().unwrap(),
+            &[
+                toml::Value::String(executable.clone()),
+                toml::Value::String("detach-from-herdr".to_owned()),
+            ]
+        );
         let actions = upgraded["actions"].as_array().unwrap();
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0]["id"].as_str(), Some("open-zed"));
@@ -424,7 +425,7 @@ fn setup_removes_stale_owned_tasks_recorded_by_an_older_install() {
     let install: serde_json::Value =
         serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
     let fingerprints = install["task_fingerprints"].as_object().unwrap();
-    assert_eq!(fingerprints.len(), 3, "{fingerprints:?}");
+    assert_eq!(fingerprints.len(), OWNED_LABELS.len(), "{fingerprints:?}");
     for label in OWNED_LABELS {
         assert!(fingerprints.contains_key(label));
     }
@@ -884,6 +885,10 @@ on = "other.event"
 command = ["other"]
 
 [[events]]
+on = "pane.focused"
+command = [{executable:?}, "detach-from-herdr"]
+
+[[events]]
 on = "workspace.focused"
 command = [{executable:?}, "sync-from-herdr"]
 "#
@@ -902,6 +907,7 @@ command = [{executable:?}, "sync-from-herdr"]
                 ],
                 "events":[
                     {"on":"other.event","command":["other"]},
+                    {"on":"pane.focused","command":[executable.clone(),"detach-from-herdr"]},
                     {"on":"workspace.focused","command":[executable,"sync-from-herdr"]}
                 ]
             }
@@ -928,12 +934,16 @@ fn doctor_rejects_each_malformed_or_disabled_action_installation() {
         "command",
         "executable",
         "disabled",
+        "pane-event",
     ] {
         let env = TestEnv::new();
         env.command().args(["setup", "install"]).assert().success();
         let mut plugins = compatible_plugins_json();
         let plugin = &mut plugins["result"]["plugins"][0];
         match mutation {
+            "pane-event" => {
+                plugin["events"].as_array_mut().unwrap().pop();
+            }
             "id" => plugin["actions"][0]["id"] = "wrong".into(),
             "title" => plugin["actions"][0]["title"] = "Wrong".into(),
             "contexts" => plugin["actions"][0]["contexts"] = serde_json::json!(["global"]),
@@ -1956,4 +1966,107 @@ fn parse_settings(text: &str) -> serde_json::Value {
     let parsed: Option<serde_json::Value> =
         jsonc_parser::parse_to_serde_value(text, &ParseOptions::default()).unwrap();
     parsed.unwrap()
+}
+
+/// A v0.7.0 install wrote `zerdr: Detach` and `zerdr: Attach`; upgrading removes the
+/// byte-owned copies and leaves a user-modified one alone, like any stale owned task.
+#[test]
+fn setup_removes_the_detach_and_attach_tasks_of_a_previous_install() {
+    let env = TestEnv::new();
+    env.command().args(["setup", "install"]).assert().success();
+    let paths = Paths::for_test(env.root.path());
+    let executable = assert_cmd::cargo::cargo_bin!("zerdr").display().to_string();
+    let detach = serde_json::json!({
+        "label": "zerdr: Detach",
+        "command": executable,
+        "args": ["detach"],
+        "use_new_terminal": false,
+        "reveal": "no_focus",
+        "hide": "on_success"
+    });
+    let mut attach = detach.clone();
+    attach["label"] = "zerdr: Attach".into();
+    attach["args"] = serde_json::json!(["attach"]);
+    let mut tasks: Vec<serde_json::Value> =
+        serde_json::from_slice(&fs::read(&paths.zed_tasks_file).unwrap()).unwrap();
+    tasks.push(detach.clone());
+    let mut modified_attach = attach.clone();
+    modified_attach["reveal"] = "always".into();
+    tasks.push(modified_attach);
+    fs::write(
+        &paths.zed_tasks_file,
+        serde_json::to_vec_pretty(&tasks).unwrap(),
+    )
+    .unwrap();
+    let mut install: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
+    let fingerprints = install["task_fingerprints"].as_object_mut().unwrap();
+    for task in [&detach, &attach] {
+        let bytes = serde_json::to_vec(task).unwrap();
+        fingerprints.insert(
+            task["label"].as_str().unwrap().to_owned(),
+            hex::encode(sha2::Sha256::digest(&bytes)).into(),
+        );
+    }
+    fs::write(
+        &paths.install_state_file,
+        serde_json::to_vec(&install).unwrap(),
+    )
+    .unwrap();
+
+    let assert = env.command().args(["setup", "install"]).assert().success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains(r#"preserving modified or foreign Zed task "zerdr: Attach""#),
+        "{stderr}"
+    );
+    let remaining = fs::read_to_string(&paths.zed_tasks_file).unwrap();
+    assert!(!remaining.contains("zerdr: Detach"), "{remaining}");
+    assert!(remaining.contains("zerdr: Attach"), "{remaining}");
+    assert_eq!(remaining.matches("zerdr: Herdr").count(), 1, "{remaining}");
+    let install: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.install_state_file).unwrap()).unwrap();
+    let fingerprints = install["task_fingerprints"].as_object().unwrap();
+    assert_eq!(fingerprints.len(), 1, "{fingerprints:?}");
+    assert!(fingerprints.contains_key("zerdr: Herdr"));
+}
+
+#[test]
+fn doctor_fails_a_manifest_without_the_pane_focused_event() {
+    let env = TestEnv::new();
+    env.command().args(["setup", "install"]).assert().success();
+    let paths = Paths::for_test(env.root.path());
+    let executable = assert_cmd::cargo::cargo_bin!("zerdr").display().to_string();
+    fs::write(
+        paths.plugin_dir.join("herdr-plugin.toml"),
+        format!(
+            r#"id = "zerdr"
+name = "zerdr"
+version = "0.7.0"
+min_herdr_version = "0.8.0"
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "open-zed"
+title = "Open Zed"
+contexts = ["workspace"]
+command = [{executable:?}, "open-from-herdr"]
+
+[[events]]
+on = "workspace.focused"
+command = [{executable:?}, "sync-from-herdr"]
+"#
+        ),
+    )
+    .unwrap();
+
+    env.command()
+        .args(["setup", "doctor"])
+        .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains(
+            "generated Herdr manifest lacks the exact event or Open Zed action command",
+        ))
+        .stdout(predicates::str::contains("run `zerdr setup install`"));
 }

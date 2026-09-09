@@ -392,13 +392,22 @@ pub fn compatible_plugins_json() -> serde_json::Value {
                         "open-from-herdr"
                     ]
                 }],
-                "events": [{
-                    "on": "workspace.focused",
-                    "command": [
-                        assert_cmd::cargo::cargo_bin!("zerdr").display().to_string(),
-                        "sync-from-herdr"
-                    ]
-                }],
+                "events": [
+                    {
+                        "on": "workspace.focused",
+                        "command": [
+                            assert_cmd::cargo::cargo_bin!("zerdr").display().to_string(),
+                            "sync-from-herdr"
+                        ]
+                    },
+                    {
+                        "on": "pane.focused",
+                        "command": [
+                            assert_cmd::cargo::cargo_bin!("zerdr").display().to_string(),
+                            "detach-from-herdr"
+                        ]
+                    }
+                ],
             }]
         }
     })
