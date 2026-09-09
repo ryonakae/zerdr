@@ -99,6 +99,7 @@ pub fn run() -> Result<()> {
         },
         Command::SyncFromHerdr => sync::Synchronizer::from_env()?.event(),
         Command::OpenFromHerdr => sync::Synchronizer::from_env()?.open_from_herdr(),
+        Command::DetachFromHerdr => thread::detach_from_herdr(),
     }
 }
 

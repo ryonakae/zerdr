@@ -61,6 +61,8 @@ pub enum Command {
     SyncFromHerdr,
     #[command(hide = true)]
     OpenFromHerdr,
+    #[command(hide = true)]
+    DetachFromHerdr,
 }
 
 #[derive(Debug, Subcommand)]

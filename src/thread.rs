@@ -56,6 +56,37 @@ pub fn run(session_name: &str, target: Option<&str>, kind: Option<&str>) -> Resu
     run_with_mode(session_name, target, kind, false)
 }
 
+/// The `pane.focused` plugin hook. Another Herdr client selecting a pane a thread is
+/// attached to asks that thread to release its attach, so the pane can take the
+/// selecting client's size. The hook knows the session socket but not the session
+/// name, so the lease lookup spans every scope. A pane zerdr does not own is not an
+/// error: Herdr fires this for every focus change in the session.
+pub fn detach_from_herdr() -> Result<()> {
+    let event = std::env::var("HERDR_PLUGIN_EVENT")
+        .map_err(|_| Error::User("missing HERDR_PLUGIN_EVENT".to_owned()))?;
+    if event != "pane.focused" {
+        return Err(Error::User(format!(
+            "unexpected Herdr plugin event {event:?}; expected pane.focused"
+        )));
+    }
+    let socket = std::env::var_os("HERDR_SOCKET_PATH")
+        .map(PathBuf::from)
+        .ok_or_else(|| Error::User("missing HERDR_SOCKET_PATH".to_owned()))?;
+    let raw = std::env::var("HERDR_PLUGIN_CONTEXT_JSON")
+        .map_err(|_| Error::User("missing HERDR_PLUGIN_CONTEXT_JSON".to_owned()))?;
+    let context: serde_json::Value = serde_json::from_str(&raw).map_err(|source| Error::Json {
+        what: "HERDR_PLUGIN_CONTEXT_JSON".to_owned(),
+        source,
+    })?;
+    let pane_id = context
+        .get("focused_pane_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::User("Herdr plugin context is missing focused_pane_id".to_owned()))?;
+    let paths = Paths::discover()?;
+    ThreadLeaseSet::new(paths.thread_leases_dir).request_detach(&socket, pane_id)?;
+    Ok(())
+}
+
 fn run_with_mode(
     session_name: &str,
     target: Option<&str>,

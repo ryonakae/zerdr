@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use predicates::prelude::*;
 use support::TestEnv;
-use zerdr::state::{BindingStore, Paths, ThreadPaneMemory, thread_detach_clear, thread_detach_set};
+use zerdr::state::{
+    BindingStore, Paths, ThreadLeaseSet, ThreadPaneMemory, thread_detach_clear, thread_detach_set,
+};
 
 const OSC_PREFIX: &str = "\u{1b}]0;";
 
@@ -2162,4 +2164,70 @@ fn a_term_ignoring_attach_client_is_escalated_to_sigkill() {
     fixture.env.command().arg("attach").assert().success();
     fixture.release_attach();
     assert!(child.wait_with_output().unwrap().status.success());
+}
+
+/// The `pane.focused` plugin hook as Herdr invokes it, for the fixture's session socket.
+fn hook_command(fixture: &Fixture, pane_id: &str) -> assert_cmd::Command {
+    let mut command = fixture.env.command();
+    command
+        .arg("detach-from-herdr")
+        .env("HERDR_PLUGIN_EVENT", "pane.focused")
+        .env("HERDR_SOCKET_PATH", &fixture.socket)
+        .env(
+            "HERDR_PLUGIN_CONTEXT_JSON",
+            serde_json::json!({"workspace_id": "w1", "focused_pane_id": pane_id}).to_string(),
+        );
+    command
+}
+
+#[test]
+fn the_pane_focused_hook_marks_the_live_lease_for_that_pane_only() {
+    let fixture = Fixture::new();
+    let paths = fixture.paths();
+    let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
+    let guard = leases.acquire("default", &fixture.socket, "w1:p1").unwrap();
+    let marker = guard.path().with_extension("detach-request");
+
+    hook_command(&fixture, "w1:p2")
+        .assert()
+        .success()
+        .stdout("")
+        .stderr("");
+    assert!(!marker.exists());
+
+    hook_command(&fixture, "w1:p1")
+        .assert()
+        .success()
+        .stdout("")
+        .stderr("");
+    assert!(marker.exists());
+    assert_eq!(fixture.env.read_log(), "", "the hook never calls Herdr");
+}
+
+#[test]
+fn the_pane_focused_hook_is_silent_without_a_lease_and_strict_about_its_environment() {
+    let fixture = Fixture::new();
+
+    hook_command(&fixture, "w1:p1")
+        .assert()
+        .success()
+        .stdout("")
+        .stderr("");
+
+    hook_command(&fixture, "w1:p1")
+        .env("HERDR_PLUGIN_EVENT", "workspace.focused")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("pane.focused"));
+    hook_command(&fixture, "w1:p1")
+        .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("focused_pane_id"));
+    hook_command(&fixture, "w1:p1")
+        .env_remove("HERDR_SOCKET_PATH")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("HERDR_SOCKET_PATH"));
+    assert_eq!(fixture.env.read_log(), "");
 }

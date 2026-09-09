@@ -42,7 +42,8 @@ fn help_lists_public_commands_and_hides_plugin_entry_points() {
         .stdout(predicate::str::contains("  uninstall").not())
         .stdout(predicate::str::contains("  doctor").not())
         .stdout(predicate::str::contains("sync-from-herdr").not())
-        .stdout(predicate::str::contains("open-from-herdr").not());
+        .stdout(predicate::str::contains("open-from-herdr").not())
+        .stdout(predicate::str::contains("detach-from-herdr").not());
 }
 
 #[test]
@@ -235,7 +236,7 @@ fn detach_and_attach_run_under_remote_markers() {
 
 #[test]
 fn hidden_plugin_commands_reject_session_targeting() {
-    for command in ["sync-from-herdr", "open-from-herdr"] {
+    for command in ["sync-from-herdr", "open-from-herdr", "detach-from-herdr"] {
         for args in [
             vec![command, "--session", "work"],
             vec!["--session", "work", command],
