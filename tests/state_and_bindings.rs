@@ -654,3 +654,46 @@ fn thread_pane_memory_treats_foreign_content_as_empty() {
     assert_eq!(panes.len(), 1);
     assert_eq!(panes[0].pane_id, "w1:p3");
 }
+
+#[test]
+fn detach_request_marks_only_the_live_lease_for_the_socket_and_pane() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let socket = state.path().join("herdr.sock");
+    let other_socket = state.path().join("other.sock");
+    fs::write(&socket, "").unwrap();
+    fs::write(&other_socket, "").unwrap();
+    let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
+
+    assert!(!leases.request_detach(&socket, "w1:p1").unwrap());
+
+    let guard = leases.acquire("default", &socket, "w1:p1").unwrap();
+    let marker = guard.path().with_extension("detach-request");
+    assert!(!leases.request_detach(&socket, "w1:p2").unwrap());
+    assert!(!leases.request_detach(&other_socket, "w1:p1").unwrap());
+    assert!(!marker.exists());
+    assert!(!guard.take_detach_request().unwrap());
+
+    assert!(leases.request_detach(&socket, "w1:p1").unwrap());
+    assert!(marker.exists());
+    assert!(guard.take_detach_request().unwrap());
+    assert!(!marker.exists());
+    assert!(!guard.take_detach_request().unwrap());
+
+    // The marker never outlives its lease.
+    assert!(leases.request_detach(&socket, "w1:p1").unwrap());
+    let lease_path = guard.path().to_path_buf();
+    let record = fs::read(&lease_path).unwrap();
+    drop(guard);
+    assert!(!marker.exists());
+    assert!(!lease_path.exists());
+
+    // A stale record (a SIGKILLed connect) is not marked but cleaned up, as is an
+    // orphan marker without any lease.
+    fs::write(&lease_path, &record).unwrap();
+    let orphan = lease_path.parent().unwrap().join("orphan.detach-request");
+    fs::write(&orphan, b"").unwrap();
+    assert!(!leases.request_detach(&socket, "w1:p1").unwrap());
+    assert!(!lease_path.exists());
+    assert!(!orphan.exists());
+}

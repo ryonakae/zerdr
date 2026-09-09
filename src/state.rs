@@ -985,6 +985,10 @@ pub struct ThreadLeaseRecord {
 }
 
 const DETACH_MARKER_EXTENSION: &str = "detached";
+/// Sidecar written by the `pane.focused` plugin hook to ask the lease-holding connect
+/// to release its attach. Existence-based like the lease markers: the hook only
+/// creates it and the connect only removes it, so a reader never sees a torn state.
+const DETACH_REQUEST_EXTENSION: &str = "detach-request";
 
 /// Result of a [`ThreadLeaseSet::scan_all`] pass over every session scope.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -1195,6 +1199,68 @@ impl ThreadLeaseSet {
         Ok(scan)
     }
 
+    /// Asks the live connect holding `pane_id` on `socket_path` to detach, by writing
+    /// its request marker. Scans every session scope because the plugin hook that
+    /// calls this knows the socket but not the session name. Stale records (lock
+    /// free) and orphan markers met on the way are removed, as `leased_panes` does.
+    /// Returns whether a live lease was marked.
+    pub fn request_detach(&self, socket_path: &Path, pane_id: &str) -> Result<bool> {
+        let socket_path = canonical_socket(socket_path)?;
+        let mut marked = false;
+        if !self.root.exists() {
+            return Ok(marked);
+        }
+        for entry in fs::read_dir(&self.root).map_err(|error| Error::io(&self.root, error))? {
+            let scope = entry.map_err(|error| Error::io(&self.root, error))?.path();
+            if !scope.is_dir() {
+                continue;
+            }
+            for entry in fs::read_dir(&scope).map_err(|error| Error::io(&scope, error))? {
+                let path = entry.map_err(|error| Error::io(&scope, error))?.path();
+                match path.extension().and_then(|value| value.to_str()) {
+                    Some("json") => {}
+                    Some(DETACH_REQUEST_EXTENSION) => {
+                        if !path.with_extension("json").exists() {
+                            let _ = fs::remove_file(&path);
+                        }
+                        continue;
+                    }
+                    _ => continue,
+                }
+                let mut file = match OpenOptions::new().read(true).write(true).open(&path) {
+                    Ok(file) => file,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(Error::io(&path, error)),
+                };
+                match FileExt::try_lock_exclusive(&file) {
+                    Ok(()) => {
+                        let _ = FileExt::unlock(&file);
+                        let _ = fs::remove_file(path.with_extension(DETACH_REQUEST_EXTENSION));
+                        let _ = fs::remove_file(&path);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        let mut bytes = Vec::new();
+                        file.read_to_end(&mut bytes)
+                            .map_err(|error| Error::io(&path, error))?;
+                        let Ok(record) = serde_json::from_slice::<ThreadLeaseRecord>(&bytes) else {
+                            continue;
+                        };
+                        if record.schema_version == SCHEMA_VERSION
+                            && record.socket_path == socket_path
+                            && record.pane_id == pane_id
+                        {
+                            let marker = path.with_extension(DETACH_REQUEST_EXTENSION);
+                            fs::write(&marker, b"").map_err(|error| Error::io(&marker, error))?;
+                            marked = true;
+                        }
+                    }
+                    Err(error) => return Err(Error::io(&path, error)),
+                }
+            }
+        }
+        Ok(marked)
+    }
+
     /// Lock guarding resolve-then-acquire for one session, so concurrent threads on
     /// unrelated Herdr sessions never wait on each other.
     pub fn resolve_lock_path(&self, session_name: &str, socket_path: &Path) -> Result<PathBuf> {
@@ -1340,6 +1406,21 @@ impl ThreadLeaseGuard {
         Ok(())
     }
 
+    /// Consumes a pending detach request from the plugin hook, reporting whether
+    /// there was one.
+    pub fn take_detach_request(&self) -> Result<bool> {
+        let request = self.request_path();
+        match fs::remove_file(&request) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(Error::io(&request, error)),
+        }
+    }
+
+    fn request_path(&self) -> PathBuf {
+        self.path.with_extension(DETACH_REQUEST_EXTENSION)
+    }
+
     fn marker_path(&self) -> PathBuf {
         self.path.with_extension(DETACH_MARKER_EXTENSION)
     }
@@ -1349,6 +1430,7 @@ impl Drop for ThreadLeaseGuard {
     fn drop(&mut self) {
         if let Some(file) = self.file.take() {
             let _ = fs::remove_file(self.marker_path());
+            let _ = fs::remove_file(self.request_path());
             let _ = fs::remove_file(&self.path);
             let _ = FileExt::unlock(&file);
         }
