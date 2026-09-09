@@ -7,10 +7,9 @@ use std::thread;
 use std::time::Duration;
 
 use predicates::prelude::*;
+use support::PtyChild;
 use support::TestEnv;
-use zerdr::state::{
-    BindingStore, Paths, ThreadLeaseSet, ThreadPaneMemory, thread_detach_clear, thread_detach_set,
-};
+use zerdr::state::{BindingStore, Paths, ThreadLeaseSet, ThreadPaneMemory};
 
 const OSC_PREFIX: &str = "\u{1b}]0;";
 
@@ -1797,7 +1796,7 @@ fn connect_with_a_running_named_session_does_not_start_a_server() {
     assert!(log.contains("--session work tab create"), "{log}");
 }
 
-fn count_detach_markers(paths: &Paths) -> usize {
+fn count_detach_requests(paths: &Paths) -> usize {
     fs::read_dir(&paths.thread_leases_dir)
         .into_iter()
         .flatten()
@@ -1805,7 +1804,7 @@ fn count_detach_markers(paths: &Paths) -> usize {
         .filter(|entry| entry.path().is_dir())
         .flat_map(|entry| fs::read_dir(entry.path()).into_iter().flatten().flatten())
         .filter(|entry| {
-            entry.path().extension().and_then(|value| value.to_str()) == Some("detached")
+            entry.path().extension().and_then(|value| value.to_str()) == Some("detach-request")
         })
         .count()
 }
@@ -1820,35 +1819,136 @@ fn wait_until(description: &str, mut predicate: impl FnMut() -> bool) {
     panic!("timed out waiting for {description}");
 }
 
+const DETACHED_NOTICE: &str = "zerdr: detached from Herdr because another client selected this pane; focus, click, or press a key here to reattach";
+const DETACHED_MODES_ON: &str = "\u{1b}[?1004h\u{1b}[?1000h\u{1b}[?1006h";
+const DETACHED_MODES_OFF: &str = "\u{1b}[?1006l\u{1b}[?1000l\u{1b}[?1004l";
+const FOCUS_IN: &[u8] = b"\x1b[I";
+const FOCUS_OUT: &[u8] = b"\x1b[O";
+
+/// `zerdr connect` on a pseudo-terminal, attached to the fixture's `w1:p1` agent.
+fn attached_pty_thread(fixture: &Fixture, command: ProcessCommand) -> PtyChild {
+    let thread = PtyChild::spawn(command);
+    wait_for_log(&fixture.env, "agent attach w1:p1");
+    thread
+}
+
 #[test]
-fn the_detach_flag_suspends_the_attach_and_clearing_it_reattaches() {
+fn another_client_selecting_the_pane_detaches_and_a_focus_in_reattaches() {
     let fixture = Fixture::new();
     fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
     let paths = fixture.paths();
+    let mut command = fixture.std_thread_command();
+    command.arg("connect");
+    let mut thread = attached_pty_thread(&fixture, command);
 
-    let child = fixture.std_thread_command().arg("connect").spawn().unwrap();
-    wait_for_log(&fixture.env, "agent attach w1:p1");
-
-    thread_detach_set(&paths).unwrap();
-    wait_until("the detach marker", || count_detach_markers(&paths) == 1);
+    hook_command(&fixture, "w1:p1").assert().success();
+    thread.wait_for_output(DETACHED_NOTICE);
+    thread.wait_for_output(DETACHED_MODES_ON);
     assert_eq!(count_leases(&paths), 1, "the lease survives the detach");
+    assert_eq!(count_detach_requests(&paths), 0, "the request is consumed");
     assert!(!fixture.env.read_log().contains("terminal attach"));
 
-    thread_detach_clear(&paths).unwrap();
+    thread.write(FOCUS_IN);
     wait_for_log(&fixture.env, "terminal attach term-w1:p1");
-    wait_until("the marker to clear", || count_detach_markers(&paths) == 0);
     let log = fixture.env.read_log();
     assert!(log.contains("pane get w1:p1"), "{log}");
+    let output = thread.output();
+    assert!(output.contains(DETACHED_MODES_OFF), "{output:?}");
+    let modes_off = output.find(DETACHED_MODES_OFF).unwrap();
+    let modes_on = output.find(DETACHED_MODES_ON).unwrap();
+    assert!(modes_on < modes_off, "{output:?}");
 
     fixture.release_attach();
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success(), "{output:?}");
+    assert!(thread.wait().success());
     assert_eq!(count_leases(&paths), 0);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+}
+
+#[test]
+fn a_focus_out_does_not_reattach_but_a_key_or_a_click_does() {
+    for wake in [b"\r".as_slice(), b"\x1b[<0;5;5M".as_slice()] {
+        let fixture = Fixture::new();
+        fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+        let mut command = fixture.std_thread_command();
+        command.arg("connect");
+        let mut thread = attached_pty_thread(&fixture, command);
+
+        hook_command(&fixture, "w1:p1").assert().success();
+        thread.wait_for_output(DETACHED_MODES_ON);
+
+        thread.write(FOCUS_OUT);
+        thread::sleep(Duration::from_millis(300));
+        assert!(
+            !fixture.env.read_log().contains("terminal attach"),
+            "a focus-out alone must not reattach: {}",
+            fixture.env.read_log()
+        );
+
+        thread.write(wake);
+        wait_for_log(&fixture.env, "terminal attach term-w1:p1");
+
+        fixture.release_attach();
+        assert!(thread.wait().success(), "{wake:?}");
+    }
+}
+
+#[test]
+fn a_request_inside_the_grace_window_after_the_own_focus_is_dropped() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    let paths = fixture.paths();
+    let mut command = fixture.std_thread_command();
+    command
+        .arg("connect")
+        .env("ZERDR_TEST_WORKSPACES_JSON", fixture.workspaces(false))
+        .env("ZERDR_THREAD_FOCUS_GRACE_MS", "600");
+    let mut thread = attached_pty_thread(&fixture, command);
+    let log = fixture.env.read_log();
+    assert!(log.contains("workspace focus w1"), "{log}");
+
+    // Herdr answers connect's own focus call with pane.focused for this very pane.
+    hook_command(&fixture, "w1:p1").assert().success();
+    wait_until("the request to be consumed", || {
+        count_detach_requests(&paths) == 0
+    });
+    thread::sleep(Duration::from_millis(200));
     assert!(
-        stdout.contains("zerdr: detached from Herdr; run `zerdr attach` to reconnect"),
-        "{stdout:?}"
+        !thread.output().contains(DETACHED_NOTICE),
+        "{}",
+        thread.output()
     );
+    assert!(thread.is_running());
+
+    thread::sleep(Duration::from_millis(600));
+    hook_command(&fixture, "w1:p1").assert().success();
+    thread.wait_for_output(DETACHED_NOTICE);
+
+    thread.write(FOCUS_IN);
+    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
+    fixture.release_attach();
+    assert!(thread.wait().success());
+}
+
+#[test]
+fn a_request_for_another_pane_leaves_the_thread_attached() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    let paths = fixture.paths();
+    let mut command = fixture.std_thread_command();
+    command.arg("connect");
+    let mut thread = attached_pty_thread(&fixture, command);
+
+    hook_command(&fixture, "w1:p2").assert().success();
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(count_detach_requests(&paths), 0);
+    assert!(
+        !thread.output().contains(DETACHED_NOTICE),
+        "{}",
+        thread.output()
+    );
+    assert!(thread.is_running());
+
+    fixture.release_attach();
+    assert!(thread.wait().success());
 }
 
 #[test]
@@ -1867,8 +1967,10 @@ fn a_detached_thread_keeps_a_marked_title_and_never_rings_the_bell() {
         .unwrap();
     wait_for_log(&fixture.env, "agent attach w1:p1");
 
-    thread_detach_set(&paths).unwrap();
-    wait_until("the detach marker", || count_detach_markers(&paths) == 1);
+    hook_command(&fixture, "w1:p1").assert().success();
+    wait_until("the request to be consumed", || {
+        count_detach_requests(&paths) == 0
+    });
     let polled = |directory: &Path| {
         fs::read_to_string(directory.join("counter"))
             .ok()
@@ -1917,76 +2019,55 @@ fn reattaching_to_a_missing_pane_ends_the_thread_gracefully() {
     let fixture = Fixture::new();
     fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
     let paths = fixture.paths();
-
-    let child = fixture
-        .std_thread_command()
+    let mut command = fixture.std_thread_command();
+    command
         .arg("connect")
-        .env("ZERDR_TEST_PANE_GET_MISSING_IDS", "w1:p1")
-        .spawn()
-        .unwrap();
-    wait_for_log(&fixture.env, "agent attach w1:p1");
+        .env("ZERDR_TEST_PANE_GET_MISSING_IDS", "w1:p1");
+    let mut thread = attached_pty_thread(&fixture, command);
 
-    thread_detach_set(&paths).unwrap();
-    wait_until("the detach marker", || count_detach_markers(&paths) == 1);
-    thread_detach_clear(&paths).unwrap();
+    hook_command(&fixture, "w1:p1").assert().success();
+    thread.wait_for_output(DETACHED_MODES_ON);
+    thread.write(FOCUS_IN);
 
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success(), "{output:?}");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(thread.wait().success());
+    let output = thread.output();
     assert!(
-        stdout.contains("zerdr: Herdr pane w1:p1 is gone; closing this thread connection"),
-        "{stdout:?}"
+        output.contains("zerdr: Herdr pane w1:p1 is gone; closing this thread connection"),
+        "{output:?}"
     );
+    assert!(output.contains(DETACHED_MODES_OFF), "{output:?}");
     assert_eq!(count_leases(&paths), 0);
-    assert_eq!(count_detach_markers(&paths), 0);
     assert!(!fixture.env.read_log().contains("terminal attach"));
 }
 
+/// Without a terminal on stdin (the thread's shell was piped, or the test harness
+/// itself) nothing can wake a detached thread but a signal; it must neither spin nor
+/// exit on its own.
 #[test]
-fn a_thread_started_during_detach_waits_and_defers_the_focus() {
+fn a_thread_without_a_terminal_stays_detached_until_a_signal() {
     let fixture = Fixture::new();
     fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
     let paths = fixture.paths();
-    thread_detach_set(&paths).unwrap();
 
-    let child = fixture
+    let mut child = fixture
         .std_thread_command()
         .arg("connect")
-        .env("ZERDR_TEST_WORKSPACES_JSON", fixture.workspaces(false))
+        .stdin(Stdio::null())
         .spawn()
         .unwrap();
-    wait_until("the detach marker", || count_detach_markers(&paths) == 1);
-    assert_eq!(count_leases(&paths), 1);
-    let log = fixture.env.read_log();
-    assert!(!log.contains("agent attach"), "{log}");
-    assert!(!log.contains("terminal attach"), "{log}");
-    assert!(!log.contains("workspace focus"), "{log}");
-
-    thread_detach_clear(&paths).unwrap();
-    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
-    let log = fixture.env.read_log();
-    assert!(log.contains("workspace focus w1"), "{log}");
-
-    fixture.release_attach();
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success(), "{output:?}");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("zerdr: detached from Herdr; run `zerdr attach` to reconnect"),
-        "{stdout:?}"
-    );
-}
-
-#[test]
-fn a_signal_during_the_detached_wait_releases_the_lease_and_marker() {
-    let fixture = Fixture::new();
-    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
-    let paths = fixture.paths();
-
-    let child = fixture.std_thread_command().arg("connect").spawn().unwrap();
     wait_for_log(&fixture.env, "agent attach w1:p1");
-    thread_detach_set(&paths).unwrap();
-    wait_until("the detach marker", || count_detach_markers(&paths) == 1);
+
+    hook_command(&fixture, "w1:p1").assert().success();
+    wait_until("the request to be consumed", || {
+        count_detach_requests(&paths) == 0
+    });
+    thread::sleep(Duration::from_millis(300));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the thread keeps waiting"
+    );
+    assert_eq!(count_leases(&paths), 1);
+    assert!(!fixture.env.read_log().contains("terminal attach"));
 
     let pid = child.id().to_string();
     assert!(
@@ -1998,172 +2079,32 @@ fn a_signal_during_the_detached_wait_releases_the_lease_and_marker() {
     );
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(DETACHED_NOTICE), "{stdout:?}");
+    assert!(!stdout.contains(DETACHED_MODES_ON), "{stdout:?}");
     assert_eq!(count_leases(&paths), 0);
-    assert_eq!(count_detach_markers(&paths), 0);
-}
-
-#[test]
-fn zerdr_detach_and_attach_drive_a_live_thread() {
-    let fixture = Fixture::new();
-    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
-    let paths = fixture.paths();
-
-    let child = fixture.std_thread_command().arg("connect").spawn().unwrap();
-    wait_for_log(&fixture.env, "agent attach w1:p1");
-
-    fixture
-        .env
-        .command()
-        .arg("detach")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("detached 1 thread(s)"));
-    assert!(paths.thread_detach_flag_file.exists());
-    assert_eq!(count_detach_markers(&paths), 1);
-    assert!(!fixture.env.read_log().contains("terminal attach"));
-
-    fixture
-        .env
-        .command()
-        .arg("attach")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("reattached 1 thread(s)"));
-    assert!(!paths.thread_detach_flag_file.exists());
-    assert_eq!(count_detach_markers(&paths), 0);
-    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
-
-    fixture.release_attach();
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success(), "{output:?}");
-}
-
-#[test]
-fn zerdr_detach_without_threads_sets_the_flag_for_future_threads() {
-    let fixture = Fixture::new();
-    let paths = fixture.paths();
-
-    fixture
-        .env
-        .command()
-        .arg("detach")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("new threads will start detached"));
-    assert!(paths.thread_detach_flag_file.exists());
-
-    fixture
-        .env
-        .command()
-        .arg("attach")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("detach mode is off"));
-    assert!(!paths.thread_detach_flag_file.exists());
-}
-
-#[test]
-fn zerdr_attach_when_not_detached_is_a_noop() {
-    let fixture = Fixture::new();
-
-    fixture
-        .env
-        .command()
-        .arg("attach")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("detach mode is not active"));
-}
-
-#[test]
-fn zerdr_detach_warns_when_a_thread_does_not_confirm_in_time() {
-    let fixture = Fixture::new();
-    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
-
-    let mut child = fixture
-        .std_thread_command()
-        .arg("connect")
-        .env("ZERDR_THREAD_CYCLE_POLL_MS", "60000")
-        .spawn()
-        .unwrap();
-    wait_for_log(&fixture.env, "agent attach w1:p1");
-
-    fixture
-        .env
-        .command()
-        .arg("detach")
-        .env("ZERDR_DETACH_WAIT_MS", "200")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("did not confirm"));
-
-    // The connect's cycle poll is deliberately enormous, so waiting for a natural
-    // exit would stall the suite; tear the processes down instead.
-    child.kill().unwrap();
-    child.wait().unwrap();
-    fixture.release_attach();
-}
-
-#[test]
-fn a_second_detach_reconfirms_an_already_detached_thread() {
-    let fixture = Fixture::new();
-    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
-
-    let child = fixture.std_thread_command().arg("connect").spawn().unwrap();
-    wait_for_log(&fixture.env, "agent attach w1:p1");
-    fixture
-        .env
-        .command()
-        .arg("detach")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("detached 1 thread(s)"));
-
-    // Re-running settles on the first scan: the thread is already confirmed.
-    fixture
-        .env
-        .command()
-        .arg("detach")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("detached 1 thread(s)"));
-
-    fixture.env.command().arg("attach").assert().success();
-    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
-    fixture.release_attach();
-    assert!(child.wait_with_output().unwrap().status.success());
 }
 
 /// An attach client that ignores SIGTERM must not wedge the connect: the graceful
-/// terminate escalates to SIGKILL after its grace period, so `zerdr detach` still
-/// confirms.
+/// terminate escalates to SIGKILL after its grace period, so the detach completes.
 #[test]
 fn a_term_ignoring_attach_client_is_escalated_to_sigkill() {
     let fixture = Fixture::new();
     fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
-    let paths = fixture.paths();
-
-    let child = fixture
-        .std_thread_command()
+    let mut command = fixture.std_thread_command();
+    command
         .arg("connect")
         .env("ZERDR_TEST_ATTACH_IGNORE_TERM", "1")
-        .env("ZERDR_TERM_GRACE_MS", "150")
-        .spawn()
-        .unwrap();
-    wait_for_log(&fixture.env, "agent attach w1:p1");
+        .env("ZERDR_TERM_GRACE_MS", "150");
+    let mut thread = attached_pty_thread(&fixture, command);
 
-    fixture
-        .env
-        .command()
-        .arg("detach")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("detached 1 thread(s)"));
-    assert_eq!(count_detach_markers(&paths), 1);
+    hook_command(&fixture, "w1:p1").assert().success();
+    thread.wait_for_output(DETACHED_NOTICE);
 
-    fixture.env.command().arg("attach").assert().success();
+    thread.write(FOCUS_IN);
+    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
     fixture.release_attach();
-    assert!(child.wait_with_output().unwrap().status.success());
+    assert!(thread.wait().success());
 }
 
 /// The `pane.focused` plugin hook as Herdr invokes it, for the fixture's session socket.

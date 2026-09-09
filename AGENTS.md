@@ -42,14 +42,13 @@ CI runs these checks on macOS and Ubuntu. Platform-specific behavior needs cover
 - `src/runtime.rs` resolves local versus remote execution and the wrapper anchor.
 - `src/herdr.rs` wraps Herdr JSON commands and owns the child process lifecycle.
 - `src/sync.rs` maps focused workspaces to Git roots and routes them into Zed.
-- `src/thread.rs` backs `zerdr connect`: it resolves and attaches Zed terminal threads to Herdr agents in a running session, creates and binds missing workspaces (registering linked worktrees via `herdr worktree open`), mirrors agent titles and bells into the threads sidebar, and suspends/resumes the attach while the detach flag is set (`zerdr detach`/`zerdr attach`), keeping the lease and the title (with a `[herdr⏸]` marker, bell muted) alive in between.
-- `src/suspend.rs` backs `zerdr detach`/`zerdr attach`: it toggles the global detach flag and waits for every live thread lease to confirm through its detach marker. Both commands are exempt from the remote-environment rejection so they run over SSH.
+- `src/thread.rs` backs `zerdr connect`: it resolves and attaches Zed terminal threads to Herdr agents in a running session, creates and binds missing workspaces (registering linked worktrees via `herdr worktree open`), mirrors agent titles and bells into the threads sidebar, and releases the attach when the `pane.focused` hook (`detach-from-herdr`) reports another client selecting the pane, keeping the lease and the title (with a `[herdr⏸]` marker, bell muted) alive until focus, a click, or a key in the thread reattaches it.
 - `src/state.rs` owns bindings, route schemas, leases, locks, and atomic persistence.
 - `src/setup.rs` merges the Herdr plugin and Zed tasks into user configuration, and owns auto mode: `zerdr setup auto enable` installs `agent.terminal_init_command` with a recorded fingerprint that setup preserves and uninstall consumes.
 - `src/doctor.rs` checks capabilities, installation state, bindings, routes, and leases.
 - `src/zed.rs` wraps the Zed CLI.
 - `assets/herdr/` and `assets/zed/` contain templates embedded by `setup`.
-- `tests/support/mod.rs` provides isolated fake `herdr` and `zed` executables; `FAKE_HERDR_BODY` is shared by the `PATH` fake and the private fakes from `TestEnv::baked_herdr`.
+- `tests/support/mod.rs` provides isolated fake `herdr` and `zed` executables; `FAKE_HERDR_BODY` is shared by the `PATH` fake and the private fakes from `TestEnv::baked_herdr`. `PtyChild` runs a command on a pseudo-terminal for the detach and reattach tests, which need a real tty on stdin.
 - `docs/plans/` records historical implementation plans. Treat current code and tests as the source of truth.
 
 ## Code and test conventions

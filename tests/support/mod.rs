@@ -1,8 +1,13 @@
 #![allow(dead_code)]
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Child, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use assert_cmd::Command;
 use tempfile::TempDir;
@@ -412,4 +417,77 @@ fn write_executable(path: &Path, content: &str) {
     let mut permissions = fs::metadata(path).unwrap().permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions).unwrap();
+}
+
+/// A child process running on a fresh pseudo-terminal, the way a Zed terminal thread
+/// hosts `zerdr connect`. Everything the child writes is collected from the master
+/// side; bytes written here arrive on the child's stdin as if typed.
+pub struct PtyChild {
+    master: File,
+    child: Child,
+    output: Arc<Mutex<Vec<u8>>>,
+}
+
+impl PtyChild {
+    /// Takes the command by value so its copies of the slave end close on return:
+    /// otherwise the master would never see the child hang up.
+    pub fn spawn(mut command: std::process::Command) -> Self {
+        let pty = nix::pty::openpty(None, None).unwrap();
+        let slave = File::from(pty.slave);
+        command
+            .stdin(Stdio::from(slave.try_clone().unwrap()))
+            .stdout(Stdio::from(slave.try_clone().unwrap()))
+            .stderr(Stdio::from(slave));
+        let child = command.spawn().unwrap();
+        drop(command);
+        let master = File::from(pty.master);
+        let mut reader = master.try_clone().unwrap();
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&output);
+        thread::spawn(move || {
+            let mut buffer = [0u8; 4096];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => sink.lock().unwrap().extend_from_slice(&buffer[..count]),
+                }
+            }
+        });
+        Self {
+            master,
+            child,
+            output,
+        }
+    }
+
+    pub fn write(&mut self, bytes: &[u8]) {
+        self.master.write_all(bytes).unwrap();
+        self.master.flush().unwrap();
+    }
+
+    pub fn output(&self) -> String {
+        String::from_utf8_lossy(&self.output.lock().unwrap()).into_owned()
+    }
+
+    pub fn wait_for_output(&self, needle: &str) {
+        for _ in 0..400 {
+            if self.output().contains(needle) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("timed out waiting for {needle:?} in\n{}", self.output());
+    }
+
+    pub fn is_running(&mut self) -> bool {
+        self.child.try_wait().unwrap().is_none()
+    }
+
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+
+    pub fn wait(&mut self) -> ExitStatus {
+        self.child.wait().unwrap()
+    }
 }

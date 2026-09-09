@@ -1,10 +1,14 @@
-use std::io::Write;
+use std::io::{IsTerminal, Write};
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use nix::errno::Errno;
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+use nix::sys::termios::{self, SetArg, Termios};
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
@@ -12,7 +16,7 @@ use crate::error::{Error, Result};
 use crate::herdr::{AgentInfo, Herdr, ManagedChild, SignalForwarder, Workspace};
 use crate::state::{
     BindingStore, DEFAULT_SESSION_NAME, OperationGuard, Paths, ThreadLeaseGuard, ThreadLeaseSet,
-    ThreadPaneMemory, canonical_git_root, linked_worktree_parent, thread_detach_active,
+    ThreadPaneMemory, canonical_git_root, linked_worktree_parent,
 };
 
 const DEFAULT_POLL_MS: u64 = 1_000;
@@ -124,20 +128,16 @@ fn run_with_mode(
 
     // Without the workspace list there is no way to tell whether this workspace is
     // already focused, and focusing it blindly would re-fire `workspace.focused` and pull
-    // Zed forward under follow mode. Skipping the focus is the harmless direction. While
-    // detach mode is on, the focus is deferred to the first attach instead: it would
-    // move the shared session focus under a user working from another client.
-    let start_detached = thread_detach_active(&paths);
-    let workspaces = match herdr.workspaces_for(session_name) {
+    // Zed forward under follow mode. Skipping the focus is the harmless direction.
+    let (workspaces, focused_at) = match herdr.workspaces_for(session_name) {
         Ok(workspaces) => {
-            if !start_detached {
+            let focused_at =
                 focus_workspace(&herdr, session_name, &agent.workspace_id, &workspaces);
-            }
-            workspaces
+            (workspaces, focused_at)
         }
         Err(error) => {
             eprintln!("zerdr: could not read Herdr workspaces, leaving focus alone: {error}");
-            Vec::new()
+            (Vec::new(), None)
         }
     };
     let label = workspaces
@@ -147,8 +147,7 @@ fn run_with_mode(
     print_status(auto, &attachment, &agent, label.as_deref());
 
     let pane_id = agent.pane_id.clone();
-    let workspace_id = agent.workspace_id.clone();
-    let detached = Arc::new(AtomicBool::new(start_detached));
+    let detached = Arc::new(AtomicBool::new(false));
     let monitor = Monitor::start(
         herdr.clone(),
         session_name.to_owned(),
@@ -159,14 +158,12 @@ fn run_with_mode(
     );
     let outcome = attach_cycle(
         &herdr,
-        &paths,
         session_name,
         &pane_id,
-        &workspace_id,
         terminal.as_deref(),
         &lease,
         &detached,
-        start_detached,
+        focused_at,
     );
     monitor.stop();
     match outcome? {
@@ -176,7 +173,7 @@ fn run_with_mode(
     }
 }
 
-const DETACHED_NOTICE: &str = "zerdr: detached from Herdr; run `zerdr attach` to reconnect";
+const DETACHED_NOTICE: &str = "zerdr: detached from Herdr because another client selected this pane; focus, click, or press a key here to reattach";
 
 /// How the attach cycle ended. A child exiting on its own keeps the pre-detach exit
 /// contract; the other ends are graceful and carry no exit status.
@@ -186,38 +183,30 @@ enum CycleOutcome {
     Interrupted,
 }
 
-/// Drives the attach child across `zerdr detach`/`zerdr attach` transitions. While a
-/// child is attached its exit ends the thread as before; when the detach flag appears
-/// the child is terminated gracefully (SIGTERM, so the Herdr client restores the
-/// terminal modes) and the thread waits, lease held, until the flag clears. Reattaching
-/// always goes through the pane's current terminal id, so it works whether or not an
-/// agent still runs there; a pane that no longer resolves ends the thread gracefully.
-#[allow(clippy::too_many_arguments)]
+/// Drives the attach child across detach requests from the `pane.focused` hook. While
+/// a child is attached its exit ends the thread as before; when another client selects
+/// the pane the child is terminated gracefully (SIGTERM, so the Herdr client restores
+/// the terminal modes) and the thread waits, lease held, until the thread terminal
+/// shows the user is back. Reattaching always goes through the pane's current terminal
+/// id, so it works whether or not an agent still runs there; a pane that no longer
+/// resolves ends the thread gracefully.
 fn attach_cycle(
     herdr: &Herdr,
-    paths: &Paths,
     session_name: &str,
     pane_id: &str,
-    workspace_id: &str,
     initial_terminal: Option<&str>,
     lease: &ThreadLeaseGuard,
     detached: &AtomicBool,
-    start_detached: bool,
+    focused_at: Option<Instant>,
 ) -> Result<CycleOutcome> {
     let interval = cycle_interval();
-    let mut focus_pending = start_detached;
-    let mut child = if start_detached {
-        println!("{DETACHED_NOTICE}");
-        lease.mark_detached()?;
-        None
-    } else {
-        // A fresh pane holds only a shell, which `agent attach` refuses, so it is
-        // reached through its terminal instead.
-        Some(ManagedChild::new(match initial_terminal {
-            Some(terminal_id) => herdr.spawn_terminal_attach_for(session_name, terminal_id)?,
-            None => herdr.spawn_agent_attach_for(session_name, pane_id)?,
-        }))
-    };
+    let grace = focus_grace();
+    // A fresh pane holds only a shell, which `agent attach` refuses, so it is
+    // reached through its terminal instead.
+    let mut child = Some(ManagedChild::new(match initial_terminal {
+        Some(terminal_id) => herdr.spawn_terminal_attach_for(session_name, terminal_id)?,
+        None => herdr.spawn_agent_attach_for(session_name, pane_id)?,
+    }));
 
     loop {
         match child.take() {
@@ -229,11 +218,13 @@ fn attach_cycle(
                     })? {
                         return Ok(CycleOutcome::ChildExit(status));
                     }
-                    if thread_detach_active(paths) {
+                    // Connect's own workspace focus makes Herdr report this pane as
+                    // focused; that echo must not detach the thread it just attached.
+                    let own_echo = focused_at.is_some_and(|at| at.elapsed() < grace);
+                    if lease.take_detach_request()? && !own_echo {
                         detached.store(true, Ordering::SeqCst);
                         managed.terminate_gracefully();
                         println!("{DETACHED_NOTICE}");
-                        lease.mark_detached()?;
                         break;
                     }
                     thread::sleep(interval);
@@ -245,26 +236,18 @@ fn attach_cycle(
                 let mut signals = Signals::new([SIGINT, SIGTERM, SIGHUP]).map_err(|error| {
                     Error::User(format!("failed to register signal handlers: {error}"))
                 })?;
+                let mut terminal = DetachedTerminal::enter()?;
                 loop {
                     if signals.pending().next().is_some() {
                         return Ok(CycleOutcome::Interrupted);
                     }
-                    if !thread_detach_active(paths) {
+                    // A request while already detached carries nothing new.
+                    lease.take_detach_request()?;
+                    if terminal.woken(interval)? {
                         break;
                     }
-                    thread::sleep(interval);
                 }
-                if focus_pending {
-                    match herdr.workspaces_for(session_name) {
-                        Ok(workspaces) => {
-                            focus_workspace(herdr, session_name, workspace_id, &workspaces);
-                        }
-                        Err(error) => eprintln!(
-                            "zerdr: could not read Herdr workspaces, leaving focus alone: {error}"
-                        ),
-                    }
-                    focus_pending = false;
-                }
+                terminal.leave();
                 let terminal_id = match herdr.pane_terminal_for(session_name, pane_id) {
                     Ok(terminal_id) => terminal_id,
                     Err(_) => {
@@ -276,7 +259,6 @@ fn attach_cycle(
                 };
                 let mut spawned =
                     ManagedChild::new(herdr.spawn_terminal_attach_for(session_name, &terminal_id)?);
-                lease.clear_detached()?;
                 detached.store(false, Ordering::SeqCst);
                 // A signal that landed during this transition was neither polled above
                 // nor forwarded to the new child, so honor it instead of dropping it.
@@ -288,6 +270,124 @@ fn attach_cycle(
             }
         }
     }
+}
+
+/// How long after connect's own `workspace focus` a detach request is taken for
+/// Herdr's echo of that focus rather than another client selecting the pane.
+fn focus_grace() -> Duration {
+    const DEFAULT_FOCUS_GRACE_MS: u64 = 2_000;
+    Duration::from_millis(
+        std::env::var("ZERDR_THREAD_FOCUS_GRACE_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_FOCUS_GRACE_MS),
+    )
+}
+
+const DETACHED_MODES_ON: &[u8] = b"\x1b[?1004h\x1b[?1000h\x1b[?1006h";
+const DETACHED_MODES_OFF: &[u8] = b"\x1b[?1006l\x1b[?1000l\x1b[?1004l";
+const FOCUS_OUT: &[u8] = b"\x1b[O";
+
+/// The thread terminal while no attach child owns it. Raw mode plus focus and SGR
+/// mouse reporting turn the user's return — selecting the thread, clicking it, typing
+/// — into bytes on stdin; everything read is discarded, never forwarded. Without a
+/// terminal on stdin nothing but a signal or the pane disappearing ends the wait.
+struct DetachedTerminal {
+    stdin: std::io::Stdin,
+    saved: Option<Termios>,
+    /// Cleared once the terminal hangs up, so the wait falls back to sleeping instead
+    /// of spinning on a readiness that never drains.
+    polling: bool,
+}
+
+impl DetachedTerminal {
+    fn enter() -> Result<Self> {
+        let stdin = std::io::stdin();
+        if !stdin.is_terminal() {
+            return Ok(Self {
+                stdin,
+                saved: None,
+                polling: false,
+            });
+        }
+        let saved = termios::tcgetattr(stdin.as_fd()).map_err(|error| {
+            Error::User(format!("failed to read the terminal attributes: {error}"))
+        })?;
+        let mut raw = saved.clone();
+        termios::cfmakeraw(&mut raw);
+        termios::tcsetattr(stdin.as_fd(), SetArg::TCSANOW, &raw).map_err(|error| {
+            Error::User(format!(
+                "failed to switch the terminal to raw mode: {error}"
+            ))
+        })?;
+        emit(DETACHED_MODES_ON);
+        Ok(Self {
+            stdin,
+            saved: Some(saved),
+            polling: true,
+        })
+    }
+
+    /// Waits up to `interval` for the user; true when the terminal produced anything
+    /// but focus-out reports.
+    fn woken(&mut self, interval: Duration) -> Result<bool> {
+        if !self.polling {
+            thread::sleep(interval);
+            return Ok(false);
+        }
+        let timeout = PollTimeout::try_from(interval).unwrap_or(PollTimeout::MAX);
+        let mut fds = [PollFd::new(self.stdin.as_fd(), PollFlags::POLLIN)];
+        match poll(&mut fds, timeout) {
+            Ok(0) | Err(Errno::EINTR) => return Ok(false),
+            Ok(_) => {}
+            Err(error) => {
+                return Err(Error::User(format!(
+                    "failed to wait for the thread terminal: {error}"
+                )));
+            }
+        }
+        let readable = fds[0]
+            .revents()
+            .is_some_and(|events| events.contains(PollFlags::POLLIN));
+        if !readable {
+            self.polling = false;
+            return Ok(false);
+        }
+        let mut buffer = [0u8; 512];
+        match nix::unistd::read(self.stdin.as_fd(), &mut buffer) {
+            Ok(0) => {
+                self.polling = false;
+                Ok(false)
+            }
+            Ok(count) => Ok(is_user_input(&buffer[..count])),
+            Err(Errno::EINTR | Errno::EAGAIN) => Ok(false),
+            Err(error) => Err(Error::User(format!(
+                "failed to read the thread terminal: {error}"
+            ))),
+        }
+    }
+
+    fn leave(&mut self) {
+        if let Some(saved) = self.saved.take() {
+            emit(DETACHED_MODES_OFF);
+            let _ = termios::tcsetattr(self.stdin.as_fd(), SetArg::TCSANOW, &saved);
+        }
+    }
+}
+
+impl Drop for DetachedTerminal {
+    fn drop(&mut self) {
+        self.leave();
+    }
+}
+
+/// Anything but focus-out reports counts as the user: a focus-in, a mouse event, a key.
+fn is_user_input(bytes: &[u8]) -> bool {
+    let mut rest = bytes;
+    while let Some(stripped) = rest.strip_prefix(FOCUS_OUT) {
+        rest = stripped;
+    }
+    !rest.is_empty()
 }
 
 /// The attach cycle's own poll: fast enough that quitting the attach (ctrl+b q)
@@ -613,21 +713,24 @@ fn generate_agent_name(agents: &[AgentInfo]) -> String {
 
 /// Focusing an already-focused workspace would re-fire Herdr's `workspace.focused` event
 /// and, with follow mode running, pull Zed forward on every thread start.
+/// Returns when the focus was issued, so the attach cycle can tell Herdr's echo of it
+/// from another client's selection.
 fn focus_workspace(
     herdr: &Herdr,
     session_name: &str,
     workspace_id: &str,
     workspaces: &[Workspace],
-) {
+) -> Option<Instant> {
     if workspaces
         .iter()
         .any(|workspace| workspace.focused && workspace.id == workspace_id)
     {
-        return;
+        return None;
     }
     if let Err(error) = herdr.focus_workspace_for(session_name, workspace_id) {
         eprintln!("zerdr: could not focus Herdr workspace {workspace_id}: {error}");
     }
+    Some(Instant::now())
 }
 
 /// Mirrors the attached agent into the Zed threads sidebar: an OSC 0 title whenever the
