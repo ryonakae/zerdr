@@ -32,7 +32,7 @@ fn help_lists_public_commands_and_hides_plugin_entry_points() {
         .success()
         .stdout(predicate::str::contains("connect"))
         .stdout(predicate::str::contains("start"))
-        .stdout(predicate::str::contains("detach").not())
+        .stdout(predicate::str::contains("  detach"))
         .stdout(predicate::str::contains("workspace"))
         .stdout(predicate::str::contains("setup"))
         .stdout(predicate::str::contains("--session <SESSION>"))
@@ -47,7 +47,7 @@ fn help_lists_public_commands_and_hides_plugin_entry_points() {
 
 #[test]
 fn bare_invocations_show_their_subcommands() {
-    assert_usage_lists(&[], &["connect", "start", "workspace", "setup"]);
+    assert_usage_lists(&[], &["connect", "start", "detach", "workspace", "setup"]);
     assert_usage_lists(&["workspace"], &["bind", "unbind", "sync"]);
     assert_usage_lists(&["setup"], &["install", "uninstall", "doctor", "auto"]);
 }
@@ -201,6 +201,41 @@ fn hidden_plugin_commands_run_under_remote_markers() {
             .stderr(predicate::str::contains("missing HERDR_PLUGIN_"));
         assert_eq!(env.read_log(), "");
     }
+}
+
+/// `zerdr detach` asks every thread in every session, so a session target is an error
+/// rather than a silent narrowing.
+#[test]
+fn detach_rejects_session_targeting() {
+    for args in [
+        vec!["detach", "--session", "work"],
+        vec!["--session", "work", "detach"],
+    ] {
+        let env = TestEnv::new();
+        env.command()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "--session cannot be used with this command",
+            ));
+        assert_eq!(env.read_log(), "");
+    }
+}
+
+/// `zerdr detach` only touches local state files, so it stays usable from an SSH
+/// session on this machine — exactly where a phone runs it before `herdr`.
+#[test]
+fn detach_runs_under_remote_markers() {
+    let env = TestEnv::new();
+    env.command()
+        .arg("detach")
+        .env("SSH_CONNECTION", "client server")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("zerdr: no live threads"))
+        .stderr(predicate::str::contains("detected").not());
+    assert_eq!(env.read_log(), "");
 }
 
 #[test]

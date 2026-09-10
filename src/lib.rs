@@ -20,13 +20,15 @@ pub fn run() -> Result<()> {
     // The plugin hooks are spawned by the local Herdr server with its own environment,
     // which keeps the SSH markers of whichever session first started that server (a
     // phone opening `herdr`). They are local by construction, so the rejection meant
-    // for a user's SSH shell must not silence them.
+    // for a user's SSH shell must not silence them. `detach` only touches local state
+    // files and is meant to be run from an SSH shell before opening `herdr` there.
     if let Some(remote) = remote.as_ref()
         && !matches!(
             &cli.command,
             Command::Setup {
                 command: SetupCommand::Doctor
-            } | Command::SyncFromHerdr
+            } | Command::Detach
+                | Command::SyncFromHerdr
                 | Command::OpenFromHerdr
                 | Command::DetachFromHerdr
         )
@@ -71,6 +73,7 @@ pub fn run() -> Result<()> {
             let routing = runtime::resolve_launch(anchor.as_deref())?;
             herdr::run_wrapper(explicit_session.unwrap_or(DEFAULT_SESSION_NAME), routing)
         }
+        Command::Detach => thread::detach_all(),
         Command::Workspace { command } => match command {
             WorkspaceCommand::Sync => run_manual(explicit_session, |synchronizer| {
                 synchronizer.sync_manual(explicit_session)

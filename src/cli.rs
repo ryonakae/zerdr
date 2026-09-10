@@ -40,6 +40,9 @@ pub enum Command {
         #[arg(long)]
         anchor: Option<PathBuf>,
     },
+    /// Ask every attached Zed terminal thread to release its Herdr pane, so the
+    /// panes take the size of the client you open next.
+    Detach,
     /// Manage the selected Herdr workspace's Zed integration.
     #[command(arg_required_else_help = true)]
     Workspace {

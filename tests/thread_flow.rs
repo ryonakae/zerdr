@@ -2087,6 +2087,45 @@ fn stray_terminal_replies_right_after_the_detach_do_not_reattach() {
 }
 
 #[test]
+fn zerdr_detach_asks_every_live_thread_at_once() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    fixture.agent("zed-2", "w1:p2", "w1", "idle", "write tests");
+    let paths = fixture.paths();
+    let mut first = fixture.std_thread_command();
+    first.arg("connect");
+    let mut first = attached_pty_thread(&fixture, first);
+    let mut second = fixture.std_thread_command();
+    second.arg("connect");
+    let mut second = PtyChild::spawn(second);
+    wait_for_log(&fixture.env, "agent attach w1:p2");
+
+    fixture
+        .env
+        .command()
+        .arg("detach")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "zerdr: asked 2 thread(s) to detach",
+        ));
+    first.wait_for_output(DETACHED_NOTICE);
+    second.wait_for_output(DETACHED_NOTICE);
+    assert_eq!(count_leases(&paths), 2, "both leases survive");
+    assert!(!fixture.env.read_log().contains("terminal attach"));
+
+    wait_detached(&first);
+    first.write(FOCUS_IN);
+    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
+    wait_detached(&second);
+    second.write(b"x");
+    wait_for_log(&fixture.env, "terminal attach term-w1:p2");
+    fixture.release_attach();
+    assert!(first.wait().success());
+    assert!(second.wait().success());
+}
+
+#[test]
 fn a_request_for_another_pane_leaves_the_thread_attached() {
     let fixture = Fixture::new();
     fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");

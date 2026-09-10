@@ -60,6 +60,21 @@ pub fn run(session_name: &str, target: Option<&str>, kind: Option<&str>) -> Resu
     run_with_mode(session_name, target, kind, false)
 }
 
+/// `zerdr detach`: asks every live thread in every session to release its pane, for
+/// the moment before a small client opens `herdr`. Fire-and-forget: each connect
+/// consumes its request within one cycle poll, and the thread comes back through its
+/// own wake, so there is nothing to wait for and no `attach` counterpart.
+pub fn detach_all() -> Result<()> {
+    let paths = Paths::discover()?;
+    let asked = ThreadLeaseSet::new(paths.thread_leases_dir).request_detach_all()?;
+    if asked == 0 {
+        println!("zerdr: no live threads");
+    } else {
+        println!("zerdr: asked {asked} thread(s) to detach");
+    }
+    Ok(())
+}
+
 /// The `pane.focused` plugin hook. Another Herdr client selecting a pane a thread is
 /// attached to asks that thread to release its attach, so the pane can take the
 /// selecting client's size. The hook knows the session socket but not the session
