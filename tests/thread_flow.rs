@@ -1982,6 +1982,52 @@ fn a_request_echoing_a_sibling_connects_focus_is_dropped() {
     assert!(second.wait().success());
 }
 
+/// Herdr emits the echo while `workspace focus` is still running, so the sibling's
+/// protection must already be in place before the focus call is issued.
+#[test]
+fn a_sibling_echo_that_lands_before_the_focus_call_returns_is_dropped() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    fixture.agent("zed-2", "w1:p2", "w1", "idle", "write tests");
+    let paths = fixture.paths();
+    let mut first = fixture.std_thread_command();
+    first
+        .arg("connect")
+        .env("ZERDR_THREAD_FOCUS_GRACE_MS", "1500");
+    let mut first = attached_pty_thread(&fixture, first);
+
+    let focusing = fixture.env.root.path().join("focus-in-progress");
+    let proceed = fixture.env.root.path().join("focus-proceed");
+    let mut second = fixture.std_thread_command();
+    second
+        .arg("connect")
+        .env("ZERDR_TEST_WORKSPACES_JSON", fixture.workspaces(false))
+        .env("ZERDR_TEST_WORKSPACE_FOCUS_MARKER", &focusing)
+        .env("ZERDR_TEST_WORKSPACE_FOCUS_CONTINUE", &proceed)
+        .env("ZERDR_THREAD_FOCUS_GRACE_MS", "1500");
+    let mut second = PtyChild::spawn(second);
+    wait_until("the sibling's focus call to start", || focusing.exists());
+
+    // The hook fires while the sibling's `workspace focus` has not returned yet.
+    hook_command(&fixture, "w1:p1").assert().success();
+    wait_until("the request to be consumed", || {
+        count_detach_requests(&paths) == 0
+    });
+    thread::sleep(Duration::from_millis(200));
+    assert!(
+        !first.output().contains(DETACHED_NOTICE),
+        "{}",
+        first.output()
+    );
+    assert!(first.is_running());
+
+    fs::write(&proceed, "go").unwrap();
+    wait_for_log(&fixture.env, "agent attach w1:p2");
+    fixture.release_attach();
+    assert!(first.wait().success());
+    assert!(second.wait().success());
+}
+
 #[test]
 fn a_request_for_another_pane_leaves_the_thread_attached() {
     let fixture = Fixture::new();

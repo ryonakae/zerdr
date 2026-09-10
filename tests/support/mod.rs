@@ -39,6 +39,10 @@ if [ "$1" = "--session" ] && [ "$3" = "workspace" ] && [ "$4" = "list" ]; then
   exit 0
 fi
 if [ "$1" = "--session" ] && [ "$3" = "workspace" ] && [ "$4" = "focus" ]; then
+  if [ -n "$ZERDR_TEST_WORKSPACE_FOCUS_MARKER" ]; then
+    : > "$ZERDR_TEST_WORKSPACE_FOCUS_MARKER"
+    while [ ! -e "$ZERDR_TEST_WORKSPACE_FOCUS_CONTINUE" ]; do sleep 0.01; done
+  fi
   printf '%s\n' '{"ok":true,"result":{}}'
   exit 0
 fi

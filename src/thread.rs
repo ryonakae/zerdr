@@ -131,9 +131,13 @@ fn run_with_mode(
     // Zed forward under follow mode. Skipping the focus is the harmless direction.
     let workspaces = match herdr.workspaces_for(session_name) {
         Ok(workspaces) => {
-            if focus_workspace(&herdr, session_name, &agent.workspace_id, &workspaces) {
-                lease.mark_focus(&agent.workspace_id)?;
-            }
+            focus_workspace(
+                &herdr,
+                session_name,
+                &agent.workspace_id,
+                &workspaces,
+                &lease,
+            );
             workspaces
         }
         Err(error) => {
@@ -717,26 +721,27 @@ fn generate_agent_name(agents: &[AgentInfo]) -> String {
 
 /// Focusing an already-focused workspace would re-fire Herdr's `workspace.focused` event
 /// and, with follow mode running, pull Zed forward on every thread start.
-/// Returns whether a focus was issued, so the caller can stamp the lease scope for
-/// the attach cycles to tell Herdr's echo of it from another client's selection.
+/// The lease scope is stamped before the focus is issued: Herdr emits `pane.focused`
+/// while the focus call is still running, and a sibling thread polling its detach
+/// requests must already find the stamp when that echo reaches it.
 fn focus_workspace(
     herdr: &Herdr,
     session_name: &str,
     workspace_id: &str,
     workspaces: &[Workspace],
-) -> bool {
+    lease: &ThreadLeaseGuard,
+) {
     if workspaces
         .iter()
         .any(|workspace| workspace.focused && workspace.id == workspace_id)
     {
-        return false;
+        return;
     }
-    match herdr.focus_workspace_for(session_name, workspace_id) {
-        Ok(()) => true,
-        Err(error) => {
-            eprintln!("zerdr: could not focus Herdr workspace {workspace_id}: {error}");
-            false
-        }
+    if let Err(error) = lease.mark_focus(workspace_id) {
+        eprintln!("zerdr: could not record the Herdr workspace focus: {error}");
+    }
+    if let Err(error) = herdr.focus_workspace_for(session_name, workspace_id) {
+        eprintln!("zerdr: could not focus Herdr workspace {workspace_id}: {error}");
     }
 }
 
