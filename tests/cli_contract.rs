@@ -181,6 +181,28 @@ fn sessionless_setup_commands_reject_session_targeting() {
     }
 }
 
+/// Herdr spawns the plugin hooks with the server's own environment, which carries SSH
+/// markers whenever the server was first started from an SSH session (a phone opening
+/// `herdr`). The hooks are local by construction, so the remote rejection must not
+/// apply to them; they fail on their missing plugin environment instead.
+#[test]
+fn hidden_plugin_commands_run_under_remote_markers() {
+    for command in ["sync-from-herdr", "open-from-herdr", "detach-from-herdr"] {
+        let env = TestEnv::new();
+        env.command()
+            .arg(command)
+            .env("SSH_CONNECTION", "client server")
+            .env("SSH_CLIENT", "client")
+            .env_remove("HERDR_PLUGIN_EVENT")
+            .env_remove("HERDR_PLUGIN_ACTION_ID")
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("local macOS or Linux environment").not())
+            .stderr(predicate::str::contains("missing HERDR_PLUGIN_"));
+        assert_eq!(env.read_log(), "");
+    }
+}
+
 #[test]
 fn hidden_plugin_commands_reject_session_targeting() {
     for command in ["sync-from-herdr", "open-from-herdr", "detach-from-herdr"] {
@@ -279,7 +301,7 @@ fn every_remote_marker_and_runtime_command_is_rejected_before_any_process() {
             .stderr(predicate::str::contains(marker));
         assert_eq!(env.read_log(), "");
     }
-    let commands: [&[&str]; 10] = [
+    let commands: [&[&str]; 8] = [
         &["connect"],
         &["start"],
         &["workspace", "sync"],
@@ -288,8 +310,6 @@ fn every_remote_marker_and_runtime_command_is_rejected_before_any_process() {
         &["setup", "install"],
         &["setup", "uninstall"],
         &["setup", "auto", "enable"],
-        &["sync-from-herdr"],
-        &["open-from-herdr"],
     ];
     for command in commands {
         let env = TestEnv::new();

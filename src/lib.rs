@@ -17,12 +17,18 @@ use state::DEFAULT_SESSION_NAME;
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     let remote = runtime::detect_remote_environment();
+    // The plugin hooks are spawned by the local Herdr server with its own environment,
+    // which keeps the SSH markers of whichever session first started that server (a
+    // phone opening `herdr`). They are local by construction, so the rejection meant
+    // for a user's SSH shell must not silence them.
     if let Some(remote) = remote.as_ref()
         && !matches!(
             &cli.command,
             Command::Setup {
                 command: SetupCommand::Doctor
-            }
+            } | Command::SyncFromHerdr
+                | Command::OpenFromHerdr
+                | Command::DetachFromHerdr
         )
     {
         return Err(remote.rejection());

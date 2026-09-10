@@ -119,7 +119,7 @@ The one-shot plugin action reuses an applicable live wrapper route. Without a wr
 - **Herdr 0.8.0 or newer:** the plugin API must expose `workspace.focused` events, workspace actions, and plugin-action keybindings.
 - **Zed terminal threads:** `zerdr connect` needs a Zed version whose agent panel hosts terminal threads.
 - **Local Git checkouts:** each Herdr workspace maps to one canonical checkout root.
-- **Local macOS or Linux terminal:** runtime commands reject SSH, WSL, containers, and dev containers.
+- **Local macOS or Linux terminal:** runtime commands reject SSH, WSL, containers, and dev containers. The Herdr plugin hooks are exempt: Herdr runs them with the server's environment, which keeps the SSH markers of whichever session first started the server.
 
 `zerdr setup doctor`, `zerdr --help`, and `zerdr --version` remain available in remote environments. Remote doctor skips runtime checks and state cleanup.
 

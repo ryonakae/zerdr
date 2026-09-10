@@ -13,6 +13,10 @@ _2026-09-09_
 
 - **Breaking:** attached terminal threads now detach on their own when another Herdr client selects their pane, and reattach when you return to the thread in Zed — selecting it in the sidebar, clicking it, or pressing a key. The manual `zerdr detach` and `zerdr attach` commands, the `zerdr: Detach` and `zerdr: Attach` Zed tasks, and their keybinding examples are gone; the next `zerdr setup install` removes the two tasks from your Zed tasks file (a copy you modified is left alone). Rerun `zerdr setup install` after upgrading: the Herdr plugin manifest gains a `pane.focused` hook, and `zerdr start`, `zerdr setup doctor`, and `zerdr setup auto enable` require it.
 
+### Fixed
+
+- The Herdr plugin hooks (`sync-from-herdr`, `open-from-herdr`, and the new `detach-from-herdr`) now run when the Herdr server was first started from an SSH session. Herdr passes the server's environment to plugin commands, so the SSH markers it inherited made zerdr's remote-environment check reject every hook, silently breaking focus sync and the detach hook.
+
 ## v0.7.0
 
 _2026-08-27_
