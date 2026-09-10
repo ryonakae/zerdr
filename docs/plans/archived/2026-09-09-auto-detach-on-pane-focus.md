@@ -67,13 +67,21 @@ Review base commit: `3fde0a5` (main, in sync with `origin/main` at start).
 
 ## Final Validation
 
-- [ ] Detach/reattach behaviour, grace window, ignored inputs, non-tty wait: `cargo test --test thread_flow` → all pass, including on Ubuntu CI (pty and termios paths are Unix-generic).
-- [ ] Lease marker contract: `cargo test --test state_and_bindings` → pass.
-- [ ] CLI surface: `cargo test --test cli_contract` → pass; `cargo run --locked -- --help` lists `connect`, `start`, `workspace`, `setup` and neither `detach` nor `attach` nor `detach-from-herdr`.
-- [ ] Manifest, tasks, doctor: `cargo test --test setup_and_doctor` → pass.
-- [ ] Sync hook unaffected: `cargo test --test sync_flow` → pass (`sync-from-herdr` still rejects events other than `workspace.focused`).
-- [ ] Removal is complete: `grep -rn "suspend\|thread_detach\|\.detached\|zerdr: Detach\|zerdr: Attach\|zerdr detach\|zerdr attach" src tests assets README.md AGENTS.md` → only the CHANGELOG history, this plan, and the `setup_and_doctor` upgrade test that seeds the two legacy task labels mention them.
-- [ ] Required CI checks in order: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets --all-features` → all pass.
-- [ ] Manual, against the developer's real environment only after the automated checks: `zerdr setup install`, open a terminal thread with `zerdr connect`, select the pane from a second Herdr client (phone over SSH or `herdr` in another terminal) → the thread prints the notice and the pane fits the second client; click the thread or select it in the sidebar → the thread reattaches and the pane returns to the thread's size.
+- [x] Detach/reattach behaviour, grace window, ignored inputs, non-tty wait: `cargo test --test thread_flow` → 59 passed on macOS at `b6bbd0c`; Ubuntu runs in CI on push (pty and termios paths are Unix-generic).
+- [x] Lease marker contract: `cargo test --test state_and_bindings` → 23 passed.
+- [x] CLI surface: `cargo test --test cli_contract` → 22 passed; `cargo run --locked -- --help` lists `connect`, `start`, `workspace`, `setup` only.
+- [x] Manifest, tasks, doctor: `cargo test --test setup_and_doctor` → 54 passed; `herdr_wrapper` → 20 passed.
+- [x] Sync hook unaffected: `cargo test --test sync_flow` → 56 passed.
+- [x] Removal is complete: `grep -rn "suspend\|thread_detach\|\.detached\|zerdr: Detach\|zerdr: Attach\|zerdr detach\|zerdr attach" src tests assets README.md AGENTS.md` → only the CHANGELOG history, this plan, and the `setup_and_doctor` upgrade test that seeds the two legacy task labels mention them.
+- [x] Required CI checks in order: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets --all-features` → all pass at `b6bbd0c`.
+- [ ] Manual (left to the user; not run by the implementer, whose automated validation must not touch the real Herdr and Zed configuration): `zerdr setup install`, open a terminal thread with `zerdr connect`, select the pane from a second Herdr client (phone over SSH or `herdr` in another terminal) → the thread prints the notice and the pane fits the second client; click the thread or select it in the sidebar → the thread reattaches and the pane returns to the thread's size.
+
+
+## Gate summary
+
+- Review base `3fde0a5`; implementation commits `f52c174`, `62b94a6`, `148c89d`, `ed40fa0`, `117661e`.
+- Independent review (read-only, repository only) on `117661e`: no blocking/high; two `decision required` items, both resolved by the user — 2a sibling-connect focus echo → shared per-workspace focus stamp in the lease scope; 2b pane loss while detached → behaviour kept, comment and plan wording corrected. Correction commit `e393370`.
+- Scoped re-review on `e393370`: one blocking/high (stamp written after the focus call, so a sibling could consume the echo before the stamp existed) → correction commit `b6bbd0c` stamps before the call and adds a deterministic interleaving test.
+- Scoped re-review on `b6bbd0c`: no blocking/high, no decision required. Medium/low items left unfixed and reported: input typed between the wake and the reattach spawn is forwarded to the agent (a `tcflush` before spawning would close it); a `.detach-request` left by a connect killed within one poll detaches the next connect to the same pane (`acquire` could clear it); focus stamps persist per workspace in the scope directory; `focus_age` is wall-clock based; the DECRST-on-signal path with a real tty and the remote-marker rejection of `detach-from-herdr` are untested; Ctrl-C in a detached thread now reattaches instead of ending connect.
 
 > 各タスクは対応する検証が成功してから完了にする。実装中の軽微な差分と検証結果は該当箇所へ反映し、要件、対象外、公開契約の変更はユーザーへ確認する。最終確認では有効な検証結果を再利用し、計画と実際の変更が一致することを確認する。必要な検証と実装側の必須レビューが通ったら、計画を同名のまま `docs/plans/archived/` へ移す。
