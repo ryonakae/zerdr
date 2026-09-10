@@ -9,7 +9,7 @@ use std::time::Duration;
 use predicates::prelude::*;
 use support::PtyChild;
 use support::TestEnv;
-use zerdr::state::{BindingStore, Paths, ThreadLeaseSet, ThreadPaneMemory};
+use zerdr::state::{BindingStore, LeaseGuard, LeaseSet, Paths, ThreadLeaseSet, ThreadPaneMemory};
 
 const OSC_PREFIX: &str = "\u{1b}]0;";
 
@@ -181,6 +181,14 @@ impl Fixture {
 
     fn paths(&self) -> Paths {
         Paths::for_test(self.env.root.path())
+    }
+
+    /// A live `zerdr start` wrapper for the fixture session, held by this test process.
+    /// Connect focuses the Herdr workspace only while one exists.
+    fn hold_wrapper_lease(&self) -> LeaseGuard {
+        LeaseSet::new(self.paths().leases_dir)
+            .acquire_for("default", &self.socket, std::process::id())
+            .unwrap()
     }
 }
 
@@ -1410,11 +1418,16 @@ fn the_attach_exit_status_is_propagated() {
         .code(3);
 }
 
+/// Focusing the workspace serves the `zerdr start` follow mode. Without a live wrapper
+/// the shared Herdr focus is left alone: moving it onto the thread's pane would make
+/// that pane the one every other client already has selected, so selecting it there
+/// could never fire the detach.
 #[test]
-fn an_unfocused_workspace_is_focused_exactly_once() {
-    for focused in [true, false] {
+fn an_unfocused_workspace_is_focused_exactly_once_and_only_under_a_live_wrapper() {
+    for (focused, wrapper) in [(true, true), (false, true), (false, false)] {
         let fixture = Fixture::new();
         fixture.agent("zed-1", "w1:p1", "w1", "idle", "focus check");
+        let _wrapper = wrapper.then(|| fixture.hold_wrapper_lease());
 
         fixture
             .thread_command()
@@ -1426,7 +1439,7 @@ fn an_unfocused_workspace_is_focused_exactly_once() {
 
         let log = fixture.env.read_log();
         let focus_calls = log.matches("workspace focus w1").count();
-        assert_eq!(focus_calls, usize::from(!focused), "{log}");
+        assert_eq!(focus_calls, usize::from(!focused && wrapper), "{log}");
     }
 }
 
@@ -1902,6 +1915,7 @@ fn a_focus_out_does_not_reattach_but_a_key_or_a_click_does() {
 fn a_request_inside_the_grace_window_after_the_own_focus_is_dropped() {
     let fixture = Fixture::new();
     fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    let _wrapper = fixture.hold_wrapper_lease();
     let paths = fixture.paths();
     let mut command = fixture.std_thread_command();
     command
@@ -1943,6 +1957,7 @@ fn a_request_echoing_a_sibling_connects_focus_is_dropped() {
     let fixture = Fixture::new();
     fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
     fixture.agent("zed-2", "w1:p2", "w1", "idle", "write tests");
+    let _wrapper = fixture.hold_wrapper_lease();
     let paths = fixture.paths();
     let mut first = fixture.std_thread_command();
     first
@@ -1996,6 +2011,7 @@ fn a_sibling_echo_that_lands_before_the_focus_call_returns_is_dropped() {
     let fixture = Fixture::new();
     fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
     fixture.agent("zed-2", "w1:p2", "w1", "idle", "write tests");
+    let _wrapper = fixture.hold_wrapper_lease();
     let paths = fixture.paths();
     let mut first = fixture.std_thread_command();
     first

@@ -15,8 +15,8 @@ use signal_hook::iterator::Signals;
 use crate::error::{Error, Result};
 use crate::herdr::{AgentInfo, Herdr, ManagedChild, SignalForwarder, Workspace};
 use crate::state::{
-    BindingStore, DEFAULT_SESSION_NAME, OperationGuard, Paths, ThreadLeaseGuard, ThreadLeaseSet,
-    ThreadPaneMemory, canonical_git_root, linked_worktree_parent,
+    BindingStore, DEFAULT_SESSION_NAME, LeaseSet, OperationGuard, Paths, ThreadLeaseGuard,
+    ThreadLeaseSet, ThreadPaneMemory, canonical_git_root, linked_worktree_parent,
 };
 
 const DEFAULT_POLL_MS: u64 = 1_000;
@@ -126,18 +126,28 @@ fn run_with_mode(
         None => resolve_or_create(&session, &memory, &paths, kind)?,
     };
 
+    // Focusing the workspace serves the `zerdr start` follow mode, which routes the
+    // focused workspace into Zed. Without a live wrapper the shared Herdr focus is left
+    // alone: moving it onto this pane would make it the pane every other client already
+    // has selected, and selecting it there could then never fire the detach hook.
     // Without the workspace list there is no way to tell whether this workspace is
     // already focused, and focusing it blindly would re-fire `workspace.focused` and pull
     // Zed forward under follow mode. Skipping the focus is the harmless direction.
+    let wrapper_live = LeaseSet::new(paths.leases_dir.clone())
+        .inspect_for(session_name, &socket)
+        .map(|inspection| inspection.live)
+        .unwrap_or(false);
     let workspaces = match herdr.workspaces_for(session_name) {
         Ok(workspaces) => {
-            focus_workspace(
-                &herdr,
-                session_name,
-                &agent.workspace_id,
-                &workspaces,
-                &lease,
-            );
+            if wrapper_live {
+                focus_workspace(
+                    &herdr,
+                    session_name,
+                    &agent.workspace_id,
+                    &workspaces,
+                    &lease,
+                );
+            }
             workspaces
         }
         Err(error) => {

@@ -80,7 +80,7 @@ An attached thread pins its Herdr pane to the thread terminal's size, so a much 
 
 Back in Zed, the thread reattaches as soon as you return to it: selecting the thread in the sidebar, clicking inside it, or pressing any key (the key is not passed to the agent). Bringing the Zed window to the front while the thread has focus counts as returning, too. The pane goes back to the thread's size, whether or not the agent inside changed in the meantime.
 
-Herdr reports a pane as focused only when the focus changes, so a client that connects while the pane is already its focused pane does not trigger the detach; select another pane and come back. Zed threads and a full-size Herdr client on the same desk share this rule: selecting the pane in the other client takes it, returning to the thread takes it back.
+Herdr reports a pane as focused only when the focus changes, so a client whose view is already on the pane does not trigger the detach; select another pane and come back. For the same reason `zerdr connect` moves Herdr's focus onto its workspace only while a `zerdr start` wrapper is live and needs it for follow mode; otherwise the shared focus is left where the other clients had it. Zed threads and a full-size Herdr client on the same desk share this rule: selecting the pane in the other client takes it, returning to the thread takes it back.
 
 ### Named sessions
 
