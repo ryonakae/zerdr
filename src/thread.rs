@@ -87,7 +87,7 @@ pub fn detach_from_herdr() -> Result<()> {
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| Error::User("Herdr plugin context is missing focused_pane_id".to_owned()))?;
     let paths = Paths::discover()?;
-    ThreadLeaseSet::new(paths.thread_leases_dir).request_detach(&socket, pane_id)?;
+    ThreadLeaseSet::new(paths.thread_leases_dir).request_detach(&socket, pane_id, false)?;
     Ok(())
 }
 
@@ -236,9 +236,13 @@ fn attach_cycle(
                     }
                     // A zerdr connect focusing this workspace — this thread's own, or a
                     // sibling's in the same session — makes Herdr report the
-                    // workspace's focused pane; that echo must not detach anyone.
+                    // workspace's focused pane; that echo must not detach anyone. A
+                    // request a person made is never such an echo.
                     let zerdr_echo = lease.focus_age(workspace_id).is_some_and(|age| age < grace);
-                    if lease.take_detach_request()? && !zerdr_echo {
+                    let detach = lease
+                        .take_detach_request()?
+                        .is_some_and(|request| request.explicit || !zerdr_echo);
+                    if detach {
                         detached.store(true, Ordering::SeqCst);
                         managed.terminate_gracefully();
                         println!("{DETACHED_NOTICE}");

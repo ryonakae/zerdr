@@ -986,6 +986,16 @@ pub struct ThreadLeaseRecord {
 /// to release its attach. Existence-based like the lease markers: the hook only
 /// creates it and the connect only removes it, so a reader never sees a torn state.
 const DETACH_REQUEST_EXTENSION: &str = "detach-request";
+/// Marker body of a request a person made, as opposed to an empty focus-echo marker.
+const EXPLICIT_REQUEST: &[u8] = b"explicit";
+
+/// A pending detach request read by the lease holder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetachRequest {
+    /// A person asked (a key in another Herdr client, `zerdr detach`), so the request
+    /// is never one of Herdr's focus echoes and needs no grace window.
+    pub explicit: bool,
+}
 /// Per-workspace focus stamps in a lease scope; see [`ThreadLeaseGuard::mark_focus`].
 const FOCUS_STAMP_EXTENSION: &str = "focus-stamp";
 
@@ -1119,10 +1129,34 @@ impl ThreadLeaseSet {
     /// its request marker. Scans every session scope because the plugin hook that
     /// calls this knows the socket but not the session name. Stale records (lock
     /// free) and orphan markers met on the way are removed, as `leased_panes` does.
+    /// `explicit` marks a request a person made (a key in another client, `zerdr
+    /// detach`) as opposed to a focus echo, so the connect skips its grace window.
     /// Returns whether a live lease was marked.
-    pub fn request_detach(&self, socket_path: &Path, pane_id: &str) -> Result<bool> {
+    pub fn request_detach(
+        &self,
+        socket_path: &Path,
+        pane_id: &str,
+        explicit: bool,
+    ) -> Result<bool> {
         let socket_path = canonical_socket(socket_path)?;
-        let mut marked = false;
+        let marked = self.mark_requests(explicit, |record| {
+            record.socket_path == socket_path && record.pane_id == pane_id
+        })?;
+        Ok(marked > 0)
+    }
+
+    /// Asks every live connect in every session to detach (`zerdr detach`, run before
+    /// opening Herdr from a small client). Returns how many leases were marked.
+    pub fn request_detach_all(&self) -> Result<usize> {
+        self.mark_requests(true, |_| true)
+    }
+
+    fn mark_requests(
+        &self,
+        explicit: bool,
+        matches: impl Fn(&ThreadLeaseRecord) -> bool,
+    ) -> Result<usize> {
+        let mut marked = 0;
         if !self.root.exists() {
             return Ok(marked);
         }
@@ -1161,13 +1195,11 @@ impl ThreadLeaseSet {
                         let Ok(record) = serde_json::from_slice::<ThreadLeaseRecord>(&bytes) else {
                             continue;
                         };
-                        if record.schema_version == SCHEMA_VERSION
-                            && record.socket_path == socket_path
-                            && record.pane_id == pane_id
-                        {
+                        if record.schema_version == SCHEMA_VERSION && matches(&record) {
                             let marker = path.with_extension(DETACH_REQUEST_EXTENSION);
-                            fs::write(&marker, b"").map_err(|error| Error::io(&marker, error))?;
-                            marked = true;
+                            let body: &[u8] = if explicit { EXPLICIT_REQUEST } else { b"" };
+                            fs::write(&marker, body).map_err(|error| Error::io(&marker, error))?;
+                            marked += 1;
                         }
                     }
                     Err(error) => return Err(Error::io(&path, error)),
@@ -1331,15 +1363,22 @@ impl ThreadLeaseGuard {
         ))
     }
 
-    /// Consumes a pending detach request from the plugin hook, reporting whether
-    /// there was one.
-    pub fn take_detach_request(&self) -> Result<bool> {
+    /// Consumes a pending detach request, reporting it when there was one.
+    pub fn take_detach_request(&self) -> Result<Option<DetachRequest>> {
         let request = self.request_path();
+        let body = match fs::read(&request) {
+            Ok(body) => body,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(Error::io(&request, error)),
+        };
         match fs::remove_file(&request) {
-            Ok(()) => Ok(true),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(Error::io(&request, error)),
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(Error::io(&request, error)),
         }
+        Ok(Some(DetachRequest {
+            explicit: body == EXPLICIT_REQUEST,
+        }))
     }
 
     fn request_path(&self) -> PathBuf {

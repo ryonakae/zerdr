@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 use zerdr::state::{
-    BindingStore, LeaseSet, LifecycleGuard, Paths, RouteStore, SyncGuard, ThreadLeaseSet,
-    ThreadPaneMemory,
+    BindingStore, DetachRequest, LeaseSet, LifecycleGuard, Paths, RouteStore, SyncGuard,
+    ThreadLeaseSet, ThreadPaneMemory,
 };
 
 fn git_repo() -> (TempDir, std::path::PathBuf) {
@@ -556,23 +556,38 @@ fn detach_request_marks_only_the_live_lease_for_the_socket_and_pane() {
     fs::write(&other_socket, "").unwrap();
     let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
 
-    assert!(!leases.request_detach(&socket, "w1:p1").unwrap());
+    assert!(!leases.request_detach(&socket, "w1:p1", false).unwrap());
 
     let guard = leases.acquire("default", &socket, "w1:p1").unwrap();
     let marker = guard.path().with_extension("detach-request");
-    assert!(!leases.request_detach(&socket, "w1:p2").unwrap());
-    assert!(!leases.request_detach(&other_socket, "w1:p1").unwrap());
+    assert!(!leases.request_detach(&socket, "w1:p2", false).unwrap());
+    assert!(
+        !leases
+            .request_detach(&other_socket, "w1:p1", false)
+            .unwrap()
+    );
     assert!(!marker.exists());
-    assert!(!guard.take_detach_request().unwrap());
+    assert_eq!(guard.take_detach_request().unwrap(), None);
 
-    assert!(leases.request_detach(&socket, "w1:p1").unwrap());
+    assert!(leases.request_detach(&socket, "w1:p1", false).unwrap());
     assert!(marker.exists());
-    assert!(guard.take_detach_request().unwrap());
+    assert_eq!(
+        guard.take_detach_request().unwrap(),
+        Some(DetachRequest { explicit: false })
+    );
     assert!(!marker.exists());
-    assert!(!guard.take_detach_request().unwrap());
+    assert_eq!(guard.take_detach_request().unwrap(), None);
+
+    // An explicit request (a key in another client, `zerdr detach`) is told apart from
+    // a focus echo.
+    assert!(leases.request_detach(&socket, "w1:p1", true).unwrap());
+    assert_eq!(
+        guard.take_detach_request().unwrap(),
+        Some(DetachRequest { explicit: true })
+    );
 
     // The marker never outlives its lease.
-    assert!(leases.request_detach(&socket, "w1:p1").unwrap());
+    assert!(leases.request_detach(&socket, "w1:p1", false).unwrap());
     let lease_path = guard.path().to_path_buf();
     let record = fs::read(&lease_path).unwrap();
     drop(guard);
@@ -584,9 +599,44 @@ fn detach_request_marks_only_the_live_lease_for_the_socket_and_pane() {
     fs::write(&lease_path, &record).unwrap();
     let orphan = lease_path.parent().unwrap().join("orphan.detach-request");
     fs::write(&orphan, b"").unwrap();
-    assert!(!leases.request_detach(&socket, "w1:p1").unwrap());
+    assert!(!leases.request_detach(&socket, "w1:p1", false).unwrap());
     assert!(!lease_path.exists());
     assert!(!orphan.exists());
+}
+
+#[test]
+fn detach_request_all_marks_every_live_lease_across_sessions() {
+    let state = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(state.path());
+    let first_socket = state.path().join("first.sock");
+    let second_socket = state.path().join("second.sock");
+    fs::write(&first_socket, "").unwrap();
+    fs::write(&second_socket, "").unwrap();
+    let leases = ThreadLeaseSet::new(paths.thread_leases_dir.clone());
+
+    assert_eq!(leases.request_detach_all().unwrap(), 0);
+
+    let first = leases.acquire("default", &first_socket, "w1:p1").unwrap();
+    let second = leases.acquire("work", &second_socket, "w2:p1").unwrap();
+    let stale = leases.acquire("default", &first_socket, "w1:p9").unwrap();
+    let stale_path = stale.path().to_path_buf();
+    let stale_record = fs::read(&stale_path).unwrap();
+    drop(stale);
+    fs::write(&stale_path, &stale_record).unwrap();
+
+    assert_eq!(leases.request_detach_all().unwrap(), 2);
+    assert_eq!(
+        first.take_detach_request().unwrap(),
+        Some(DetachRequest { explicit: true })
+    );
+    assert_eq!(
+        second.take_detach_request().unwrap(),
+        Some(DetachRequest { explicit: true })
+    );
+    assert!(
+        !stale_path.exists(),
+        "stale records are cleaned, not marked"
+    );
 }
 
 #[test]
@@ -607,7 +657,7 @@ fn a_focus_stamp_is_shared_by_every_lease_in_the_scope() {
     assert!(age < Duration::from_secs(5), "{age:?}");
     assert!(first.focus_age("w2").is_none(), "stamps are per workspace");
     // Stamps live beside the leases but never disturb the request scan.
-    assert!(leases.request_detach(&socket, "w1:p1").unwrap());
-    assert!(first.take_detach_request().unwrap());
+    assert!(leases.request_detach(&socket, "w1:p1", false).unwrap());
+    assert!(first.take_detach_request().unwrap().is_some());
     assert!(first.focus_age("w1").is_some());
 }
