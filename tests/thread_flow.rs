@@ -2318,6 +2318,75 @@ fn hook_command(fixture: &Fixture, pane_id: &str) -> assert_cmd::Command {
     command
 }
 
+/// The `detach-thread` plugin action as Herdr invokes it from a keybinding, with the
+/// pane the invoking client focuses in the context.
+fn action_command(fixture: &Fixture, pane_id: &str) -> assert_cmd::Command {
+    let mut command = fixture.env.command();
+    command
+        .arg("detach-from-herdr")
+        .env_remove("HERDR_PLUGIN_EVENT")
+        .env("HERDR_PLUGIN_ACTION_ID", "detach-thread")
+        .env("HERDR_SOCKET_PATH", &fixture.socket)
+        .env("ZERDR_TEST_SESSIONS_JSON", fixture.sessions())
+        .env(
+            "HERDR_PLUGIN_CONTEXT_JSON",
+            serde_json::json!({"workspace_id": "w1", "focused_pane_id": pane_id}).to_string(),
+        );
+    command
+}
+
+/// A key pressed in another client is never one of Herdr's focus echoes, so the action
+/// detaches even inside the grace window that follows connect's own focus.
+#[test]
+fn the_detach_thread_action_detaches_inside_the_grace_window() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    let _wrapper = fixture.hold_wrapper_lease();
+    let mut command = fixture.std_thread_command();
+    command
+        .arg("connect")
+        .env("ZERDR_TEST_WORKSPACES_JSON", fixture.workspaces(false))
+        .env("ZERDR_THREAD_FOCUS_GRACE_MS", "5000");
+    let mut thread = attached_pty_thread(&fixture, command);
+    assert!(fixture.env.read_log().contains("workspace focus w1"));
+
+    action_command(&fixture, "w1:p1")
+        .assert()
+        .success()
+        .stdout("")
+        .stderr("");
+    thread.wait_for_output(DETACHED_NOTICE);
+    assert!(!fixture.env.read_log().contains("notification show"));
+
+    wait_detached(&thread);
+    thread.write(FOCUS_IN);
+    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
+    fixture.release_attach();
+    assert!(thread.wait().success());
+}
+
+#[test]
+fn the_detach_thread_action_reports_a_pane_without_a_thread() {
+    let fixture = Fixture::new();
+
+    action_command(&fixture, "w1:p1")
+        .assert()
+        .success()
+        .stdout("");
+    let log = fixture.env.read_log();
+    assert!(
+        log.contains("notification show")
+            && log.contains("no Zed thread is attached to pane w1:p1"),
+        "{log}"
+    );
+
+    action_command(&fixture, "w1:p1")
+        .env("HERDR_PLUGIN_ACTION_ID", "other")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("detach-thread"));
+}
+
 #[test]
 fn the_pane_focused_hook_marks_the_live_lease_for_that_pane_only() {
     let fixture = Fixture::new();

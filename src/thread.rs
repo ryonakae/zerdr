@@ -75,19 +75,45 @@ pub fn detach_all() -> Result<()> {
     Ok(())
 }
 
-/// The `pane.focused` plugin hook. Another Herdr client selecting a pane a thread is
-/// attached to asks that thread to release its attach, so the pane can take the
-/// selecting client's size. The hook knows the session socket but not the session
-/// name, so the lease lookup spans every scope. A pane zerdr does not own is not an
-/// error: Herdr fires this for every focus change in the session.
+/// How Herdr invoked `detach-from-herdr`.
+enum DetachSource {
+    /// The `pane.focused` event hook: another client selected the pane.
+    Event,
+    /// The `detach-thread` action: a person pressed the bound key in another client.
+    Action,
+}
+
+/// The `detach-from-herdr` plugin entry point, run by Herdr for the `pane.focused`
+/// event hook and for the `detach-thread` action. Either way another Herdr client
+/// wants the pane a thread is attached to, so that thread is asked to release its
+/// attach and the pane can take the other client's size. The hook knows the session
+/// socket but not the session name, so the lease lookup spans every scope. For the
+/// event, a pane zerdr does not own is not an error: Herdr fires it for every focus
+/// change in the session. For the action, a person expects an answer, so a pane
+/// without a thread is reported through a Herdr notification.
 pub fn detach_from_herdr() -> Result<()> {
-    let event = std::env::var("HERDR_PLUGIN_EVENT")
-        .map_err(|_| Error::User("missing HERDR_PLUGIN_EVENT".to_owned()))?;
-    if event != "pane.focused" {
-        return Err(Error::User(format!(
-            "unexpected Herdr plugin event {event:?}; expected pane.focused"
-        )));
-    }
+    let source = match (
+        std::env::var("HERDR_PLUGIN_EVENT").ok(),
+        std::env::var("HERDR_PLUGIN_ACTION_ID").ok(),
+    ) {
+        (Some(event), _) if event == "pane.focused" => DetachSource::Event,
+        (Some(event), _) => {
+            return Err(Error::User(format!(
+                "unexpected Herdr plugin event {event:?}; expected pane.focused"
+            )));
+        }
+        (None, Some(action)) if action == "detach-thread" => DetachSource::Action,
+        (None, Some(action)) => {
+            return Err(Error::User(format!(
+                "unexpected Herdr plugin action {action:?}; expected detach-thread"
+            )));
+        }
+        (None, None) => {
+            return Err(Error::User(
+                "missing HERDR_PLUGIN_EVENT or HERDR_PLUGIN_ACTION_ID".to_owned(),
+            ));
+        }
+    };
     let socket = std::env::var_os("HERDR_SOCKET_PATH")
         .map(PathBuf::from)
         .ok_or_else(|| Error::User("missing HERDR_SOCKET_PATH".to_owned()))?;
@@ -102,7 +128,20 @@ pub fn detach_from_herdr() -> Result<()> {
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| Error::User("Herdr plugin context is missing focused_pane_id".to_owned()))?;
     let paths = Paths::discover()?;
-    ThreadLeaseSet::new(paths.thread_leases_dir).request_detach(&socket, pane_id, false)?;
+    let explicit = matches!(source, DetachSource::Action);
+    let marked =
+        ThreadLeaseSet::new(paths.thread_leases_dir).request_detach(&socket, pane_id, explicit)?;
+    if !marked && explicit {
+        // Best-effort: the notification is the answer to the key press; failing to
+        // deliver it must not turn the action itself into an error.
+        let herdr = Herdr::from_env();
+        if let Ok(session_name) = herdr.session_name_for_socket(&socket) {
+            let _ = herdr.notify_error_for(
+                &session_name,
+                &format!("no Zed thread is attached to pane {pane_id}"),
+            );
+        }
+    }
     Ok(())
 }
 
