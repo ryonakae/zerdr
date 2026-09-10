@@ -57,11 +57,17 @@ Review base commit: `f51692f`.
 
 ## Final Validation
 
-- [ ] Desk trigger, action mode, `zerdr detach`, explicit-request grace bypass: `cargo test --test thread_flow` → pass.
-- [ ] State contract: `cargo test --test state_and_bindings` → pass.
-- [ ] CLI surface: `cargo test --test cli_contract` → pass; `cargo run --locked -- --help` lists `detach`.
-- [ ] Manifest and doctor: `cargo test --test setup_and_doctor` and `cargo test --test herdr_wrapper` → pass.
-- [ ] Required CI checks in order: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets --all-features` → pass (Ubuntu CI exercises the non-macOS `None` path).
-- [ ] Manual (user): rebuild, `./target/release/zerdr setup install`, connect a thread; (1) switch to ghostty for 3 s → thread detaches, ghostty sizes the pane; click the thread → reattaches. (2) In ghostty's herdr press `prefix+shift+d` on the pane → detaches. (3) Over SSH run `zerdr detach` then `herdr` → pane at phone size; back at Zed, click → reattaches. If the `pane` action context does not make the key binding fire, fall back to `contexts = ["workspace"]` (Herdr's context semantics are not documented).
+- [x] Desk trigger, action mode, `zerdr detach`, explicit-request grace bypass: `cargo test --test thread_flow` → 66 passed (also twice concurrently by the reviewer).
+- [x] State contract: `cargo test --test state_and_bindings` → 24 passed.
+- [x] CLI surface: `cargo test --test cli_contract` → 25 passed; `--help` lists `detach`.
+- [x] Manifest and doctor: `setup_and_doctor` 55 passed, `herdr_wrapper` 20 passed.
+- [x] Required CI checks in order: fmt, clippy, full suite → pass at `4e3c341` (`6243c3a` is docs only); Ubuntu CI exercises the non-macOS `None` path on push.
+- [ ] Manual (user, pending): rebuild, `./target/release/zerdr setup install`, connect a thread; (1) switch to ghostty for 3 s → thread detaches, ghostty sizes the pane; click the thread → reattaches. (2) In ghostty's herdr press `prefix+shift+d` on the pane → detaches. (3) Over SSH run `zerdr detach` then `herdr` → pane at phone size; back at Zed, click → reattaches. If the `pane` action context does not make the key binding fire, fall back to `contexts = ["workspace"]` (Herdr's context semantics are not documented).
+
+
+## Gate summary
+
+- Review base `f51692f`; commits `ba9d650`, `75dff50`, `bdee3c3`, `fe0fdd5`, `4e3c341`, `6243c3a`.
+- Independent review (read-only, repository only) on `6243c3a`: no blocking/high, no decision required. Medium/low left unfixed and reported: `NSWorkspace.frontmostApplication` freshness without a run loop is unverifiable in-repo and rests on the manual step; the AppKit call runs without an `autoreleasepool` (slow growth over hours); the explicit marker body reopens a microsecond torn-read window inside the focus grace; the action's "no thread" notification carries the adapter's `zerdr: sync failed` title; a non-user wake while Zed is in the background reattaches and detaches again after the grace; the doctor failure line still names only the Open Zed action.
 
 > 各タスクは対応する検証が成功してから完了にする。実装中の軽微な差分と検証結果は該当箇所へ反映し、要件、対象外、公開契約の変更はユーザーへ確認する。最終確認では有効な検証結果を再利用し、計画と実際の変更が一致することを確認する。必要な検証と実装側の必須レビューが通ったら、計画を同名のまま `docs/plans/archived/` へ移す。
