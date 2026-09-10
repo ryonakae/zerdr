@@ -379,7 +379,7 @@ impl DeskWatch {
 
     fn new() -> Self {
         Self {
-            enabled: std::env::var("TERM_PROGRAM").is_ok_and(|value| value == "zed"),
+            enabled: in_zed_terminal(),
             grace: background_grace(),
             last_poll: None,
             background_since: None,
@@ -414,6 +414,11 @@ impl DeskWatch {
     }
 }
 
+/// Zed's integrated terminal marks its shells with `TERM_PROGRAM=zed`.
+fn in_zed_terminal() -> bool {
+    std::env::var("TERM_PROGRAM").is_ok_and(|value| value == "zed")
+}
+
 /// How long Zed must stay in the background before the thread releases its pane.
 fn background_grace() -> Duration {
     const DEFAULT_BACKGROUND_GRACE_MS: u64 = 2_000;
@@ -437,6 +442,7 @@ const FOCUS_OUT: &[u8] = b"\x1b[O";
 struct DetachedTerminal {
     stdin: std::io::Stdin,
     saved: Option<Termios>,
+    in_zed_terminal: bool,
     /// Cleared once the terminal hangs up, so the wait falls back to sleeping instead
     /// of spinning on a readiness that never drains.
     polling: bool,
@@ -464,6 +470,7 @@ impl DetachedTerminal {
             return Ok(Self {
                 stdin,
                 saved: None,
+                in_zed_terminal: in_zed_terminal(),
                 polling: false,
                 settle_until: Instant::now(),
             });
@@ -485,6 +492,7 @@ impl DetachedTerminal {
         Ok(Self {
             stdin,
             saved: Some(saved),
+            in_zed_terminal: in_zed_terminal(),
             polling: true,
             settle_until: Instant::now() + settle(),
         })
@@ -521,12 +529,22 @@ impl DetachedTerminal {
                 self.polling = false;
                 Ok(false)
             }
-            Ok(count) => Ok(Instant::now() >= self.settle_until && is_user_input(&buffer[..count])),
+            Ok(count) => Ok(Instant::now() >= self.settle_until
+                && is_user_input(&buffer[..count])
+                && self.zed_can_be_in_use()),
             Err(Errno::EINTR | Errno::EAGAIN) => Ok(false),
             Err(error) => Err(Error::User(format!(
                 "failed to read the thread terminal: {error}"
             ))),
         }
+    }
+
+    /// Nobody can type into a Zed thread while Zed is in the background, so anything
+    /// on its stdin then — a report Zed sends on its own, a late terminal reply — is
+    /// not the user. Outside a Zed terminal, or without a frontmost answer, input is
+    /// the only signal there is and counts.
+    fn zed_can_be_in_use(&self) -> bool {
+        !self.in_zed_terminal || Zed::frontmost_is_zed() != Some(false)
     }
 
     fn leave(&mut self) {

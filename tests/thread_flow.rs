@@ -2168,6 +2168,37 @@ fn zed_in_the_background_beyond_the_grace_detaches_and_a_focus_in_reattaches() {
     assert!(thread.wait().success());
 }
 
+/// Nobody can type into the thread while Zed is in the background, so whatever lands
+/// on its stdin then — Zed's own reports, late terminal replies — is not the user.
+#[test]
+fn input_while_zed_is_in_the_background_does_not_reattach() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    let frontmost = fixture.env.root.path().join("frontmost");
+    fs::write(&frontmost, "1").unwrap();
+    let mut thread =
+        attached_pty_thread(&fixture, desk_thread_command(&fixture, &frontmost, "300"));
+
+    fs::write(&frontmost, "0").unwrap();
+    thread.wait_for_output(DETACHED_NOTICE);
+    wait_detached(&thread);
+    thread.write(FOCUS_IN);
+    thread.write(b"x");
+    thread::sleep(Duration::from_millis(800));
+    assert!(
+        !fixture.env.read_log().contains("terminal attach"),
+        "{}",
+        fixture.env.read_log()
+    );
+
+    fs::write(&frontmost, "1").unwrap();
+    thread::sleep(Duration::from_millis(600));
+    thread.write(FOCUS_IN);
+    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
+    fixture.release_attach();
+    assert!(thread.wait().success());
+}
+
 #[test]
 fn a_short_trip_away_from_zed_keeps_the_attach() {
     let fixture = Fixture::new();

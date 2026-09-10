@@ -84,7 +84,7 @@ An attached thread pins its Herdr pane to the thread terminal's size, so a much 
 
 While detached, the thread stays open in Zed, keeps its pane reserved, and keeps following the agent's title in the sidebar with a `[herdr⏸]` marker (notifications stay quiet).
 
-Back in Zed, the thread reattaches as soon as you return to it: selecting the thread in the sidebar, clicking inside it, or pressing any key (the key is not passed to the agent). Bringing the Zed window to the front while the thread has focus counts as returning, too. The pane goes back to the thread's size, whether or not the agent inside changed in the meantime. `zerdr connect` moves Herdr's focus onto its workspace only while a `zerdr start` wrapper is live and needs it for follow mode; otherwise the shared focus is left where the other clients had it.
+Back in Zed, the thread reattaches as soon as you return to it: selecting the thread in the sidebar, clicking inside it, or pressing any key (the key is not passed to the agent). Bringing the Zed window to the front while the thread has focus counts as returning, too. While Zed is in the background (macOS), nothing arriving on the thread's terminal counts: nobody can be typing there, so Zed's own reports never take the pane back. The pane goes back to the thread's size, whether or not the agent inside changed in the meantime. `zerdr connect` moves Herdr's focus onto its workspace only while a `zerdr start` wrapper is live and needs it for follow mode; otherwise the shared focus is left where the other clients had it.
 
 ### Named sessions
 
