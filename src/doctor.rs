@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::error::{Error, Result};
 use crate::herdr::Herdr;
 use crate::setup::{
-    EVENT_HOOKS, InstallState, fingerprint, generated_tasks, installed_init_command,
+    ACTIONS, EVENT_HOOKS, InstallState, fingerprint, generated_tasks, installed_init_command,
     load_install_state, owned_labels, plugin_has_complete_action, terminal_init_command,
 };
 use crate::state::{
@@ -287,10 +287,21 @@ fn inspect_manifest(paths: &Paths, install: &InstallState) -> Result<()> {
     let text = fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
     let manifest: PluginManifest = toml::from_str(&text)
         .map_err(|error| Error::User(format!("generated Herdr manifest is invalid: {error}")))?;
-    let expected_action_command = vec![
-        install.executable.display().to_string(),
-        "open-from-herdr".to_owned(),
-    ];
+    let exact_action = |id: &str, title: &str, context: &str, subcommand: &str| {
+        let actions = manifest
+            .actions
+            .iter()
+            .filter(|action| action.id == id)
+            .collect::<Vec<_>>();
+        actions.len() == 1
+            && actions[0].title == title
+            && actions[0].contexts == [context]
+            && actions[0].command
+                == [
+                    install.executable.display().to_string(),
+                    subcommand.to_owned(),
+                ]
+    };
     let exact_event = |on: &str, subcommand: &str| {
         let events = manifest
             .events
@@ -304,20 +315,14 @@ fn inspect_manifest(paths: &Paths, install: &InstallState) -> Result<()> {
                     subcommand.to_owned(),
                 ]
     };
-    let open_actions = manifest
-        .actions
-        .iter()
-        .filter(|action| action.id == "open-zed")
-        .collect::<Vec<_>>();
     let compatible = manifest.id == "zerdr"
         && manifest.min_herdr_version == "0.8.0"
         && EVENT_HOOKS
             .iter()
             .all(|(on, subcommand)| exact_event(on, subcommand))
-        && open_actions.len() == 1
-        && open_actions[0].title == "Open Zed"
-        && open_actions[0].contexts == ["workspace"]
-        && open_actions[0].command == expected_action_command;
+        && ACTIONS
+            .iter()
+            .all(|(id, title, context, subcommand)| exact_action(id, title, context, subcommand));
     if compatible {
         Ok(())
     } else {

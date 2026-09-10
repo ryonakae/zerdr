@@ -10,6 +10,12 @@ title = "Open Zed"
 contexts = ["workspace"]
 command = [@ZERDR_EXECUTABLE@, "open-from-herdr"]
 
+[[actions]]
+id = "detach-thread"
+title = "Release Zed thread"
+contexts = ["pane"]
+command = [@ZERDR_EXECUTABLE@, "detach-from-herdr"]
+
 [[events]]
 on = "workspace.focused"
 command = [@ZERDR_EXECUTABLE@, "sync-from-herdr"]

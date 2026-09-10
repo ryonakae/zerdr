@@ -387,15 +387,26 @@ pub fn compatible_plugins_json() -> serde_json::Value {
             "plugins": [{
                 "plugin_id": "zerdr",
                 "enabled": true,
-                "actions": [{
-                    "id": "open-zed",
-                    "title": "Open Zed",
-                    "contexts": ["workspace"],
-                    "command": [
-                        assert_cmd::cargo::cargo_bin!("zerdr").display().to_string(),
-                        "open-from-herdr"
-                    ]
-                }],
+                "actions": [
+                    {
+                        "id": "open-zed",
+                        "title": "Open Zed",
+                        "contexts": ["workspace"],
+                        "command": [
+                            assert_cmd::cargo::cargo_bin!("zerdr").display().to_string(),
+                            "open-from-herdr"
+                        ]
+                    },
+                    {
+                        "id": "detach-thread",
+                        "title": "Release Zed thread",
+                        "contexts": ["pane"],
+                        "command": [
+                            assert_cmd::cargo::cargo_bin!("zerdr").display().to_string(),
+                            "detach-from-herdr"
+                        ]
+                    }
+                ],
                 "events": [
                     {
                         "on": "workspace.focused",

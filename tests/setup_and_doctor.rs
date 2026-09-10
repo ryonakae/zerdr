@@ -71,6 +71,8 @@ fn setup_is_idempotent_and_installs_exact_plugin_and_tasks_without_config_change
     assert!(stdout.contains("prefix+shift+z"), "{stdout}");
     assert!(stdout.contains("plugin_action"), "{stdout}");
     assert!(stdout.contains("zerdr.open-zed"), "{stdout}");
+    assert!(stdout.contains("zerdr.detach-thread"), "{stdout}");
+    assert!(stdout.contains("prefix+shift+d"), "{stdout}");
     assert!(!stdout.contains("zerdr: Detach"), "{stdout}");
     assert!(!stdout.contains("zerdr: Attach"), "{stdout}");
     assert!(!stdout.contains("task picker"), "{stdout}");
@@ -129,26 +131,34 @@ fn setup_is_idempotent_and_installs_exact_plugin_and_tasks_without_config_change
             event("pane.focused", "detach-from-herdr"),
         ])
     );
-    assert_eq!(
-        parsed["actions"],
-        toml::Value::Array(vec![toml::Value::Table(toml::Table::from_iter([
-            ("id".to_owned(), toml::Value::String("open-zed".to_owned()),),
-            (
-                "title".to_owned(),
-                toml::Value::String("Open Zed".to_owned()),
-            ),
+    let action = |id: &str, title: &str, context: &str, subcommand: &str| {
+        toml::Value::Table(toml::Table::from_iter([
+            ("id".to_owned(), toml::Value::String(id.to_owned())),
+            ("title".to_owned(), toml::Value::String(title.to_owned())),
             (
                 "contexts".to_owned(),
-                toml::Value::Array(vec![toml::Value::String("workspace".to_owned())]),
+                toml::Value::Array(vec![toml::Value::String(context.to_owned())]),
             ),
             (
                 "command".to_owned(),
                 toml::Value::Array(vec![
-                    toml::Value::String(executable),
-                    toml::Value::String("open-from-herdr".to_owned()),
+                    toml::Value::String(executable.clone()),
+                    toml::Value::String(subcommand.to_owned()),
                 ]),
             ),
-        ]))])
+        ]))
+    };
+    assert_eq!(
+        parsed["actions"],
+        toml::Value::Array(vec![
+            action("open-zed", "Open Zed", "workspace", "open-from-herdr"),
+            action(
+                "detach-thread",
+                "Release Zed thread",
+                "pane",
+                "detach-from-herdr"
+            ),
+        ])
     );
 
     let second_output = env.command().args(["setup", "install"]).assert().success();
@@ -209,18 +219,37 @@ command = [{executable:?}, "sync-from-herdr"]
             ]
         );
         let actions = upgraded["actions"].as_array().unwrap();
-        assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0]["id"].as_str(), Some("open-zed"));
-        assert_eq!(actions[0]["title"].as_str(), Some("Open Zed"));
+        assert_eq!(actions.len(), 2, "{actions:?}");
+        let open_zed = actions
+            .iter()
+            .find(|action| action["id"].as_str() == Some("open-zed"))
+            .unwrap();
+        assert_eq!(open_zed["title"].as_str(), Some("Open Zed"));
         assert_eq!(
-            actions[0]["contexts"].as_array().unwrap(),
+            open_zed["contexts"].as_array().unwrap(),
             &[toml::Value::String("workspace".to_owned())]
         );
         assert_eq!(
-            actions[0]["command"].as_array().unwrap(),
+            open_zed["command"].as_array().unwrap(),
+            &[
+                toml::Value::String(executable.clone()),
+                toml::Value::String("open-from-herdr".to_owned()),
+            ]
+        );
+        let detach = actions
+            .iter()
+            .find(|action| action["id"].as_str() == Some("detach-thread"))
+            .unwrap();
+        assert_eq!(detach["title"].as_str(), Some("Release Zed thread"));
+        assert_eq!(
+            detach["contexts"].as_array().unwrap(),
+            &[toml::Value::String("pane".to_owned())]
+        );
+        assert_eq!(
+            detach["command"].as_array().unwrap(),
             &[
                 toml::Value::String(executable),
-                toml::Value::String("open-from-herdr".to_owned()),
+                toml::Value::String("detach-from-herdr".to_owned()),
             ]
         );
         assert_eq!(fs::read(&paths.zed_tasks_file).unwrap(), tasks_before);
@@ -880,6 +909,12 @@ title = "Open Zed"
 contexts = ["workspace"]
 command = [{executable:?}, "open-from-herdr"]
 
+[[actions]]
+id = "detach-thread"
+title = "Release Zed thread"
+contexts = ["pane"]
+command = [{executable:?}, "detach-from-herdr"]
+
 [[events]]
 on = "other.event"
 command = ["other"]
@@ -903,7 +938,8 @@ command = [{executable:?}, "sync-from-herdr"]
                 "enabled":true,
                 "actions":[
                     {"id":"unrelated","title":"Unrelated","contexts":["global"],"command":["other"]},
-                    {"id":"open-zed","title":"Open Zed","contexts":["workspace"],"command":[executable.clone(),"open-from-herdr"]}
+                    {"id":"open-zed","title":"Open Zed","contexts":["workspace"],"command":[executable.clone(),"open-from-herdr"]},
+                    {"id":"detach-thread","title":"Release Zed thread","contexts":["pane"],"command":[executable.clone(),"detach-from-herdr"]}
                 ],
                 "events":[
                     {"on":"other.event","command":["other"]},
@@ -935,6 +971,7 @@ fn doctor_rejects_each_malformed_or_disabled_action_installation() {
         "executable",
         "disabled",
         "pane-event",
+        "detach-action",
     ] {
         let env = TestEnv::new();
         env.command().args(["setup", "install"]).assert().success();
@@ -943,6 +980,9 @@ fn doctor_rejects_each_malformed_or_disabled_action_installation() {
         match mutation {
             "pane-event" => {
                 plugin["events"].as_array_mut().unwrap().pop();
+            }
+            "detach-action" => {
+                plugin["actions"].as_array_mut().unwrap().pop();
             }
             "id" => plugin["actions"][0]["id"] = "wrong".into(),
             "title" => plugin["actions"][0]["title"] = "Wrong".into(),
@@ -2069,4 +2109,47 @@ command = [{executable:?}, "sync-from-herdr"]
             "generated Herdr manifest lacks the exact event or Open Zed action command",
         ))
         .stdout(predicates::str::contains("run `zerdr setup install`"));
+}
+
+#[test]
+fn doctor_fails_a_manifest_without_the_detach_thread_action() {
+    let env = TestEnv::new();
+    env.command().args(["setup", "install"]).assert().success();
+    let paths = Paths::for_test(env.root.path());
+    let executable = assert_cmd::cargo::cargo_bin!("zerdr").display().to_string();
+    fs::write(
+        paths.plugin_dir.join("herdr-plugin.toml"),
+        format!(
+            r#"id = "zerdr"
+name = "zerdr"
+version = "0.8.0"
+min_herdr_version = "0.8.0"
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "open-zed"
+title = "Open Zed"
+contexts = ["workspace"]
+command = [{executable:?}, "open-from-herdr"]
+
+[[events]]
+on = "workspace.focused"
+command = [{executable:?}, "sync-from-herdr"]
+
+[[events]]
+on = "pane.focused"
+command = [{executable:?}, "detach-from-herdr"]
+"#
+        ),
+    )
+    .unwrap();
+
+    env.command()
+        .args(["setup", "doctor"])
+        .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains(
+            "generated Herdr manifest lacks the exact event or Open Zed action command",
+        ));
 }

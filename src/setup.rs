@@ -115,6 +115,18 @@ pub(crate) const EVENT_HOOKS: [(&str, &str); 2] = [
     ("pane.focused", "detach-from-herdr"),
 ];
 
+/// The plugin actions zerdr registers: id, title, the single Herdr context, and the
+/// hidden zerdr subcommand.
+pub(crate) const ACTIONS: [(&str, &str, &str, &str); 2] = [
+    ("open-zed", "Open Zed", "workspace", "open-from-herdr"),
+    (
+        "detach-thread",
+        "Release Zed thread",
+        "pane",
+        "detach-from-herdr",
+    ),
+];
+
 pub(crate) fn plugin_is_compatible(value: &Value) -> bool {
     compatible_plugin(value).is_some_and(|plugin| has_event_hooks(plugin, None))
 }
@@ -123,28 +135,28 @@ pub(crate) fn plugin_has_complete_action(value: &Value, executable: &Path) -> bo
     let expected = executable.display().to_string();
     compatible_plugin(value).is_some_and(|plugin| {
         has_event_hooks(plugin, Some(&expected))
-            && plugin
-                .get("actions")
-                .and_then(Value::as_array)
-                .map(|actions| {
-                    actions
-                        .iter()
-                        .filter(|action| {
-                            action.get("id").and_then(Value::as_str) == Some("open-zed")
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .is_some_and(|actions| {
-                    actions.len() == 1
-                        && actions[0].get("title").and_then(Value::as_str) == Some("Open Zed")
-                        && actions[0]
-                            .get("contexts")
-                            .and_then(Value::as_array)
-                            .is_some_and(|contexts| {
-                                contexts.len() == 1 && contexts[0].as_str() == Some("workspace")
-                            })
-                        && action_command_matches(actions[0], &expected, "open-from-herdr")
-                })
+            && ACTIONS.iter().all(|(id, title, context, subcommand)| {
+                plugin
+                    .get("actions")
+                    .and_then(Value::as_array)
+                    .map(|actions| {
+                        actions
+                            .iter()
+                            .filter(|action| action.get("id").and_then(Value::as_str) == Some(*id))
+                            .collect::<Vec<_>>()
+                    })
+                    .is_some_and(|actions| {
+                        actions.len() == 1
+                            && actions[0].get("title").and_then(Value::as_str) == Some(*title)
+                            && actions[0]
+                                .get("contexts")
+                                .and_then(Value::as_array)
+                                .is_some_and(|contexts| {
+                                    contexts.len() == 1 && contexts[0].as_str() == Some(*context)
+                                })
+                            && action_command_matches(actions[0], &expected, subcommand)
+                    })
+            })
     })
 }
 

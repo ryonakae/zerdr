@@ -3,3 +3,9 @@ key = "prefix+shift+z"
 type = "plugin_action"
 command = "zerdr.open-zed"
 description = "open workspace in Zed"
+
+[[keys.command]]
+key = "prefix+shift+d"
+type = "plugin_action"
+command = "zerdr.detach-thread"
+description = "release the Zed thread on this pane"
