@@ -2043,7 +2043,11 @@ fn stray_terminal_replies_right_after_the_detach_do_not_reattach() {
     let fixture = Fixture::new();
     fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
     let mut command = fixture.std_thread_command();
-    command.arg("connect");
+    command
+        .arg("connect")
+        // Wide enough that the reply written after DECSET lands inside the window even
+        // when this test thread is descheduled for a while.
+        .env("ZERDR_THREAD_SETTLE_MS", "2000");
     let mut thread = attached_pty_thread(&fixture, command);
 
     hook_command(&fixture, "w1:p1").assert().success();
@@ -2059,6 +2063,7 @@ fn stray_terminal_replies_right_after_the_detach_do_not_reattach() {
         fixture.env.read_log()
     );
 
+    thread::sleep(Duration::from_millis(1600));
     thread.write(FOCUS_IN);
     wait_for_log(&fixture.env, "terminal attach term-w1:p1");
     fixture.release_attach();

@@ -264,6 +264,7 @@ fn attach_cycle(
                         return Ok(CycleOutcome::PaneGone);
                     }
                 };
+                terminal.discard_pending_input();
                 let mut spawned =
                     ManagedChild::new(herdr.spawn_terminal_attach_for(session_name, &terminal_id)?);
                 detached.store(false, Ordering::SeqCst);
@@ -313,7 +314,15 @@ struct DetachedTerminal {
 }
 
 /// How long stray terminal replies keep arriving after the attach client exits.
-const SETTLE: Duration = Duration::from_millis(300);
+fn settle() -> Duration {
+    const DEFAULT_SETTLE_MS: u64 = 300;
+    Duration::from_millis(
+        std::env::var("ZERDR_THREAD_SETTLE_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_SETTLE_MS),
+    )
+}
 
 impl DetachedTerminal {
     fn enter() -> Result<Self> {
@@ -344,7 +353,7 @@ impl DetachedTerminal {
             stdin,
             saved: Some(saved),
             polling: true,
-            settle_until: Instant::now() + SETTLE,
+            settle_until: Instant::now() + settle(),
         })
     }
 
@@ -390,9 +399,15 @@ impl DetachedTerminal {
     fn leave(&mut self) {
         if let Some(saved) = self.saved.take() {
             emit(DETACHED_MODES_OFF);
-            // Whatever the user typed after the wake is not meant for the agent either.
-            let _ = termios::tcflush(self.stdin.as_fd(), FlushArg::TCIFLUSH);
             let _ = termios::tcsetattr(self.stdin.as_fd(), SetArg::TCSANOW, &saved);
+        }
+    }
+
+    /// Drops whatever the user typed between the wake and this point: it was aimed at
+    /// a thread that was not taking input, not at the agent about to receive stdin.
+    fn discard_pending_input(&self) {
+        if self.stdin.is_terminal() {
+            let _ = termios::tcflush(self.stdin.as_fd(), FlushArg::TCIFLUSH);
         }
     }
 }
