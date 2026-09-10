@@ -1825,6 +1825,13 @@ const DETACHED_MODES_OFF: &str = "\u{1b}[?1006l\u{1b}[?1000l\u{1b}[?1004l";
 const FOCUS_IN: &[u8] = b"\x1b[I";
 const FOCUS_OUT: &[u8] = b"\x1b[O";
 
+/// Waits until the thread has detached and its settle window — during which stray
+/// terminal replies to the dying Herdr client are discarded — has passed.
+fn wait_detached(thread: &PtyChild) {
+    thread.wait_for_output(DETACHED_MODES_ON);
+    thread::sleep(Duration::from_millis(450));
+}
+
 /// `zerdr connect` on a pseudo-terminal, attached to the fixture's `w1:p1` agent.
 fn attached_pty_thread(fixture: &Fixture, command: ProcessCommand) -> PtyChild {
     let thread = PtyChild::spawn(command);
@@ -1843,7 +1850,7 @@ fn another_client_selecting_the_pane_detaches_and_a_focus_in_reattaches() {
 
     hook_command(&fixture, "w1:p1").assert().success();
     thread.wait_for_output(DETACHED_NOTICE);
-    thread.wait_for_output(DETACHED_MODES_ON);
+    wait_detached(&thread);
     assert_eq!(count_leases(&paths), 1, "the lease survives the detach");
     assert_eq!(count_detach_requests(&paths), 0, "the request is consumed");
     assert!(!fixture.env.read_log().contains("terminal attach"));
@@ -1873,7 +1880,7 @@ fn a_focus_out_does_not_reattach_but_a_key_or_a_click_does() {
         let mut thread = attached_pty_thread(&fixture, command);
 
         hook_command(&fixture, "w1:p1").assert().success();
-        thread.wait_for_output(DETACHED_MODES_ON);
+        wait_detached(&thread);
 
         thread.write(FOCUS_OUT);
         thread::sleep(Duration::from_millis(300));
@@ -1920,7 +1927,7 @@ fn a_request_inside_the_grace_window_after_the_own_focus_is_dropped() {
 
     thread::sleep(Duration::from_millis(1500));
     hook_command(&fixture, "w1:p1").assert().success();
-    thread.wait_for_output(DETACHED_NOTICE);
+    wait_detached(&thread);
 
     thread.write(FOCUS_IN);
     wait_for_log(&fixture.env, "terminal attach term-w1:p1");
@@ -1968,7 +1975,7 @@ fn a_request_echoing_a_sibling_connects_focus_is_dropped() {
 
     thread::sleep(Duration::from_millis(1500));
     hook_command(&fixture, "w1:p1").assert().success();
-    first.wait_for_output(DETACHED_NOTICE);
+    wait_detached(&first);
     assert!(
         !second.output().contains(DETACHED_NOTICE),
         "{}",
@@ -2026,6 +2033,36 @@ fn a_sibling_echo_that_lands_before_the_focus_call_returns_is_dropped() {
     fixture.release_attach();
     assert!(first.wait().success());
     assert!(second.wait().success());
+}
+
+/// The dying Herdr client leaves the terminal answering its last queries; those
+/// replies land on the thread's stdin right after the detach and must not count as
+/// the user coming back.
+#[test]
+fn stray_terminal_replies_right_after_the_detach_do_not_reattach() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    let mut command = fixture.std_thread_command();
+    command.arg("connect");
+    let mut thread = attached_pty_thread(&fixture, command);
+
+    hook_command(&fixture, "w1:p1").assert().success();
+    thread.wait_for_output(DETACHED_NOTICE);
+    // A kitty keyboard flags report and a primary DA reply, as a terminal answers them.
+    thread.write(b"\x1b[?0u\x1b[?62;22c");
+    thread.wait_for_output(DETACHED_MODES_ON);
+    thread.write(b"\x1b[?0u");
+    thread::sleep(Duration::from_millis(600));
+    assert!(
+        !fixture.env.read_log().contains("terminal attach"),
+        "replies must not reattach: {}",
+        fixture.env.read_log()
+    );
+
+    thread.write(FOCUS_IN);
+    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
+    fixture.release_attach();
+    assert!(thread.wait().success());
 }
 
 #[test]
@@ -2126,7 +2163,7 @@ fn reattaching_to_a_missing_pane_ends_the_thread_gracefully() {
     let mut thread = attached_pty_thread(&fixture, command);
 
     hook_command(&fixture, "w1:p1").assert().success();
-    thread.wait_for_output(DETACHED_MODES_ON);
+    wait_detached(&thread);
     thread.write(FOCUS_IN);
 
     assert!(thread.wait().success());
@@ -2199,7 +2236,7 @@ fn a_term_ignoring_attach_client_is_escalated_to_sigkill() {
     let mut thread = attached_pty_thread(&fixture, command);
 
     hook_command(&fixture, "w1:p1").assert().success();
-    thread.wait_for_output(DETACHED_NOTICE);
+    wait_detached(&thread);
 
     thread.write(FOCUS_IN);
     wait_for_log(&fixture.env, "terminal attach term-w1:p1");

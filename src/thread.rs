@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nix::errno::Errno;
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
-use nix::sys::termios::{self, SetArg, Termios};
+use nix::sys::termios::{self, FlushArg, SetArg, Termios};
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
@@ -306,7 +306,14 @@ struct DetachedTerminal {
     /// Cleared once the terminal hangs up, so the wait falls back to sleeping instead
     /// of spinning on a readiness that never drains.
     polling: bool,
+    /// Input before this instant is the terminal still answering the dying Herdr
+    /// client's last queries (keyboard protocol and device attribute reports), not
+    /// the user, and is discarded.
+    settle_until: Instant,
 }
+
+/// How long stray terminal replies keep arriving after the attach client exits.
+const SETTLE: Duration = Duration::from_millis(300);
 
 impl DetachedTerminal {
     fn enter() -> Result<Self> {
@@ -316,6 +323,7 @@ impl DetachedTerminal {
                 stdin,
                 saved: None,
                 polling: false,
+                settle_until: Instant::now(),
             });
         }
         let saved = termios::tcgetattr(stdin.as_fd()).map_err(|error| {
@@ -329,10 +337,14 @@ impl DetachedTerminal {
             ))
         })?;
         emit(DETACHED_MODES_ON);
+        // Replies that arrived before raw mode sat in the line discipline; drop them
+        // together with anything else queued while the Herdr client was going away.
+        let _ = termios::tcflush(stdin.as_fd(), FlushArg::TCIFLUSH);
         Ok(Self {
             stdin,
             saved: Some(saved),
             polling: true,
+            settle_until: Instant::now() + SETTLE,
         })
     }
 
@@ -367,7 +379,7 @@ impl DetachedTerminal {
                 self.polling = false;
                 Ok(false)
             }
-            Ok(count) => Ok(is_user_input(&buffer[..count])),
+            Ok(count) => Ok(Instant::now() >= self.settle_until && is_user_input(&buffer[..count])),
             Err(Errno::EINTR | Errno::EAGAIN) => Ok(false),
             Err(error) => Err(Error::User(format!(
                 "failed to read the thread terminal: {error}"
@@ -378,6 +390,8 @@ impl DetachedTerminal {
     fn leave(&mut self) {
         if let Some(saved) = self.saved.take() {
             emit(DETACHED_MODES_OFF);
+            // Whatever the user typed after the wake is not meant for the agent either.
+            let _ = termios::tcflush(self.stdin.as_fd(), FlushArg::TCIFLUSH);
             let _ = termios::tcsetattr(self.stdin.as_fd(), SetArg::TCSANOW, &saved);
         }
     }
