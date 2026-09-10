@@ -114,11 +114,16 @@ impl Zed {
     }
 }
 
+/// Polled twice a second for the life of every attached thread from a process that
+/// never runs a main run loop, so the autoreleased objects AppKit creates on the way
+/// are drained here instead of accumulating.
 #[cfg(target_os = "macos")]
 fn frontmost_bundle_identifier() -> Option<String> {
     use objc2_app_kit::NSWorkspace;
-    let application = NSWorkspace::sharedWorkspace().frontmostApplication()?;
-    Some(application.bundleIdentifier()?.to_string())
+    objc2::rc::autoreleasepool(|_| {
+        let application = NSWorkspace::sharedWorkspace().frontmostApplication()?;
+        Some(application.bundleIdentifier()?.to_string())
+    })
 }
 
 #[cfg(not(target_os = "macos"))]
