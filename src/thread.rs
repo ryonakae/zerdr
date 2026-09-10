@@ -298,7 +298,9 @@ fn attach_cycle(
                     let detach = lease
                         .take_detach_request()?
                         .is_some_and(|request| request.explicit || !zerdr_echo);
-                    if detach || desk.zed_left() {
+                    let zed_left = desk.zed_left();
+                    if detach || zed_left {
+                        debug_log(&format!("detaching: request={detach} zed_left={zed_left}"));
                         detached.store(true, Ordering::SeqCst);
                         managed.terminate_gracefully();
                         println!("{DETACHED_NOTICE}");
@@ -397,7 +399,14 @@ impl DeskWatch {
             .is_none_or(|last| now.duration_since(last) >= Self::POLL)
         {
             self.last_poll = Some(now);
-            match Zed::frontmost_is_zed() {
+            let frontmost = Zed::frontmost_is_zed();
+            if frontmost != Some(true) || self.background_since.is_some() {
+                debug_log(&format!(
+                    "desk poll frontmost_is_zed={frontmost:?} background_for={:?}",
+                    self.background_since.map(|since| now.duration_since(since))
+                ));
+            }
+            match frontmost {
                 Some(false) => {
                     self.background_since.get_or_insert(now);
                 }
@@ -529,9 +538,17 @@ impl DetachedTerminal {
                 self.polling = false;
                 Ok(false)
             }
-            Ok(count) => Ok(Instant::now() >= self.settle_until
-                && is_user_input(&buffer[..count])
-                && self.zed_can_be_in_use()),
+            Ok(count) => {
+                let settled = Instant::now() >= self.settle_until;
+                let user_input = is_user_input(&buffer[..count]);
+                let zed_in_use = self.zed_can_be_in_use();
+                debug_log(&format!(
+                    "detached input {:?} settled={settled} user_input={user_input} zed_in_use={zed_in_use} frontmost={:?}",
+                    String::from_utf8_lossy(&buffer[..count]),
+                    Zed::frontmost_is_zed()
+                ));
+                Ok(settled && user_input && zed_in_use)
+            }
             Err(Errno::EINTR | Errno::EAGAIN) => Ok(false),
             Err(error) => Err(Error::User(format!(
                 "failed to read the thread terminal: {error}"
@@ -1142,6 +1159,26 @@ fn strip_kind_prefix<'a>(kind: &str, title: &'a str) -> &'a str {
         title.strip_prefix("\u{3c0} - ").unwrap_or(title)
     } else {
         title
+    }
+}
+
+/// Appends a timestamped line to the file named by `ZERDR_DEBUG_LOG`, when set. The
+/// detach and wake decisions happen on a terminal nobody can read at the time, so this
+/// is the only way to see what drove them.
+fn debug_log(message: &str) {
+    let Some(path) = std::env::var_os("ZERDR_DEBUG_LOG") else {
+        return;
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis())
+            .unwrap_or_default();
+        let _ = writeln!(file, "{stamp} [{}] {message}", std::process::id());
     }
 }
 
