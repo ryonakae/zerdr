@@ -76,11 +76,15 @@ To select text with the mouse while attached, hold Shift and drag: the Herdr cli
 
 ### Sharing the session with a small client
 
-An attached thread pins its Herdr pane to the thread terminal's size, so a much smaller client — a phone terminal over SSH — would see that pane clipped to the wrong grid. zerdr releases the attach for you: when another Herdr client selects the pane, the thread detaches, prints one notice line, and Herdr sizes the pane for the client that selected it. The thread stays open in Zed, keeps its pane reserved, and keeps following the agent's title in the sidebar with a `[herdr⏸]` marker (notifications stay quiet).
+An attached thread pins its Herdr pane to the thread terminal's size, so a much smaller client — a phone terminal over SSH — would see that pane clipped to the wrong grid. Herdr only lets a direct attach go, so zerdr releases the attach for you whenever something says the pane belongs to someone else for now:
 
-Back in Zed, the thread reattaches as soon as you return to it: selecting the thread in the sidebar, clicking inside it, or pressing any key (the key is not passed to the agent). Bringing the Zed window to the front while the thread has focus counts as returning, too. The pane goes back to the thread's size, whether or not the agent inside changed in the meantime.
+- **Another client selects the pane.** Herdr reports the focus change, the thread detaches, and Herdr sizes the pane for the client that selected it. Herdr reports a pane as focused only when the focus changes, so a client whose view is already on the pane does not trigger this; select another pane and come back, or use one of the next two.
+- **You leave Zed (macOS).** A thread hosted in Zed's terminal watches the frontmost application; once Zed has been in the background for two seconds it detaches. Switching to a ghostty `herdr` on the same desk is enough. Working in Zed's editor never detaches, because Zed stays frontmost.
+- **You ask from the other client.** Bind the `zerdr.detach-thread` action in Herdr (`zerdr setup install` prints a `prefix+shift+d` example) and press it on the pane in ghostty or on the phone; or run `zerdr detach` from an SSH shell before opening `herdr` there, which asks every attached thread at once.
 
-Herdr reports a pane as focused only when the focus changes, so a client whose view is already on the pane does not trigger the detach; select another pane and come back. For the same reason `zerdr connect` moves Herdr's focus onto its workspace only while a `zerdr start` wrapper is live and needs it for follow mode; otherwise the shared focus is left where the other clients had it. Zed threads and a full-size Herdr client on the same desk share this rule: selecting the pane in the other client takes it, returning to the thread takes it back.
+While detached, the thread stays open in Zed, keeps its pane reserved, and keeps following the agent's title in the sidebar with a `[herdr⏸]` marker (notifications stay quiet).
+
+Back in Zed, the thread reattaches as soon as you return to it: selecting the thread in the sidebar, clicking inside it, or pressing any key (the key is not passed to the agent). Bringing the Zed window to the front while the thread has focus counts as returning, too. The pane goes back to the thread's size, whether or not the agent inside changed in the meantime. `zerdr connect` moves Herdr's focus onto its workspace only while a `zerdr start` wrapper is live and needs it for follow mode; otherwise the shared focus is left where the other clients had it.
 
 ### Named sessions
 
@@ -92,6 +96,7 @@ Herdr reports a pane as focused only when the focus changes, so a client whose v
 |---|---|
 | `zerdr connect [TARGET] [--session NAME]` | Connect a Zed terminal thread to a Herdr agent or a fresh shell tab, creating a workspace when needed; `TARGET` is a pane id or agent name. Add `--kind KIND` to start an agent in a fresh tab. |
 | `zerdr start [--session NAME] [--anchor PATH]` | Open or attach the default or named Herdr session with Zed routing. |
+| `zerdr detach` | Ask every attached Zed terminal thread to release its Herdr pane; they reattach when you return to them in Zed. |
 | `zerdr workspace sync [--session NAME]` | Reapply the focused Herdr workspace route to Zed. |
 | `zerdr workspace bind [PATH] [--session NAME]` | Bind the selected workspace to a Git checkout; sync it when a wrapper is live. |
 | `zerdr workspace unbind [--session NAME]` | Remove the selected workspace binding. |
@@ -119,7 +124,7 @@ The one-shot plugin action reuses an applicable live wrapper route. Without a wr
 - **Herdr 0.8.0 or newer:** the plugin API must expose `workspace.focused` and `pane.focused` events, workspace actions, and plugin-action keybindings.
 - **Zed terminal threads:** `zerdr connect` needs a Zed version whose agent panel hosts terminal threads.
 - **Local Git checkouts:** each Herdr workspace maps to one canonical checkout root.
-- **Local macOS or Linux terminal:** runtime commands reject SSH, WSL, containers, and dev containers. The Herdr plugin hooks are exempt: Herdr runs them with the server's environment, which keeps the SSH markers of whichever session first started the server.
+- **Local macOS or Linux terminal:** runtime commands reject SSH, WSL, containers, and dev containers. `zerdr detach` and the Herdr plugin hooks are exempt: `detach` only touches local state, and Herdr runs the hooks with the server's environment, which keeps the SSH markers of whichever session first started the server. Detaching when Zed leaves the foreground needs macOS; on Linux the other triggers still apply.
 
 `zerdr setup doctor`, `zerdr --help`, and `zerdr --version` remain available in remote environments. Remote doctor skips runtime checks and state cleanup.
 

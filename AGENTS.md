@@ -42,11 +42,11 @@ CI runs these checks on macOS and Ubuntu. Platform-specific behavior needs cover
 - `src/runtime.rs` resolves local versus remote execution and the wrapper anchor.
 - `src/herdr.rs` wraps Herdr JSON commands and owns the child process lifecycle.
 - `src/sync.rs` maps focused workspaces to Git roots and routes them into Zed.
-- `src/thread.rs` backs `zerdr connect`: it resolves and attaches Zed terminal threads to Herdr agents in a running session, creates and binds missing workspaces (registering linked worktrees via `herdr worktree open`), mirrors agent titles and bells into the threads sidebar, and releases the attach when the `pane.focused` hook (`detach-from-herdr`) reports another client selecting the pane, keeping the lease and the title (with a `[herdr⏸]` marker, bell muted) alive until focus, a click, or a key in the thread reattaches it.
+- `src/thread.rs` backs `zerdr connect` and `zerdr detach`: it resolves and attaches Zed terminal threads to Herdr agents in a running session, creates and binds missing workspaces (registering linked worktrees via `herdr worktree open`), mirrors agent titles and bells into the threads sidebar, and releases the attach when the `pane.focused` hook or the `detach-thread` action (`detach-from-herdr`) asks for it, when `zerdr detach` asks every thread, or when Zed leaves the foreground (macOS, `Zed::frontmost_is_zed`), keeping the lease and the title (with a `[herdr⏸]` marker, bell muted) alive until focus, a click, or a key in the thread reattaches it.
 - `src/state.rs` owns bindings, route schemas, leases, locks, and atomic persistence.
 - `src/setup.rs` merges the Herdr plugin and Zed tasks into user configuration, and owns auto mode: `zerdr setup auto enable` installs `agent.terminal_init_command` with a recorded fingerprint that setup preserves and uninstall consumes.
 - `src/doctor.rs` checks capabilities, installation state, bindings, routes, and leases.
-- `src/zed.rs` wraps the Zed CLI.
+- `src/zed.rs` wraps the Zed CLI and reads the frontmost application on macOS (`ZERDR_TEST_ZED_FRONTMOST_FILE` stands in for it under `ZERDR_TEST_ROOT`).
 - `assets/herdr/` and `assets/zed/` contain templates embedded by `setup`.
 - `tests/support/mod.rs` provides isolated fake `herdr` and `zed` executables; `FAKE_HERDR_BODY` is shared by the `PATH` fake and the private fakes from `TestEnv::baked_herdr`. `PtyChild` runs a command on a pseudo-terminal for the detach and reattach tests, which need a real tty on stdin.
 - `docs/plans/` records historical implementation plans. Treat current code and tests as the source of truth.
@@ -60,7 +60,7 @@ CI runs these checks on macOS and Ubuntu. Platform-specific behavior needs cover
 - Preserve backward compatibility for persisted state, or add an explicit migration and tests.
 - Keep setup merges ownership-aware. Never overwrite foreign or user-modified Zed tasks or settings, and back up a user-owned Zed file before mutating it.
 - Keep platform and remote-environment decisions in `src/runtime.rs` rather than scattering environment checks.
-- `sync-from-herdr`, `open-from-herdr`, and `detach-from-herdr` are hidden plugin entry points, not public user commands. They are exempt from the remote-environment rejection because Herdr spawns them with the server's environment, which inherits SSH markers from the session that first started the server.
+- `sync-from-herdr`, `open-from-herdr`, and `detach-from-herdr` are hidden plugin entry points, not public user commands. They are exempt from the remote-environment rejection because Herdr spawns them with the server's environment, which inherits SSH markers from the session that first started the server; `zerdr detach` is exempt too, since it only touches local state and is meant for an SSH shell before `herdr`.
 
 ## Safety and workflow
 
