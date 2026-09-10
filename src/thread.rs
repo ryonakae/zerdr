@@ -18,6 +18,7 @@ use crate::state::{
     BindingStore, DEFAULT_SESSION_NAME, LeaseSet, OperationGuard, Paths, ThreadLeaseGuard,
     ThreadLeaseSet, ThreadPaneMemory, canonical_git_root, linked_worktree_parent,
 };
+use crate::zed::Zed;
 
 const DEFAULT_POLL_MS: u64 = 1_000;
 const SETTLED_STATES: [&str; 3] = ["idle", "done", "blocked"];
@@ -271,6 +272,7 @@ fn attach_cycle(
 ) -> Result<CycleOutcome> {
     let interval = cycle_interval();
     let grace = focus_grace();
+    let mut desk = DeskWatch::new();
     // A fresh pane holds only a shell, which `agent attach` refuses, so it is
     // reached through its terminal instead.
     let mut child = Some(ManagedChild::new(match initial_terminal {
@@ -296,7 +298,7 @@ fn attach_cycle(
                     let detach = lease
                         .take_detach_request()?
                         .is_some_and(|request| request.explicit || !zerdr_echo);
-                    if detach {
+                    if detach || desk.zed_left() {
                         detached.store(true, Ordering::SeqCst);
                         managed.terminate_gracefully();
                         println!("{DETACHED_NOTICE}");
@@ -336,6 +338,7 @@ fn attach_cycle(
                 let mut spawned =
                     ManagedChild::new(herdr.spawn_terminal_attach_for(session_name, &terminal_id)?);
                 detached.store(false, Ordering::SeqCst);
+                desk.reset();
                 // A signal that landed during this transition was neither polled above
                 // nor forwarded to the new child, so honor it instead of dropping it.
                 if signals.pending().next().is_some() {
@@ -357,6 +360,68 @@ fn focus_grace() -> Duration {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(DEFAULT_FOCUS_GRACE_MS),
+    )
+}
+
+/// Releases the pane when the user leaves Zed for another application: on the desk, a
+/// ghostty `herdr` showing the same pane produces no Herdr event, so Zed itself is the
+/// signal. Active only inside a Zed terminal and where the frontmost application can
+/// be read (macOS); the grace keeps a quick Cmd+Tab from detaching.
+struct DeskWatch {
+    enabled: bool,
+    grace: Duration,
+    last_poll: Option<Instant>,
+    background_since: Option<Instant>,
+}
+
+impl DeskWatch {
+    const POLL: Duration = Duration::from_millis(500);
+
+    fn new() -> Self {
+        Self {
+            enabled: std::env::var("TERM_PROGRAM").is_ok_and(|value| value == "zed"),
+            grace: background_grace(),
+            last_poll: None,
+            background_since: None,
+        }
+    }
+
+    /// True once Zed has stayed in the background for the whole grace period.
+    fn zed_left(&mut self) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let now = Instant::now();
+        if self
+            .last_poll
+            .is_none_or(|last| now.duration_since(last) >= Self::POLL)
+        {
+            self.last_poll = Some(now);
+            match Zed::frontmost_is_zed() {
+                Some(false) => {
+                    self.background_since.get_or_insert(now);
+                }
+                Some(true) | None => self.background_since = None,
+            }
+        }
+        self.background_since
+            .is_some_and(|since| now.duration_since(since) >= self.grace)
+    }
+
+    fn reset(&mut self) {
+        self.last_poll = None;
+        self.background_since = None;
+    }
+}
+
+/// How long Zed must stay in the background before the thread releases its pane.
+fn background_grace() -> Duration {
+    const DEFAULT_BACKGROUND_GRACE_MS: u64 = 2_000;
+    Duration::from_millis(
+        std::env::var("ZERDR_THREAD_BACKGROUND_GRACE_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_BACKGROUND_GRACE_MS),
     )
 }
 

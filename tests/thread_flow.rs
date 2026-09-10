@@ -2125,6 +2125,102 @@ fn zerdr_detach_asks_every_live_thread_at_once() {
     assert!(second.wait().success());
 }
 
+/// `zerdr connect` as a Zed terminal thread hosts it, with the frontmost-application
+/// seam pointing at `file` (`1` = Zed is frontmost, `0` = another app is).
+fn desk_thread_command(fixture: &Fixture, file: &Path, grace_ms: &str) -> ProcessCommand {
+    let mut command = fixture.std_thread_command();
+    command
+        .arg("connect")
+        .env("TERM_PROGRAM", "zed")
+        .env("ZERDR_TEST_ZED_FRONTMOST_FILE", file)
+        .env("ZERDR_THREAD_BACKGROUND_GRACE_MS", grace_ms);
+    command
+}
+
+#[test]
+fn zed_in_the_background_beyond_the_grace_detaches_and_a_focus_in_reattaches() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    let frontmost = fixture.env.root.path().join("frontmost");
+    fs::write(&frontmost, "1").unwrap();
+    let mut thread =
+        attached_pty_thread(&fixture, desk_thread_command(&fixture, &frontmost, "300"));
+    thread::sleep(Duration::from_millis(900));
+    assert!(
+        !thread.output().contains(DETACHED_NOTICE),
+        "{}",
+        thread.output()
+    );
+
+    // The user switches to ghostty (or anything else) and stays there.
+    fs::write(&frontmost, "0").unwrap();
+    thread.wait_for_output(DETACHED_NOTICE);
+    assert!(!fixture.env.read_log().contains("terminal attach"));
+
+    // Zed coming back to the front is not by itself a reattach: Zed's focus-in is.
+    fs::write(&frontmost, "1").unwrap();
+    wait_detached(&thread);
+    thread::sleep(Duration::from_millis(600));
+    assert!(!fixture.env.read_log().contains("terminal attach"));
+    thread.write(FOCUS_IN);
+    wait_for_log(&fixture.env, "terminal attach term-w1:p1");
+    fixture.release_attach();
+    assert!(thread.wait().success());
+}
+
+#[test]
+fn a_short_trip_away_from_zed_keeps_the_attach() {
+    let fixture = Fixture::new();
+    fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+    let frontmost = fixture.env.root.path().join("frontmost");
+    fs::write(&frontmost, "1").unwrap();
+    let mut thread =
+        attached_pty_thread(&fixture, desk_thread_command(&fixture, &frontmost, "2000"));
+
+    fs::write(&frontmost, "0").unwrap();
+    thread::sleep(Duration::from_millis(700));
+    fs::write(&frontmost, "1").unwrap();
+    thread::sleep(Duration::from_millis(2000));
+    assert!(
+        !thread.output().contains(DETACHED_NOTICE),
+        "{}",
+        thread.output()
+    );
+    assert!(thread.is_running());
+
+    fixture.release_attach();
+    assert!(thread.wait().success());
+}
+
+/// Outside a Zed terminal the frontmost application says nothing about this thread,
+/// and without an answer from the seam (or the platform) there is nothing to act on.
+#[test]
+fn the_desk_trigger_is_inactive_outside_zed_or_without_an_answer() {
+    for (in_zed, seam_file) in [(false, true), (true, false)] {
+        let fixture = Fixture::new();
+        fixture.agent("zed-1", "w1:p1", "w1", "idle", "review the diff");
+        let frontmost = fixture.env.root.path().join("frontmost");
+        if seam_file {
+            fs::write(&frontmost, "0").unwrap();
+        }
+        let mut command = desk_thread_command(&fixture, &frontmost, "200");
+        if !in_zed {
+            command.env_remove("TERM_PROGRAM");
+        }
+        let mut thread = attached_pty_thread(&fixture, command);
+
+        thread::sleep(Duration::from_millis(1200));
+        assert!(
+            !thread.output().contains(DETACHED_NOTICE),
+            "in_zed={in_zed} seam_file={seam_file}: {}",
+            thread.output()
+        );
+        assert!(thread.is_running());
+        fixture.release_attach();
+        assert!(thread.wait().success());
+    }
+}
+
 #[test]
 fn a_request_for_another_pane_leaves_the_thread_attached() {
     let fixture = Fixture::new();

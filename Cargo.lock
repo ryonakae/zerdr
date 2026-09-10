@@ -1047,6 +1047,7 @@ dependencies = [
  "jsonc-parser",
  "nix",
  "objc2-app-kit",
+ "objc2-foundation",
  "predicates",
  "serde",
  "serde_json",

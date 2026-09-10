@@ -88,6 +88,21 @@ impl Zed {
             && help.lines().any(|line| line.contains("--add")))
     }
 
+    /// Whether Zed is the frontmost application, or `None` when that cannot be known:
+    /// no platform support (Linux), no frontmost application, or no answer from the
+    /// test seam. Preview and Nightly builds share the `dev.zed.Zed` bundle prefix.
+    pub fn frontmost_is_zed() -> Option<bool> {
+        if std::env::var_os("ZERDR_TEST_ROOT").is_some() {
+            let file = std::env::var_os("ZERDR_TEST_ZED_FRONTMOST_FILE")?;
+            return match std::fs::read_to_string(file).ok()?.trim() {
+                "1" => Some(true),
+                "0" => Some(false),
+                _ => None,
+            };
+        }
+        frontmost_bundle_identifier().map(|identifier| identifier.starts_with("dev.zed.Zed"))
+    }
+
     fn command(&self) -> Command {
         let mut command = Command::new(&self.program);
         // A Zed process first opened by a Herdr plugin becomes the environment
@@ -97,4 +112,16 @@ impl Zed {
         }
         command
     }
+}
+
+#[cfg(target_os = "macos")]
+fn frontmost_bundle_identifier() -> Option<String> {
+    use objc2_app_kit::NSWorkspace;
+    let application = NSWorkspace::sharedWorkspace().frontmostApplication()?;
+    Some(application.bundleIdentifier()?.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn frontmost_bundle_identifier() -> Option<String> {
+    None
 }
