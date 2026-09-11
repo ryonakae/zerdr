@@ -430,7 +430,7 @@ fn in_zed_terminal() -> bool {
 
 /// How long Zed must stay in the background before the thread releases its pane.
 fn background_grace() -> Duration {
-    const DEFAULT_BACKGROUND_GRACE_MS: u64 = 2_000;
+    const DEFAULT_BACKGROUND_GRACE_MS: u64 = 1_000;
     Duration::from_millis(
         std::env::var("ZERDR_THREAD_BACKGROUND_GRACE_MS")
             .ok()
