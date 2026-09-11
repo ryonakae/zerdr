@@ -114,13 +114,17 @@ impl Zed {
     }
 }
 
-/// Polled twice a second for the life of every attached thread from a process that
-/// never runs a main run loop, so the autoreleased objects AppKit creates on the way
-/// are drained here instead of accumulating.
+/// `NSWorkspace` learns about application switches through the thread's run loop, and
+/// a CLI never runs one: without the short pump below the first answer is repeated
+/// forever (verified: the value stayed on Zed for seconds after ghostty came to the
+/// front). The call also runs twice a second for the life of every attached thread,
+/// so the autoreleased objects AppKit creates on the way are drained here.
 #[cfg(target_os = "macos")]
 fn frontmost_bundle_identifier() -> Option<String> {
     use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::{NSDate, NSRunLoop};
     objc2::rc::autoreleasepool(|_| {
+        NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01));
         let application = NSWorkspace::sharedWorkspace().frontmostApplication()?;
         Some(application.bundleIdentifier()?.to_string())
     })
