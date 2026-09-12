@@ -62,12 +62,13 @@ Review base commit: `f51692f`.
 - [x] CLI surface: `cargo test --test cli_contract` → 25 passed; `--help` lists `detach`.
 - [x] Manifest and doctor: `setup_and_doctor` 55 passed, `herdr_wrapper` 20 passed.
 - [x] Required CI checks in order: fmt, clippy, full suite → pass at `4e3c341` (`6243c3a` is docs only); Ubuntu CI exercises the non-macOS `None` path on push.
-- [ ] Manual (user, pending): rebuild, `./target/release/zerdr setup install`, connect a thread; (1) switch to ghostty for 3 s → thread detaches, ghostty sizes the pane; click the thread → reattaches. (2) In ghostty's herdr press `prefix+shift+d` on the pane → detaches. (3) Over SSH run `zerdr detach` then `herdr` → pane at phone size; back at Zed, click → reattaches. If the `pane` action context does not make the key binding fire, fall back to `contexts = ["workspace"]` (Herdr's context semantics are not documented).
+- [x] Manual (run by the user on 2026-09-11): all three triggers behave as specified, and the `pane` action context fires the keybinding, so no fallback to `["workspace"]` was needed. Two defects surfaced only here and were fixed after this plan was archived (see the gate summary).
 
 
 ## Gate summary
 
 - Review base `f51692f`; commits `ba9d650`, `75dff50`, `bdee3c3`, `fe0fdd5`, `4e3c341`, `6243c3a`.
 - Independent review (read-only, repository only) on `6243c3a`: no blocking/high, no decision required. Medium/low left unfixed and reported: `NSWorkspace.frontmostApplication` freshness without a run loop is unverifiable in-repo and rests on the manual step; the AppKit call runs without an `autoreleasepool` (slow growth over hours); the explicit marker body reopens a microsecond torn-read window inside the focus grace; the action's "no thread" notification carries the adapter's `zerdr: sync failed` title; a non-user wake while Zed is in the background reattaches and detaches again after the grace; the doctor failure line still names only the Open Zed action.
+- Manual verification turned two of those medium items into real defects, fixed after the archive: the frontmost freshness question was the reason the desk trigger never fired — `NSWorkspace` learns about application switches through the thread's run loop, which a CLI never runs, so the first answer repeated forever (`e573153`, measured against a window-server query); and the non-user wake was reattaching the thread seconds after every desk detach, so a wake now also requires Zed to be frontmost (`46c618f`). The autorelease pool was added alongside (`37ba9af`), the grace was shortened to one second after trying it on the desk (`710e955`), and `ZERDR_DEBUG_LOG` was added to make these decisions observable (`e93f5f7`). The remaining medium items stand.
 
 > 各タスクは対応する検証が成功してから完了にする。実装中の軽微な差分と検証結果は該当箇所へ反映し、要件、対象外、公開契約の変更はユーザーへ確認する。最終確認では有効な検証結果を再利用し、計画と実際の変更が一致することを確認する。必要な検証と実装側の必須レビューが通ったら、計画を同名のまま `docs/plans/archived/` へ移す。
