@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.8.0
 
-_2026-09-09_
+_2026-09-12_
 
 ### Changed
 
-- **Breaking:** attached terminal threads now detach on their own and reattach when you return to the thread in Zed — selecting it in the sidebar, clicking it, or pressing a key. A thread detaches when another Herdr client selects its pane, when Zed has been in the background for a second (macOS), when the new `zerdr.detach-thread` Herdr action is fired on the pane from another client, or when `zerdr detach` asks every thread at once (usable over SSH before opening `herdr`). `zerdr attach`, the `zerdr: Detach` and `zerdr: Attach` Zed tasks, and their keybinding examples are gone; the next `zerdr setup install` removes the two tasks from your Zed tasks file (a copy you modified is left alone). Rerun `zerdr setup install` after upgrading: the Herdr plugin manifest gains a `pane.focused` hook and the `detach-thread` action, and `zerdr start`, `zerdr setup doctor`, and `zerdr setup auto enable` require the hooks.
+- **Breaking:** attached terminal threads now detach on their own and reattach when you return to the thread in Zed — selecting it in the sidebar, clicking it, or pressing a key. A thread detaches when another Herdr client selects its pane, when Zed has been in the background for a second (macOS), when the new `zerdr.detach-thread` Herdr action is fired on the pane from another client, or when `zerdr detach` asks every thread at once (usable over SSH before opening `herdr`). `zerdr attach`, the `zerdr: Detach` and `zerdr: Attach` Zed tasks, and their keybinding examples are gone; the next `zerdr setup install` removes the two tasks from your Zed tasks file (a copy you modified is left alone). Rerun `zerdr setup install` after upgrading: the Herdr plugin manifest gains a `pane.focused` hook and the `detach-thread` action; `zerdr start` requires the hooks, and `zerdr setup doctor` checks the hooks and both actions.
+
+- **Breaking:** `zerdr detach` no longer waits for every thread to confirm, and it no longer leaves a detach mode behind. It asks once, says how many threads it asked, and returns; threads opened afterwards attach normally, and a detached thread comes back the moment you return to it in Zed.
 
 - `zerdr connect` now focuses the Herdr workspace only while a `zerdr start` wrapper is live. Without follow mode the focus served nothing and, on Herdr 0.8.x where clients share one view, it parked every other client on the thread's pane, so selecting that pane there could never trigger the detach.
 
