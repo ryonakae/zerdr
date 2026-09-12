@@ -60,6 +60,7 @@ CI runs these checks on macOS and Ubuntu. Platform-specific behavior needs cover
 - Preserve backward compatibility for persisted state, or add an explicit migration and tests.
 - Keep setup merges ownership-aware. Never overwrite foreign or user-modified Zed tasks or settings, and back up a user-owned Zed file before mutating it.
 - Keep platform and remote-environment decisions in `src/runtime.rs` rather than scattering environment checks.
+- Set `ZERDR_DEBUG_LOG=<file>` to trace a thread's detach and reattach decisions. They are made on a terminal the user cannot read at the time, so the log is the only view of which trigger fired and what the frontmost-application check answered.
 - `sync-from-herdr`, `open-from-herdr`, and `detach-from-herdr` are hidden plugin entry points, not public user commands. They are exempt from the remote-environment rejection because Herdr spawns them with the server's environment, which inherits SSH markers from the session that first started the server; `zerdr detach` is exempt too, since it only touches local state and is meant for an SSH shell before `herdr`.
 
 ## Safety and workflow

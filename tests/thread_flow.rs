@@ -1832,7 +1832,10 @@ fn wait_until(description: &str, mut predicate: impl FnMut() -> bool) {
     panic!("timed out waiting for {description}");
 }
 
-const DETACHED_NOTICE: &str = "zerdr: detached from Herdr because another client selected this pane; focus, click, or press a key here to reattach";
+/// Shared lead of both detach notices, for asserting that neither was printed.
+const DETACHED_NOTICE: &str = "zerdr: detached from Herdr";
+const DETACHED_BY_CLIENT: &str = "zerdr: detached from Herdr so another client can use this pane; focus, click, or press a key here to reattach";
+const DETACHED_BY_BACKGROUND: &str = "zerdr: detached from Herdr because Zed left the foreground; focus, click, or press a key here to reattach";
 const DETACHED_MODES_ON: &str = "\u{1b}[?1004h\u{1b}[?1000h\u{1b}[?1006h";
 const DETACHED_MODES_OFF: &str = "\u{1b}[?1006l\u{1b}[?1000l\u{1b}[?1004l";
 const FOCUS_IN: &[u8] = b"\x1b[I";
@@ -1862,7 +1865,7 @@ fn another_client_selecting_the_pane_detaches_and_a_focus_in_reattaches() {
     let mut thread = attached_pty_thread(&fixture, command);
 
     hook_command(&fixture, "w1:p1").assert().success();
-    thread.wait_for_output(DETACHED_NOTICE);
+    thread.wait_for_output(DETACHED_BY_CLIENT);
     wait_detached(&thread);
     assert_eq!(count_leases(&paths), 1, "the lease survives the detach");
     assert_eq!(count_detach_requests(&paths), 0, "the request is consumed");
@@ -2067,7 +2070,7 @@ fn stray_terminal_replies_right_after_the_detach_do_not_reattach() {
     let mut thread = attached_pty_thread(&fixture, command);
 
     hook_command(&fixture, "w1:p1").assert().success();
-    thread.wait_for_output(DETACHED_NOTICE);
+    thread.wait_for_output(DETACHED_BY_CLIENT);
     // A kitty keyboard flags report and a primary DA reply, as a terminal answers them.
     thread.write(b"\x1b[?0u\x1b[?62;22c");
     thread.wait_for_output(DETACHED_MODES_ON);
@@ -2109,8 +2112,8 @@ fn zerdr_detach_asks_every_live_thread_at_once() {
         .stdout(predicate::str::contains(
             "zerdr: asked 2 thread(s) to detach",
         ));
-    first.wait_for_output(DETACHED_NOTICE);
-    second.wait_for_output(DETACHED_NOTICE);
+    first.wait_for_output(DETACHED_BY_CLIENT);
+    second.wait_for_output(DETACHED_BY_CLIENT);
     assert_eq!(count_leases(&paths), 2, "both leases survive");
     assert!(!fixture.env.read_log().contains("terminal attach"));
 
@@ -2154,7 +2157,7 @@ fn zed_in_the_background_beyond_the_grace_detaches_and_a_focus_in_reattaches() {
 
     // The user switches to ghostty (or anything else) and stays there.
     fs::write(&frontmost, "0").unwrap();
-    thread.wait_for_output(DETACHED_NOTICE);
+    thread.wait_for_output(DETACHED_BY_BACKGROUND);
     assert!(!fixture.env.read_log().contains("terminal attach"));
 
     // Zed coming back to the front is not by itself a reattach: Zed's focus-in is.
@@ -2180,7 +2183,7 @@ fn input_while_zed_is_in_the_background_does_not_reattach() {
         attached_pty_thread(&fixture, desk_thread_command(&fixture, &frontmost, "300"));
 
     fs::write(&frontmost, "0").unwrap();
-    thread.wait_for_output(DETACHED_NOTICE);
+    thread.wait_for_output(DETACHED_BY_BACKGROUND);
     wait_detached(&thread);
     thread.write(FOCUS_IN);
     thread.write(b"x");
@@ -2404,7 +2407,7 @@ fn a_thread_without_a_terminal_stays_detached_until_a_signal() {
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains(DETACHED_NOTICE), "{stdout:?}");
+    assert!(stdout.contains(DETACHED_BY_CLIENT), "{stdout:?}");
     assert!(!stdout.contains(DETACHED_MODES_ON), "{stdout:?}");
     assert_eq!(count_leases(&paths), 0);
 }
@@ -2482,7 +2485,7 @@ fn the_detach_thread_action_detaches_inside_the_grace_window() {
         .success()
         .stdout("")
         .stderr("");
-    thread.wait_for_output(DETACHED_NOTICE);
+    thread.wait_for_output(DETACHED_BY_CLIENT);
     assert!(!fixture.env.read_log().contains("notification show"));
 
     wait_detached(&thread);

@@ -85,10 +85,10 @@ pub fn doctor(session_name: &str) -> Result<()> {
     };
     if let (Some(plugins), Some(install)) = (plugins.as_ref(), install.as_ref()) {
         if plugin_has_complete_action(plugins, &install.executable) {
-            report.pass("Herdr zerdr Open Zed action is registered");
+            report.pass("Herdr zerdr plugin actions are registered");
         } else {
             report.fail(
-                "Herdr zerdr plugin is missing, disabled, or lacks the exact Open Zed action or event hooks; run `zerdr setup install`",
+                "Herdr zerdr plugin is missing, disabled, or lacks its exact actions or event hooks; run `zerdr setup install`",
             );
         }
     }
@@ -327,7 +327,7 @@ fn inspect_manifest(paths: &Paths, install: &InstallState) -> Result<()> {
         Ok(())
     } else {
         Err(Error::User(format!(
-            "generated Herdr manifest lacks the exact event or Open Zed action command; run `zerdr setup install` ({})",
+            "generated Herdr manifest lacks an exact event or action command; run `zerdr setup install` ({})",
             path.display()
         )))
     }

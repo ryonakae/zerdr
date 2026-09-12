@@ -20,7 +20,7 @@ cargo install --git https://github.com/ryonakae/zerdr --locked
 
 ## Quickstart
 
-Install the Herdr event hooks, Open Zed action, and the Zed task, then open the default Herdr session with Zed routing enabled:
+Install the Herdr event hooks, the Open Zed and Release Zed thread actions, and the Zed task, then open the default Herdr session with Zed routing enabled:
 
 ```bash
 zerdr setup install
@@ -39,7 +39,7 @@ command = "zerdr.open-zed"
 description = "open workspace in Zed"
 ```
 
-`prefix+shift+z` keeps the Z-for-Zed mnemonic while staying clear of Herdr's defaults: plain `prefix+z` is Herdr's built-in pane zoom, which shadows a command binding on the same key. The action brings the current workspace's Zed window to the front — opening the checkout first when no window has it — and leaves Zed in front. `zerdr setup install` prints this example but does not edit your Herdr configuration.
+`prefix+shift+z` keeps the Z-for-Zed mnemonic while staying clear of Herdr's defaults: plain `prefix+z` is Herdr's built-in pane zoom, which shadows a command binding on the same key. The action brings the current workspace's Zed window to the front — opening the checkout first when no window has it — and leaves Zed in front. `zerdr setup install` prints this example, alongside the `prefix+shift+d` one for releasing a thread's pane, but does not edit your Herdr configuration.
 
 ## Terminal threads
 
@@ -121,7 +121,7 @@ The one-shot plugin action reuses an applicable live wrapper route. Without a wr
 
 - **Rust 1.93.1:** required for the current source installation.
 - **Zed 1.15.0 or newer:** the `zed` CLI must expose `--existing` and `--add`.
-- **Herdr 0.8.0 or newer:** the plugin API must expose `workspace.focused` and `pane.focused` events, workspace actions, and plugin-action keybindings.
+- **Herdr 0.8.0 or newer:** the plugin API must expose `workspace.focused` and `pane.focused` events, workspace and pane actions, and plugin-action keybindings.
 - **Zed terminal threads:** `zerdr connect` needs a Zed version whose agent panel hosts terminal threads.
 - **Local Git checkouts:** each Herdr workspace maps to one canonical checkout root.
 - **Local macOS or Linux terminal:** runtime commands reject SSH, WSL, containers, and dev containers. `zerdr detach` and the Herdr plugin hooks are exempt: `detach` only touches local state, and Herdr runs the hooks with the server's environment, which keeps the SSH markers of whichever session first started the server. Detaching when Zed leaves the foreground needs macOS; on Linux the other triggers still apply.

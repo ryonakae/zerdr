@@ -244,7 +244,10 @@ fn run_with_mode(
     }
 }
 
-const DETACHED_NOTICE: &str = "zerdr: detached from Herdr because another client selected this pane; focus, click, or press a key here to reattach";
+/// Printed in the thread when it releases its pane. Four triggers reach this point, so
+/// the reason is named: a user who did not expect the detach can tell which one fired.
+const DETACHED_BY_CLIENT: &str = "zerdr: detached from Herdr so another client can use this pane; focus, click, or press a key here to reattach";
+const DETACHED_BY_BACKGROUND: &str = "zerdr: detached from Herdr because Zed left the foreground; focus, click, or press a key here to reattach";
 
 /// How the attach cycle ended. A child exiting on its own keeps the pre-detach exit
 /// contract; the other ends are graceful and carry no exit status.
@@ -303,7 +306,16 @@ fn attach_cycle(
                         debug_log(&format!("detaching: request={detach} zed_left={zed_left}"));
                         detached.store(true, Ordering::SeqCst);
                         managed.terminate_gracefully();
-                        println!("{DETACHED_NOTICE}");
+                        // Someone asking outranks Zed merely being away: the request is
+                        // the specific cause, and both can be true in the same poll.
+                        println!(
+                            "{}",
+                            if detach {
+                                DETACHED_BY_CLIENT
+                            } else {
+                                DETACHED_BY_BACKGROUND
+                            }
+                        );
                         break;
                     }
                     thread::sleep(interval);

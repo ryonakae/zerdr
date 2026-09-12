@@ -787,7 +787,7 @@ command = [{executable:?}, "sync-from-herdr"]
         .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
         .assert()
         .failure()
-        .stdout(predicates::str::contains("Open Zed action"))
+        .stdout(predicates::str::contains("actions or event hooks"))
         .stdout(predicates::str::contains("run `zerdr setup install`"));
     let stdout = String::from_utf8_lossy(
         &env.command()
@@ -838,7 +838,7 @@ fn doctor_rejects_duplicate_zerdr_action_or_event_identities() {
             .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
             .assert()
             .failure()
-            .stdout(predicates::str::contains("Open Zed action"));
+            .stdout(predicates::str::contains("actions or event hooks"));
     }
 }
 
@@ -877,7 +877,7 @@ command = ["wrong", "command"]
             .assert()
             .failure()
             .stdout(predicates::str::contains(
-                "generated Herdr manifest lacks the exact event or Open Zed action command",
+                "generated Herdr manifest lacks an exact event or action command",
             ));
     }
 }
@@ -957,7 +957,7 @@ command = [{executable:?}, "sync-from-herdr"]
         .assert()
         .success()
         .stdout(predicates::str::contains(
-            "PASS Herdr zerdr Open Zed action is registered",
+            "PASS Herdr zerdr plugin actions are registered",
         ));
 }
 
@@ -1001,7 +1001,7 @@ fn doctor_rejects_each_malformed_or_disabled_action_installation() {
             .env("ZERDR_TEST_SESSIONS_JSON", r#"{"sessions":[]}"#)
             .assert()
             .failure()
-            .stdout(predicates::str::contains("Open Zed action"))
+            .stdout(predicates::str::contains("actions or event hooks"))
             .stdout(predicates::str::contains("run `zerdr setup install`"));
     }
 }
@@ -2106,7 +2106,7 @@ command = [{executable:?}, "sync-from-herdr"]
         .assert()
         .failure()
         .stdout(predicates::str::contains(
-            "generated Herdr manifest lacks the exact event or Open Zed action command",
+            "generated Herdr manifest lacks an exact event or action command",
         ))
         .stdout(predicates::str::contains("run `zerdr setup install`"));
 }
@@ -2150,6 +2150,6 @@ command = [{executable:?}, "detach-from-herdr"]
         .assert()
         .failure()
         .stdout(predicates::str::contains(
-            "generated Herdr manifest lacks the exact event or Open Zed action command",
+            "generated Herdr manifest lacks an exact event or action command",
         ));
 }

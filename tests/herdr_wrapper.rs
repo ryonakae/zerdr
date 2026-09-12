@@ -113,7 +113,7 @@ fn named_launcher_attaches_the_matching_herdr_session() {
     );
 }
 
-/// The launcher needs the event hooks but not the Open Zed action: an installation
+/// The launcher needs the event hooks but not the plugin actions: an installation
 /// that predates the action still starts, while one that predates the `pane.focused`
 /// hook is sent back to `zerdr setup install`.
 #[test]
